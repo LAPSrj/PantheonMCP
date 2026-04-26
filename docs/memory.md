@@ -166,6 +166,96 @@ both confirmed with semaphoremole:
   weren't touched. Auto-fading user-pinned core content is
   explicitly forbidden (§4 / §11b).
 
+## Idle handoff slot (§6 MEDIUM)
+
+`rest({ handoff?: { for, text } })` writes a `kind: "handoff"` core
+memory entry with a 7-day TTL via the `expires_at` field, and
+optionally DMs the handoff target with the same text — atomic with
+the rest call so the user doesn't have to coordinate two calls.
+
+The handoff entry shape (`buildHandoffSeed`):
+
+```json
+{
+  "kind": "handoff",
+  "core": true,
+  "text": "<handoff body>",
+  "summary": "Handoff to <for> — auto-fades after 7 days",
+  "expires_at": "<now + 7 days, ms epoch>"
+}
+```
+
+`expires_at` is a schema-additive optional field on `MemoryEntry`.
+Entries without it never auto-fade.
+
+### Auto-fade sweep
+
+The MCP server's daemon-tick (`setInterval(30_000)` that also
+prunes stale subscribers + tombstones) calls
+`expireHandoffs(paths)` which walks every persona, finds
+`kind: "handoff"` entries whose `expires_at < now` and
+`status: "active"`, and fades them via `mutateStore`.
+
+This is the **one explicit exception** to the §4 "status NEVER
+auto-mutates" rule. The exception is fine because:
+
+1. The handoff entry SETS `expires_at` precisely so the daemon
+   can fade it — auto-fade is the user's intent, not a render-
+   time guess.
+2. §4's prohibition is about render-time budget enforcement
+   modifying status (which would surprise the user by hiding
+   their content). TTL-driven fades are explicit + opt-in via
+   the `expires_at` field.
+
+### Atomicity
+
+The DM step is best-effort: if the chat router DM fails (target
+offline, no chat session bound), the memory entry is still
+persisted (it's the durable record the future agent will recall).
+Failures surface as a `handoff_warnings` array in the response.
+
+## Memory annotations (§6 MEDIUM)
+
+Two schema-additive optional fields on `MemoryEntry`:
+
+| Field          | Type             | Purpose                                                       |
+|----------------|------------------|---------------------------------------------------------------|
+| `replies_to`   | `string`         | Entry id this entry replies to. Renderer indents under parent. |
+| `see_also`     | `string[]`       | Entry ids cited inline at the end of the synopsis.            |
+
+Both fields validate at write time (in `appendEntry` /
+`updateEntry`): every referenced id must exist in the same
+persona's memory, otherwise reject with `invalid_reference`. No
+dangling refs ever land on disk.
+
+### Render
+
+The Index synopsis indents reply children with `↳` and appends
+`see_also` cites:
+
+```
+- [decision-storage-layout] (2026-04-25, kind=decision, 412B) Hybrid JSON + SQLite per §15
+  ↳ [followup-windows-json] (2026-04-25, 91B) Window registry JSON, atomic-rename [see_also: decision-storage-layout]
+- [gotcha-wal-close] (2026-04-25, kind=gotcha, 156B) SQLite WAL needs careful close on shutdown
+```
+
+The `↳` prefix and inline `[see_also: …]` cite are format-time
+only — the persisted `replies_to` and `see_also` fields are the
+source of truth.
+
+### Updating
+
+`update_memory` accepts both fields. Pass `null` to clear:
+
+```
+update_memory({ id, replies_to: null })          // detach reply
+update_memory({ id, see_also: null })            // drop all cites
+update_memory({ id, see_also: ["new-id-only"] }) // replace whole list
+```
+
+Updates also run the `invalid_reference` validation against the
+persona's current memory.
+
 ## Snapshots (§6 LOW)
 
 Labeled snapshots of the persona's memory store live as parallel

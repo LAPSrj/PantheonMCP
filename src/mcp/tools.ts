@@ -255,6 +255,17 @@ export const TOOLS: readonly ToolDef[] = [
         kind: { type: "string" },
         core: { type: "boolean" },
         summoner_username: { type: "string" },
+        replies_to: {
+          type: "string",
+          description:
+            "Entry id this entry replies to. Renderer indents replies under their parent in the Index. Referenced id must exist in this persona's memory; otherwise rejects `invalid_reference`.",
+        },
+        see_also: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Entry ids cited inline at the end of the synopsis. Each must exist; otherwise rejects `invalid_reference`.",
+        },
       },
     },
   },
@@ -276,6 +287,17 @@ export const TOOLS: readonly ToolDef[] = [
         kind: { type: "string" },
         status: { type: "string", enum: ["active", "faded", "forgotten"] },
         core: { type: "boolean" },
+        replies_to: {
+          oneOf: [{ type: "string" }, { type: "null" }],
+          description: "Set to a new id to replace; null to clear.",
+        },
+        see_also: {
+          oneOf: [
+            { type: "array", items: { type: "string" } },
+            { type: "null" },
+          ],
+          description: "Set to a new array to replace; null to clear.",
+        },
       },
     },
   },

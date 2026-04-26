@@ -33,6 +33,14 @@ export interface MemoryEntry {
    * daemon-tick auto-fades past expiry. Schema-additive — existing
    * entries without `expires_at` never auto-fade. */
   expires_at?: number;
+  /** §6 MEDIUM memory annotations / threading. Entry id this entry
+   * is replying to. Renderer indents children under their parent in
+   * the Index synopsis. Validated at write time — referenced ids
+   * must exist in the same persona's memory. */
+  replies_to?: string;
+  /** §6 MEDIUM. Entry ids cited inline at the end of the synopsis
+   * (`[id1] [id2]`). Validated at write time. */
+  see_also?: string[];
 }
 
 export interface MemoryStore {
@@ -72,4 +80,5 @@ export type MemoryErrorCode =
   | "entry_too_large"
   | "summary_too_long"
   | "missing_text"
-  | "invalid_status";
+  | "invalid_status"
+  | "invalid_reference";

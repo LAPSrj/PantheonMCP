@@ -58,6 +58,10 @@ export const append_memory: Handler = async (args, ctx) => {
   const core = asBoolean(args.core);
   const summonerOverride = asString(args.summoner_username);
   const summoner = summonerOverride ?? ctx.summoner_username ?? undefined;
+  const repliesTo = asString(args.replies_to);
+  const seeAlso = Array.isArray(args.see_also)
+    ? (args.see_also.filter((v) => typeof v === "string") as string[])
+    : undefined;
   return appendEntry(ctx.paths, claimed, {
     text,
     ...(summary !== undefined ? { summary } : {}),
@@ -65,6 +69,8 @@ export const append_memory: Handler = async (args, ctx) => {
     ...(kind !== undefined ? { kind } : {}),
     ...(core !== undefined ? { core } : {}),
     ...(summoner !== undefined ? { summoner_username: summoner } : {}),
+    ...(repliesTo !== undefined ? { replies_to: repliesTo } : {}),
+    ...(seeAlso !== undefined ? { see_also: seeAlso } : {}),
   });
 };
 
@@ -81,6 +87,16 @@ export const update_memory: Handler = async (args, ctx) => {
   if (asString(args.kind) !== undefined) patch.kind = asString(args.kind);
   if (asString(args.status) !== undefined) patch.status = asString(args.status);
   if (asBoolean(args.core) !== undefined) patch.core = asBoolean(args.core);
+  if ("replies_to" in args) {
+    patch.replies_to = args.replies_to === null ? null : asString(args.replies_to);
+  }
+  if ("see_also" in args) {
+    if (args.see_also === null) {
+      patch.see_also = null;
+    } else if (Array.isArray(args.see_also)) {
+      patch.see_also = args.see_also.filter((v) => typeof v === "string");
+    }
+  }
   return updateEntry(ctx.paths, claimed, id, patch);
 };
 

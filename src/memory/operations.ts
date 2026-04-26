@@ -29,6 +29,12 @@ export interface AppendInput {
    * tick auto-fades past this. Optional; entries without `expires_at`
    * never auto-fade. */
   expires_at?: number;
+  /** §6 MEDIUM annotations: entry id this entry replies to. Must
+   * exist in the same persona's memory. */
+  replies_to?: string;
+  /** §6 MEDIUM annotations: entry ids cited inline at end of
+   * synopsis. Each must exist. */
+  see_also?: string[];
 }
 
 export interface UpdateInput {
@@ -38,6 +44,8 @@ export interface UpdateInput {
   kind?: string;
   core?: boolean;
   status?: MemoryStatus;
+  replies_to?: string | null;
+  see_also?: string[] | null;
 }
 
 export function appendEntry(
@@ -52,6 +60,18 @@ export function appendEntry(
   let created!: MemoryEntry;
   mutateStore(paths, username, (store) => {
     const existingIds = new Set(store.entries.map((e) => e.id));
+    // §6 MEDIUM annotations: validate references against this
+    // persona's memory before persisting. Invalid refs reject with
+    // `invalid_reference` so the caller knows their annotation
+    // pointed at a missing entry.
+    if (input.replies_to !== undefined) {
+      validateReference(input.replies_to, existingIds, "replies_to");
+    }
+    if (input.see_also !== undefined) {
+      for (const ref of input.see_also) {
+        validateReference(ref, existingIds, "see_also");
+      }
+    }
     created = {
       id: slugify(summary || input.text, existingIds),
       date: new Date().toISOString(),
@@ -65,10 +85,28 @@ export function appendEntry(
         ? { summoner_username: input.summoner_username }
         : {}),
       ...(input.expires_at !== undefined ? { expires_at: input.expires_at } : {}),
+      ...(input.replies_to !== undefined ? { replies_to: input.replies_to } : {}),
+      ...(input.see_also !== undefined && input.see_also.length > 0
+        ? { see_also: [...input.see_also] }
+        : {}),
     };
     return { ...store, entries: [...store.entries, created] };
   });
   return created;
+}
+
+function validateReference(
+  ref: string,
+  existingIds: Set<string>,
+  field: string,
+): void {
+  if (!existingIds.has(ref)) {
+    throw new MemoryError(
+      "invalid_reference",
+      `${field} references unknown entry id '${ref}'.`,
+      { field, ref },
+    );
+  }
 }
 
 export function getEntry(
@@ -112,6 +150,18 @@ export function updateEntry(
       throw new MemoryError("entry_not_found", `No memory entry with id '${id}'.`);
     }
     const current = store.entries[idx]!;
+    // Validate annotation refs against the rest of the store (the
+    // entry being updated is also a valid target — self-reference
+    // is silly but not invalid_reference territory).
+    const existingIds = new Set(store.entries.map((e) => e.id));
+    if (patch.replies_to !== undefined && patch.replies_to !== null) {
+      validateReference(patch.replies_to, existingIds, "replies_to");
+    }
+    if (patch.see_also !== undefined && patch.see_also !== null) {
+      for (const ref of patch.see_also) {
+        validateReference(ref, existingIds, "see_also");
+      }
+    }
     const next: MemoryEntry = {
       ...current,
       ...(patch.summary !== undefined ? { summary: patch.summary } : {}),
@@ -127,6 +177,16 @@ export function updateEntry(
     if (patch.core !== undefined) {
       if (patch.core) next.core = true;
       else delete next.core;
+    }
+    if (patch.replies_to === null) {
+      delete next.replies_to;
+    } else if (patch.replies_to !== undefined) {
+      next.replies_to = patch.replies_to;
+    }
+    if (patch.see_also === null) {
+      delete next.see_also;
+    } else if (patch.see_also !== undefined) {
+      next.see_also = [...patch.see_also];
     }
     const entries = store.entries.slice();
     entries[idx] = next;

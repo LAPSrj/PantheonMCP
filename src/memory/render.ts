@@ -268,7 +268,16 @@ function formatIndexLine(entry: MemoryEntry): string {
   if (entry.details !== undefined) tags.push("has_details");
   const summarySnippet =
     entry.summary.length > 0 ? entry.summary : truncate(firstLine(entry.text), 80);
-  return `- [${entry.id}] (${dateShort}, ${tags.join(", ")}) ${summarySnippet}`;
+  // §6 MEDIUM annotations: render `↳` prefix when this entry is a
+  // reply, and append `[see_also: a, b]` cite when set. Indent is
+  // format-time only — the persisted `replies_to` is the source of
+  // truth.
+  const prefix = entry.replies_to ? "  ↳ " : "- ";
+  const seeAlsoCite =
+    entry.see_also && entry.see_also.length > 0
+      ? ` [see_also: ${entry.see_also.join(", ")}]`
+      : "";
+  return `${prefix}[${entry.id}] (${dateShort}, ${tags.join(", ")}) ${summarySnippet}${seeAlsoCite}`;
 }
 
 function firstLine(text: string): string {
