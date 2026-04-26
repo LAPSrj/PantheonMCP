@@ -91,9 +91,18 @@ export class ChatRouter {
       transient: boolean;
       status?: string;
       mode?: Mode;
+      /** When the caller has already claimed `username` as a persona
+       * in their session, pass it here so the collision check
+       * doesn't reject `registered_persona` against the owner's
+       * own handle. */
+      claimed_persona?: string;
     },
   ): Subscriber {
-    const availability = this.checkAvailability(options.username);
+    const availability = this.checkAvailability(
+      options.username,
+      undefined,
+      options.claimed_persona,
+    );
     if (!availability.available) {
       this.throwForAvailability(options.username, availability);
     }
@@ -570,6 +579,7 @@ export class ChatRouter {
   private checkAvailability(
     username: string,
     ignoreSelf?: string,
+    claimedPersona?: string,
   ): AvailabilityResult {
     return isHandleAvailable({
       username,
@@ -577,6 +587,7 @@ export class ChatRouter {
       tombstones: this.tombstones,
       paths: this.paths,
       ...(ignoreSelf !== undefined ? { ignore_self_username: ignoreSelf } : {}),
+      ...(claimedPersona !== undefined ? { claimed_persona: claimedPersona } : {}),
     });
   }
 

@@ -34,7 +34,18 @@ export const login: Handler = async (args, ctx) => {
   const promote = asObject(args.promote);
   const router = requireRouter(ctx);
 
-  const subscriber = router.add({ username, project, transient, status });
+  // §10 / §11c persona-owner-allowed: when the caller has already
+  // claimed this handle as a persona, the chat-add must accept it
+  // (otherwise registered personas can never join chat under their
+  // own name — the original bug E2E surfaced).
+  const claimedPersona = ctx.session.claimedUsername;
+  const subscriber = router.add({
+    username,
+    project,
+    transient,
+    status,
+    ...(claimedPersona === username ? { claimed_persona: claimedPersona } : {}),
+  });
   // Bind this MCP session to the new chat subscriber so subsequent
   // chat handlers (send_message, ask, set_mode, …) can resolve it
   // without re-authenticating.

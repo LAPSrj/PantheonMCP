@@ -481,6 +481,13 @@ become a single shared daemon in the future.
 
 - ~~**Watcher loop**~~ — landed in commit `bf88225`. See "Watcher
   loop (bin/pantheon-fetch.ts)" section above.
+- **Cross-process `check_messages`**: today it reads only from the
+  router's in-memory recent buffer, not chat.db. For real-time
+  cross-process delivery, callers use the watcher loop (which
+  tails SQLite); `check_messages` is a fallback for in-process
+  reads. Promotion needs per-agent SQLite cursor tracking
+  (column on `subscribers`, or `ctx.chat_cursor` per-session).
+  Surfaced by E2E test scaffold.
 - **Channels**: opt-in inline delivery for clients that prefer
   push-on-tool-result over the watcher pattern.
 - **Keepalive sweep**: periodic timer that emits a `keepalive`

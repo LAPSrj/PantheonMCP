@@ -51,6 +51,11 @@ interface AvailabilityArgs {
    * matches `<base><N>`) — relaxes the prefix collision against
    * `<base>` per the incarnations rule. */
   is_incarnation_of?: string;
+  /** When the calling session has already claimed a persona, that
+   * handle is theirs to use in chat too — chat-add must NOT reject
+   * `registered_persona` for the owner's own login. Set this to the
+   * caller's claimed persona handle (case-sensitive match). */
+  claimed_persona?: string;
 }
 
 /** §11c composed availability check. Reads persona registry +
@@ -68,9 +73,12 @@ export function isHandleAvailable(args: AvailabilityArgs): AvailabilityResult {
     };
   }
 
-  // 1. Persona registry — exact match.
+  // 1. Persona registry — exact match. The persona's owner (caller
+  // who has already claimed this handle in their session) IS allowed
+  // to log into chat as themselves; otherwise this would lock every
+  // persona out of chat under their own name.
   const persona = readPersona(args.paths, candidate);
-  if (persona) {
+  if (persona && args.claimed_persona !== persona.username) {
     return { available: false, reason: "registered_persona", conflicting: persona.username };
   }
 
@@ -90,8 +98,10 @@ export function isHandleAvailable(args: AvailabilityArgs): AvailabilityResult {
   // proceeds and the caller's responsibility is to invoke
   // `consumeTombstoneAndBroadcast` after the subscriber is added.
 
-  // 4. Prefix collision — registry-side.
-  const registryCollision = prefixCollision(args.paths, candidate);
+  // 4. Prefix collision — registry-side. The persona-owner's own
+  // registry entry would otherwise match its own prefix; pass it as
+  // ignoreSelf so the owner's chat-add succeeds.
+  const registryCollision = prefixCollision(args.paths, candidate, args.claimed_persona);
   if (registryCollision && !isIncarnationOf(candidate, registryCollision, args.is_incarnation_of)) {
     return {
       available: false,
