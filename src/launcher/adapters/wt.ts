@@ -1,3 +1,7 @@
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type {
   Adapter,
   Capability,
@@ -22,12 +26,27 @@ const CAPS: ReadonlySet<Capability> = new Set([
  * there's a focused base pane to split. We default to `wt.exe`; under
  * WSL this resolves through the Windows path mount.
  *
- * **WSL cwd handling** (mirrors summon-mcp's working pattern, fixes
- * wt.exe error 0x8007010b "directory name is invalid" on WSL paths
- * passed via `-d`): when `args.wsl_distro` is set, DROP wt.exe's
- * `-d <cwd>` and instead wrap the inner exec as
- * `wsl.exe -d <distro> -- bash -lc 'cd <cwd> && exec <cmd> <args>'`.
- * The cwd belongs in the inner shell, not in the outer wt.exe.
+ * **WSL exec handling** (matches summon-mcp's working pattern; fixes
+ * BOTH wt.exe error 0x8007010b "directory name is invalid" on WSL
+ * paths passed via `-d` AND wt.exe error 0x80070002 from `;` in the
+ * `bash -lc` payload):
+ *
+ * When `args.wsl_distro` is set, the wt adapter writes a temporary
+ * `.sh` script to `os.tmpdir()` containing the env exports + cd +
+ * exec, then invokes `wsl.exe -d <distro> -- bash -l <script_path>`.
+ * The script self-deletes as its first line so /tmp doesn't accumulate.
+ *
+ * Why a script file (not `bash -lc '<inline>'`):
+ *   - wt.exe parses literal `;` in argv as its own subcommand
+ *     separator, splitting `export A=1; export B=2; ...` into multiple
+ *     wt subcommands and emitting `0x80070002 file not found` for each
+ *     fragment.
+ *   - Switching `;` → `&&` inside the bash payload would help today
+ *     but leaves a fragile escape contract (any future special char
+ *     in argv could re-trip the same class of bug).
+ *   - A temp script puts ALL the bash content in a file wt.exe never
+ *     parses; argv is just `bash -l <path>`, no shell metacharacters.
+ *   - Same pattern summon-mcp uses across many production summons.
  *
  * **Default split direction** policy (when `target.split` is omitted
  * AND the registry's pane count is supplied via
@@ -94,26 +113,65 @@ export const wt: Adapter = {
 
 /** Build the trailing argv that goes after wt.exe's subcommand.
  *
- * For WSL targets:
- *   wsl.exe -d <distro> -- bash -lc 'export X=Y; cd <cwd> && exec <cmd> <args>'
- * For native targets:
- *   <exec_command> <exec_args...>
+ * For WSL targets: write a self-deleting `.sh` script with env
+ * exports + cd + exec, then invoke
+ *   `wsl.exe -d <distro> -- bash -l <script_path>`.
+ * Script-file approach (not `bash -lc '<inline>'`) so wt.exe never
+ * parses bash metacharacters in argv.
  *
- * Env vars are exported INSIDE the bash -lc string for WSL targets so
- * they reach the spawned process even though wt.exe doesn't forward
- * its own env to the wsl child. */
+ * For native targets: the exec command + args go directly. */
 function buildExecCommand(args: SpawnArgs): string[] {
   if (!args.wsl_distro) {
     return [args.exec_command, ...args.exec_args];
   }
-  const exports = Object.entries(args.exec_env)
-    .map(([k, v]) => `export ${k}=${quoteBash(v)};`)
-    .join(" ");
+  const scriptPath = writeWslLaunchScript(args);
+  return ["wsl.exe", "-d", args.wsl_distro, "--", "bash", "-l", scriptPath];
+}
+
+/** Write a temp `.sh` launch script containing env exports + cd +
+ * exec. Returns the absolute path. The script self-deletes on its
+ * first line; bash holds the file descriptor open so the script
+ * keeps executing after unlink. Mode 0o700 keeps it user-private.
+ *
+ * Test seam: when `PANTHEON_WT_SCRIPT_DIR` is set in env, scripts
+ * land in that dir instead of `os.tmpdir()` so test suites can
+ * inspect the produced content without crawling /tmp. */
+function writeWslLaunchScript(args: SpawnArgs): string {
+  const dir = process.env.PANTHEON_WT_SCRIPT_DIR ?? os.tmpdir();
+  const id = `${process.pid}-${crypto.randomUUID()}`;
+  const scriptPath = path.join(dir, `pantheon-summon-${id}.sh`);
+
+  const lines: string[] = ["#!/usr/bin/env bash"];
+  // Self-delete first. bash keeps the fd open across unlink, so the
+  // rest of the script runs normally and /tmp doesn't accumulate.
+  lines.push(`rm -f -- "$0"`);
+  // Carry forward the summoner's PATH. Ubuntu's default .bashrc bails
+  // out early on non-interactive shells, so `bash -l` does NOT
+  // initialize nvm/pnpm/asdf shims — without this, the spawned tab
+  // opens then immediately fails with "claude: command not found".
+  // (Per quibblethorn, summon-mcp's load-bearing fix for the same
+  // bug class. See summon-mcp/src/launcher.ts:192-195.) User-supplied
+  // PATH in `exec_env` still overrides — it's exported below.
+  if (process.env.PATH) {
+    lines.push(`export PATH=${quoteBash(process.env.PATH)}`);
+  }
+  for (const [k, v] of Object.entries(args.exec_env)) {
+    lines.push(`export ${k}=${quoteBash(v)}`);
+  }
+  // Visible failure when cwd is missing — sleep 5 keeps the tab open
+  // long enough for the human to read the error before WT closes it.
+  lines.push(
+    `cd ${quoteBash(args.cwd)} || { echo "pantheon: cwd missing: ${args.cwd}" >&2; sleep 5; exit 1; }`,
+  );
   const execLine = [args.exec_command, ...args.exec_args]
     .map(quoteBash)
     .join(" ");
-  const inner = `${exports} cd ${quoteBash(args.cwd)} && exec ${execLine}`;
-  return ["wsl.exe", "-d", args.wsl_distro, "--", "bash", "-lc", inner];
+  lines.push(`exec ${execLine}`);
+  const body = lines.join("\n") + "\n";
+
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(scriptPath, body, { mode: 0o700 });
+  return scriptPath;
 }
 
 /** Per the §11a default-split-direction policy. Caller-explicit wins;

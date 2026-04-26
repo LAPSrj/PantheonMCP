@@ -1,4 +1,7 @@
 import { test, expect } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { resolveSpawnPlan } from "../dispatch.ts";
 import { wt, tmux, alacritty, generic, kitty } from "../adapters/index.ts";
 import { AdapterError, type SpawnArgs } from "../types.ts";
@@ -133,59 +136,125 @@ test("WT adapter applies named color hex when persona color set", () => {
   expect(plan.args).toContain("#b48ead");
 });
 
-test("WT adapter (WSL target): drops -d <cwd>, wraps in wsl.exe + bash -lc", () => {
-  const plan = resolveSpawnPlan(
-    args({
-      cwd: "/home/leandro/builder/nyus",
-      exec_command: "claude",
-      exec_args: ["--print", "go"],
-      exec_env: { PANTHEON_USERNAME: "swoopfinch", PANTHEON_REST_TIMEOUT: "3600" },
-      wsl_distro: "Ubuntu-22.04",
-      target: { mode: "new-tab-window", window: "image-gallery-finish" },
-    }),
-    { adapter: wt },
-  );
-  expect(plan.command).toBe("wt.exe");
-  // Crucially: NO `-d /home/leandro/builder/nyus` arg (would error 0x8007010b on wt.exe).
-  const dIdx = plan.args.indexOf("-d");
-  // The only "-d" allowed is the wsl.exe distro flag, not wt.exe's cwd flag.
-  if (dIdx !== -1) {
-    expect(plan.args[dIdx + 1]).toBe("Ubuntu-22.04");
+test("WT adapter (WSL target): drops -d <cwd>, wraps in wsl.exe + bash -l <script>", () => {
+  // Redirect script writes to a tmp dir so we can read what got written.
+  const tmpScriptDir = fs.mkdtempSync(path.join(os.tmpdir(), "pantheon-wt-script-"));
+  const prev = process.env.PANTHEON_WT_SCRIPT_DIR;
+  process.env.PANTHEON_WT_SCRIPT_DIR = tmpScriptDir;
+  try {
+    const plan = resolveSpawnPlan(
+      args({
+        cwd: "/home/leandro/builder/nyus",
+        exec_command: "claude",
+        exec_args: ["--print", "go"],
+        exec_env: { PANTHEON_USERNAME: "swoopfinch", PANTHEON_REST_TIMEOUT: "3600" },
+        wsl_distro: "Ubuntu-22.04",
+        target: { mode: "new-tab-window", window: "image-gallery-finish" },
+      }),
+      { adapter: wt },
+    );
+    expect(plan.command).toBe("wt.exe");
+    // Crucially: NO `-d /home/leandro/builder/nyus` (would error 0x8007010b on wt.exe).
+    const dIdx = plan.args.indexOf("-d");
+    if (dIdx !== -1) {
+      expect(plan.args[dIdx + 1]).toBe("Ubuntu-22.04");
+    }
+    // wsl.exe + bash + -l + <script-path>, NOT bash + -lc + <inline>.
+    expect(plan.args).toContain("wsl.exe");
+    expect(plan.args).toContain("Ubuntu-22.04");
+    expect(plan.args).toContain("bash");
+    expect(plan.args).toContain("-l");
+    expect(plan.args).not.toContain("-lc");
+    // The wt.exe argv must NOT contain a literal `;` (wt.exe parses `;` as
+    // a subcommand separator and fragments the spawn — see semaphoremole's
+    // 0x80070002 report). With the script-file approach there's no shell
+    // metacharacter in argv at all.
+    for (const arg of plan.args) {
+      expect(arg).not.toContain(";");
+    }
+    // The script path is the last arg; read it and verify the body.
+    const scriptPath = plan.args[plan.args.length - 1] as string;
+    expect(scriptPath.startsWith(tmpScriptDir)).toBe(true);
+    expect(scriptPath.endsWith(".sh")).toBe(true);
+    const body = fs.readFileSync(scriptPath, "utf8");
+    expect(body).toContain("#!/usr/bin/env bash");
+    expect(body).toContain(`rm -f -- "$0"`);
+    expect(body).toContain("cd '/home/leandro/builder/nyus'");
+    expect(body).toContain("exec 'claude' '--print' 'go'");
+    expect(body).toContain("export PANTHEON_USERNAME='swoopfinch'");
+    expect(body).toContain("export PANTHEON_REST_TIMEOUT='3600'");
+  } finally {
+    if (prev === undefined) delete process.env.PANTHEON_WT_SCRIPT_DIR;
+    else process.env.PANTHEON_WT_SCRIPT_DIR = prev;
+    fs.rmSync(tmpScriptDir, { recursive: true, force: true });
   }
-  // Inner wsl invocation present.
-  expect(plan.args).toContain("wsl.exe");
-  expect(plan.args).toContain("Ubuntu-22.04");
-  expect(plan.args).toContain("bash");
-  expect(plan.args).toContain("-lc");
-  // The bash -lc payload contains cd + exec + env exports.
-  const bashLcIdx = plan.args.indexOf("-lc");
-  const inner = plan.args[bashLcIdx + 1] as string;
-  expect(inner).toContain("cd '/home/leandro/builder/nyus'");
-  expect(inner).toContain("exec 'claude' '--print' 'go'");
-  expect(inner).toContain("export PANTHEON_USERNAME='swoopfinch'");
-  expect(inner).toContain("export PANTHEON_REST_TIMEOUT='3600'");
 });
 
-test("WT adapter (split-pane WSL target): same wsl wrap, no -d", () => {
-  const plan = resolveSpawnPlan(
-    args({
-      cwd: "/home/leandro/monitor/nyus",
-      wsl_distro: "Ubuntu-22.04",
-      target: {
-        mode: "split-pane",
-        window: "image-gallery-finish",
-        split: "horizontal",
-      },
-    }),
-    { adapter: wt },
-  );
-  expect(plan.args).toContain("split-pane");
-  expect(plan.args).toContain("-H");
-  expect(plan.args).toContain("wsl.exe");
-  // The persona's cwd shows up in the inner bash, NOT in a wt.exe -d.
-  const bashLcIdx = plan.args.indexOf("-lc");
-  const inner = plan.args[bashLcIdx + 1] as string;
-  expect(inner).toContain("cd '/home/leandro/monitor/nyus'");
+test("WT adapter (split-pane WSL target): same script-file wrap, no -d, no inline bash", () => {
+  const tmpScriptDir = fs.mkdtempSync(path.join(os.tmpdir(), "pantheon-wt-script-"));
+  const prev = process.env.PANTHEON_WT_SCRIPT_DIR;
+  process.env.PANTHEON_WT_SCRIPT_DIR = tmpScriptDir;
+  try {
+    const plan = resolveSpawnPlan(
+      args({
+        cwd: "/home/leandro/monitor/nyus",
+        wsl_distro: "Ubuntu-22.04",
+        target: {
+          mode: "split-pane",
+          window: "image-gallery-finish",
+          split: "horizontal",
+        },
+      }),
+      { adapter: wt },
+    );
+    expect(plan.args).toContain("split-pane");
+    expect(plan.args).toContain("-H");
+    expect(plan.args).toContain("wsl.exe");
+    expect(plan.args).toContain("-l");
+    expect(plan.args).not.toContain("-lc");
+    for (const arg of plan.args) {
+      expect(arg).not.toContain(";");
+    }
+    const scriptPath = plan.args[plan.args.length - 1] as string;
+    const body = fs.readFileSync(scriptPath, "utf8");
+    expect(body).toContain("cd '/home/leandro/monitor/nyus'");
+  } finally {
+    if (prev === undefined) delete process.env.PANTHEON_WT_SCRIPT_DIR;
+    else process.env.PANTHEON_WT_SCRIPT_DIR = prev;
+    fs.rmSync(tmpScriptDir, { recursive: true, force: true });
+  }
+});
+
+test("WT adapter (WSL target): script body carries forward summoner PATH", () => {
+  const tmpScriptDir = fs.mkdtempSync(path.join(os.tmpdir(), "pantheon-wt-script-"));
+  const prevDir = process.env.PANTHEON_WT_SCRIPT_DIR;
+  const prevPath = process.env.PATH;
+  process.env.PANTHEON_WT_SCRIPT_DIR = tmpScriptDir;
+  process.env.PATH = "/custom/bin:/usr/local/bin:/usr/bin";
+  try {
+    const plan = resolveSpawnPlan(
+      args({
+        cwd: "/work",
+        wsl_distro: "Ubuntu-22.04",
+        target: { mode: "new-tab-window" },
+      }),
+      { adapter: wt },
+    );
+    const scriptPath = plan.args[plan.args.length - 1] as string;
+    const body = fs.readFileSync(scriptPath, "utf8");
+    // PATH carry-forward must precede user env exports (so user-supplied
+    // PATH in exec_env, if any, wins).
+    expect(body).toContain("export PATH='/custom/bin:/usr/local/bin:/usr/bin'");
+    const pathIdx = body.indexOf("export PATH=");
+    const cdIdx = body.indexOf("cd '/work'");
+    expect(pathIdx).toBeLessThan(cdIdx);
+  } finally {
+    if (prevDir === undefined) delete process.env.PANTHEON_WT_SCRIPT_DIR;
+    else process.env.PANTHEON_WT_SCRIPT_DIR = prevDir;
+    if (prevPath === undefined) delete process.env.PATH;
+    else process.env.PATH = prevPath;
+    fs.rmSync(tmpScriptDir, { recursive: true, force: true });
+  }
 });
 
 test("WT adapter default split direction: vertical when ≤1 existing pane", () => {
