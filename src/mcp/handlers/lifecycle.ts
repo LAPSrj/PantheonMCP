@@ -1,5 +1,6 @@
 import { stampRested, transitionRestEnter } from "../../identity/index.ts";
 import { recordExit } from "../../launcher/index.ts";
+import { appendEntry, buildHandoffSeed } from "../../memory/index.ts";
 import {
   DEFAULT_REST_TIMEOUT_SECONDS,
   MIN_REST_TIMEOUT_SECONDS,
@@ -7,7 +8,9 @@ import {
 } from "../../watchdog/index.ts";
 import {
   asNumber,
+  asObject,
   asString,
+  asStringRequired,
   type Handler,
   ToolError,
 } from "../types.ts";
@@ -35,6 +38,51 @@ export const rest: Handler = async (args, ctx) => {
   }
   const reason = asString(args.reason) ?? "explicit_rest";
   const sessionId = asString(args.session_id) ?? null;
+
+  // §6 MEDIUM idle-handoff slot — write a `kind: "handoff"` memory
+  // entry with a 7-day TTL, optionally DM the target. Best-effort
+  // atomicity: write the memory entry first; if the optional DM
+  // fails, surface a `handoff_warnings` field but leave the memory
+  // entry in place (it's the durable record the future agent
+  // recall_memory's). The handoff entry is always written before
+  // session state flips so a recall after this call sees it.
+  const handoff = asObject(args.handoff);
+  let handoff_entry_id: string | null = null;
+  let handoff_dm_message_id: string | null = null;
+  const handoff_warnings: string[] = [];
+  if (handoff) {
+    const handoffFor = asStringRequired(handoff.for, "handoff.for");
+    const handoffText = asStringRequired(handoff.text, "handoff.text");
+    try {
+      const seed = buildHandoffSeed(handoffFor, handoffText);
+      const entry = appendEntry(ctx.paths, claimed, seed);
+      handoff_entry_id = entry.id;
+    } catch (err) {
+      handoff_warnings.push(`handoff_memory: ${(err as Error).message}`);
+    }
+
+    // Optional DM. Skipped when no chat session is bound (the
+    // current MCP session hasn't logged in to chat). When ctx.chat
+    // is wired, attempt the DM; surface failure as a warning.
+    if (ctx.chat && ctx.chat_agent_id) {
+      try {
+        const msg = ctx.chat.addMessage({
+          from_agent_id: ctx.chat_agent_id,
+          scope: "dm",
+          target: handoffFor,
+          text: handoffText,
+        });
+        handoff_dm_message_id = msg.id;
+      } catch (err) {
+        handoff_warnings.push(`handoff_dm: ${(err as Error).message}`);
+      }
+    } else if (ctx.chat) {
+      handoff_warnings.push(
+        `handoff_dm: no chat session bound (call \`login\` to enable DMs).`,
+      );
+    }
+  }
+
   transitionRestEnter(ctx.session);
   stampRested(ctx.paths, claimed, reason, sessionId);
   return {
@@ -42,6 +90,9 @@ export const rest: Handler = async (args, ctx) => {
     rest_reason: reason,
     persona: claimed,
     note: "Session state flipped to resting. Call `exit()` to close the tab.",
+    ...(handoff_entry_id !== null ? { handoff_entry_id } : {}),
+    ...(handoff_dm_message_id !== null ? { handoff_dm_message_id } : {}),
+    ...(handoff_warnings.length > 0 ? { handoff_warnings } : {}),
   };
 };
 

@@ -46,3 +46,13 @@ export {
   validateLabel,
   type SnapshotMeta,
 } from "./snapshots.ts";
+
+export {
+  HANDOFF_TTL_MS,
+  HANDOFF_KIND,
+  defaultHandoffExpiresAt,
+  buildHandoffSeed,
+  expireHandoffs,
+  expireHandoffsFor,
+  type HandoffSeed,
+} from "./handoffs.ts";

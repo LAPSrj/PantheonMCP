@@ -11,6 +11,7 @@ import {
 } from "../watchdog/index.ts";
 import { stampRested } from "../identity/index.ts";
 import { ChatRouter, pruneStale } from "../chat/index.ts";
+import { expireHandoffs } from "../memory/index.ts";
 import { openChatDb, resolvePaths } from "../storage/index.ts";
 import { createContext } from "./context.ts";
 import { dispatch } from "./dispatch.ts";
@@ -125,9 +126,10 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
     const id = ctx.chat_agent_id;
     if (id) ctx.chat?.heartbeat(id);
   }, 5_000);
-  // Daemon-tick: prune stale subscriber rows every 30s, plus the
-  // tombstone map (the router owns its own tombstones, but we trigger
-  // the prune from here so a single timer drives both sweeps).
+  // Daemon-tick: prune stale subscriber rows every 30s, prune the
+  // in-memory tombstone map, and auto-fade expired handoff memory
+  // entries (§6 MEDIUM idle-handoff slot). One timer drives every
+  // recurrent sweep.
   const pruneTimer = setInterval(() => {
     if (chatDb) {
       try {
@@ -140,6 +142,11 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
       ctx.chat?.tombstones.prune();
     } catch {
       // best-effort
+    }
+    try {
+      expireHandoffs(ctx.paths);
+    } catch {
+      // best-effort — memory sweep failures shouldn't crash the daemon
     }
   }, 30_000);
 

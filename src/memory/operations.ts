@@ -25,6 +25,10 @@ export interface AppendInput {
   kind?: string;
   core?: boolean;
   summoner_username?: string;
+  /** ms-epoch expiry timestamp (§6 MEDIUM handoff slot). The daemon-
+   * tick auto-fades past this. Optional; entries without `expires_at`
+   * never auto-fade. */
+  expires_at?: number;
 }
 
 export interface UpdateInput {
@@ -60,6 +64,7 @@ export function appendEntry(
       ...(input.summoner_username !== undefined
         ? { summoner_username: input.summoner_username }
         : {}),
+      ...(input.expires_at !== undefined ? { expires_at: input.expires_at } : {}),
     };
     return { ...store, entries: [...store.entries, created] };
   });

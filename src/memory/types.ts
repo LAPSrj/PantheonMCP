@@ -28,6 +28,11 @@ export interface MemoryEntry {
   /** When true, the entry is treated as Core: rendered in full at
    * startup subject to the 10KB middle-out cap. */
   core?: boolean;
+  /** ms-epoch expiry timestamp. The §6 MEDIUM idle-handoff slot
+   * sets this to `now + 7 days` for `kind: "handoff"` entries; the
+   * daemon-tick auto-fades past expiry. Schema-additive — existing
+   * entries without `expires_at` never auto-fade. */
+  expires_at?: number;
 }
 
 export interface MemoryStore {

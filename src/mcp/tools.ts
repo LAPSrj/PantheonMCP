@@ -512,7 +512,13 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "rest",
     description:
-      "Save state and prepare to shut down. Before calling, save anything future-you needs via `append_memory`. Does NOT kill the process — call `exit()` last. Replaces summon-mcp's `idle`.",
+      "Save state and prepare to shut down. Before calling, save anything " +
+      "future-you needs via `append_memory`. Does NOT kill the process — " +
+      "call `exit()` last. Replaces summon-mcp's `idle`. " +
+      "**Optional `handoff` slot** writes a `kind: \"handoff\"` core " +
+      "memory entry (auto-fades after 7 days via the daemon-tick) and, " +
+      "when chat is bound, DMs the target with the same text — atomic " +
+      "with the rest call so you don't have to coordinate two calls.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -521,6 +527,17 @@ export const TOOLS: readonly ToolDef[] = [
         session_id: {
           type: "string",
           description: "Claude session id, lets future summon use resume mode.",
+        },
+        handoff: {
+          type: "object",
+          additionalProperties: false,
+          required: ["for", "text"],
+          description:
+            "Optional handoff slot — write a `kind: \"handoff\"` core memory entry + DM the target.",
+          properties: {
+            for: { type: "string", description: "Persona handle to receive the handoff DM." },
+            text: { type: "string", description: "Handoff body — written to memory + sent as DM." },
+          },
         },
       },
     },
