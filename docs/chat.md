@@ -173,6 +173,121 @@ Today's implementation does the flip immediately so the gap is
 zero in practice; the design retains the reconciler-friendly
 contract for future split-process daemon flows.
 
+## Cross-process presence (path 4a)
+
+Per §11c the chat router needs to publish presence across MCP
+processes — without this `list_agents` would only see the agents
+sharing this MCP server's process, breaking the chat-mcp parity
+goal. The implementation: a SQLite-backed presence table that
+every MCP process upserts to on subscriber lifecycle events and
+heartbeats every 5 seconds.
+
+### Table
+
+```sql
+CREATE TABLE subscribers (
+  agent_id TEXT PRIMARY KEY,
+  username TEXT NOT NULL,
+  project TEXT NOT NULL,
+  transient INTEGER NOT NULL DEFAULT 0,
+  mode TEXT NOT NULL DEFAULT 'all',
+  status TEXT NOT NULL DEFAULT '',
+  connected_at INTEGER NOT NULL,
+  status_updated_at INTEGER NOT NULL,
+  last_heartbeat INTEGER NOT NULL,
+  promoted_at INTEGER
+);
+```
+
+Schema migration v2 ships in `src/storage/sqlite.ts`. Indexed on
+`username`, `project`, and `last_heartbeat DESC` so the hot path
+(`list_agents` filtered by recent heartbeat + optional project) is
+a covered scan.
+
+### Write-through
+
+`ChatRouter.add` / `remove` / `update` / `setMode` /
+`flipToPromoted` write through to the presence table when a `db`
+is wired. Best-effort: a presence write failure never aborts the
+in-memory router op — the in-memory dispatch path keeps working;
+cross-process visibility just stays stale until the next
+successful upsert.
+
+### Heartbeat
+
+The MCP server boot installs a `setInterval(5_000)` that calls
+`router.heartbeat(ctx.chat_agent_id)` whenever a chat session is
+active. The 5s cadence sits well below the 30s stale-threshold
+default — a missed beat or two won't evict the row from
+`list_agents`.
+
+### Stale + prune thresholds
+
+| Constant | Value | Used for |
+|----------|-------|----------|
+| `DEFAULT_STALE_THRESHOLD_MS` | 30_000 | `listActive` hides rows whose `last_heartbeat` is older. |
+| `DEFAULT_PRUNE_GRACE_MS` | 60_000 | `pruneStale` deletes rows older than this — longer than the stale threshold so a momentarily-late heartbeat doesn't get the row deleted, just hidden. |
+
+The MCP server boot installs a second `setInterval(30_000)` daemon
+tick that calls `pruneStale(db)` and `tombstones.prune()` so a
+single timer drives both sweeps.
+
+### Read
+
+`router.publicList(project?)` and `router.onlineUsernames()` read
+from the presence table when a `db` is wired and fall back to the
+in-memory subscriber map when one isn't (test harnesses with
+`new ChatRouter({ paths })`). Both call paths converge on the same
+shape — callers don't need to know which source delivered the data.
+
+`list_agents` and `find_role` MCP handlers use these methods, so
+their cross-process behavior is automatic once the presence table
+is wired.
+
+## Why "reclaim allows broadcast" instead of "30s lockout"
+
+§10 reads ambiguously on whether a same-handle reclaim within the
+window is *blocked* or *permitted-with-broadcast*. Pantheon
+implements permitted-with-broadcast for two reasons:
+
+1. **Network-blip resilience** — Yapsmith's stated intent for the
+   tombstone window is "the agent's MCP just dropped and is
+   reconnecting." Hard-blocking the reclaim defeats that case.
+2. **Handle continuity > 30s lockout** — DM threads and `@mention`
+   semantics break when the same human-recognizable handle keeps
+   getting a fresh anonymous identity. Letting the same handle
+   come back with a `handle_recycled` broadcast preserves
+   continuity AND surfaces the seam to peers.
+
+Different actor grabbing the handle in-window is also permitted —
+the broadcast tells peers "this handle just changed hands"; their
+DM logic can treat it as a routing signal. Confirmed against
+Yapsmith's spec via semaphoremole 2026-04-25.
+
+If a future failure mode argues for hard-block instead, the
+single-line change is in `src/chat/collision.ts`: re-instate the
+tombstone-rejects branch.
+
+## Ask disconnect vs ask timeout (two distinct shapes)
+
+`ask` resolves to one of three outcomes:
+
+| Outcome | Shape | When |
+|---------|-------|------|
+| Answered | `{ status: "answered", text, from }` | Target called `answer(correlation_id, text)` before the timeout. |
+| Timeout (still connected) | `null` resolve in the asker's tool return; tool surfaces `{ status: "timeout", reason }`. (Future: synthetic-answer DM with `in_reply_to_ask`.) | Target stayed connected but didn't answer within `timeout_ms`. |
+| Respondent disconnect | `null` resolve in the asker's tool return; tool surfaces `{ status: "timeout", reason: "respondent_disconnected_or_no_response" }`. NO synthetic answer in chat history. | Target disconnected (`logout` / watchdog / daemon-side detect) before answering. |
+
+The disconnect path deliberately does NOT write a synthetic answer
+into chat history — that would pollute the audit trail with messages
+the target never sent. The asker's tool return is the only signal,
+and a future `ask({ on_disconnect: "synthetic_answer" })` toggle can
+opt back into the chat-history shape if a use case appears.
+
+Approved by semaphoremole 2026-04-25 against §12-H ("don't make the
+asker wait forever") — the spirit is satisfied either way; the
+disconnect shape is cleaner.
+
 ## Persistence (§11d)
 
 `src/chat/persistence.ts` writes to the SQLite chat-history database
@@ -228,9 +343,11 @@ become a single shared daemon in the future.
 ## TODO
 
 - **Watcher loop**: `bin/pantheon-fetch.js` analogous to chat-mcp's
-  `bin.js fetch --loop`. Subscribes via `router.subscribe(agent_id)`,
-  formats with `priorityTag` + `wrapSilentEvent`, streams to
-  stdout for the Monitor tool.
+  `bin.js fetch --loop`. Tails SQLite by `since_seq` (or `since_ts`),
+  formats with `priorityTag` + `wrapSilentEvent`, streams to stdout
+  for the Monitor tool. Per-message visibility/delivery filter
+  applied by reading the agent's subscriber row from the presence
+  table (now cross-process-visible).
 - **Channels**: opt-in inline delivery for clients that prefer
   push-on-tool-result over the watcher pattern.
 - **Keepalive sweep**: periodic timer that emits a `keepalive`
