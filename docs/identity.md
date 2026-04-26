@@ -168,16 +168,28 @@ only.
 the original `agent_id`; the fork's chat participation starts
 empty and requires an explicit `login` call. Per §12-H confirmation.
 
-### Collision check
+### Collision check (layered)
 
-The pure identity-layer `forkPersona` runs the registry-side
-prefix-collision check (via `createPersona`). The MCP `fork`
-handler additionally cross-checks the chat router's subscriber
-map (via `ctx.chat.getByUsername`) so we don't create a registry
-entry that immediately collides with an online subscriber under
-that name. The chat-side check throws `username_taken`; the
-registry-side throws `username_taken_other_cwd` /
-`username_prefix_collision`.
+Two layers, two purposes — kept separate by design:
+
+1. **`forkPersona` (registry-side)** — calls `createPersona`,
+   which runs the persona-handle validity rules (regex,
+   reserved names, digit-suffix) plus `prefixCollision` against
+   every persisted persona. Throws `username_taken_other_cwd` /
+   `username_prefix_collision` / `digit_suffix_reserved` /
+   `reserved_username` / `invalid_username`.
+2. **`fork` MCP handler (chat-side)** — additionally calls
+   `ctx.chat?.getByUsername(to)` and throws `username_taken`
+   when an online subscriber holds the handle. The chat
+   router's `getByUsername` reads through the SQLite presence
+   layer, so this check is naturally cross-process.
+
+Refactoring the chat-side check INTO `forkPersona` would mean
+threading a `ChatRouter` into the identity layer purely to
+check one boolean — cosmetic without behavioral change. The
+layered shape is the contract: identity owns registry checks,
+the handler composes chat-router checks. Confirmed by
+semaphoremole.
 
 ### Promote race-loss
 

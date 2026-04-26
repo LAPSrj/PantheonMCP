@@ -67,6 +67,14 @@ The `MemoryStatus` field changes ONLY through:
   user intent).
 - `updateEntry({ status })` — for completeness; surfaced as
   `update_memory({ status })` in the MCP layer.
+- **`expireHandoffs` daemon-tick sweep** — the one explicit
+  exception (see "Idle handoff slot" below). The exception is
+  consistent with §4 because the **caller set `expires_at`
+  precisely to declare TTL-driven fade**. §4's "status NEVER
+  auto-mutates" rule is meant to prevent the daemon from
+  guessing-and-fading at render time without the user asking;
+  TTL fades are user-stated intent expressed via the
+  `expires_at` field, not daemon-side guessing.
 
 Render-time budget enforcement does not call any of these. §4 is
 explicit on this point: collapse is a **render-time** transformation,
