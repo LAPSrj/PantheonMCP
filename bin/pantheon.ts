@@ -22,6 +22,7 @@ import { runDoctor, formatDoctorReport } from "../src/cli/doctor.ts";
 import { dumpChat, rowsToJsonl } from "../src/cli/dump-chat.ts";
 import { loadChat } from "../src/cli/load-chat.ts";
 import { runFetch } from "../src/cli/fetch.ts";
+import { runConsole } from "../src/cli/console.ts";
 import { runStatusline } from "../src/cli/statusline.ts";
 import { runSummon } from "../src/cli/summon.ts";
 import { validateFile, type ValidateType } from "../src/cli/validate.ts";
@@ -48,6 +49,9 @@ Subcommands:
                          Flags: --type persona|memory
   statusline             Print a one-liner of connected agents.
                          Used by the CC plugin's statusline hook.
+  console [...flags]     Interactive admin REPL — watch + broadcast.
+                         Flags: --tail N --no-tail --color --no-color
+                                --no-roster
 
   --version              Print version.
   --help, -h             This message.
@@ -145,6 +149,11 @@ async function main(): Promise<void> {
 
     case "summon": {
       const code = await runSummon({ args: rest });
+      process.exit(code);
+    }
+
+    case "console": {
+      const code = await runConsole({ args: rest });
       process.exit(code);
     }
 

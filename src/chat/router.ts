@@ -153,6 +153,11 @@ export class ChatRouter {
        * doesn't reject `registered_persona` against the owner's
        * own handle. */
       claimed_persona?: string;
+      /** True when the MCP client declared `claude/channel`
+       * experimental capability — surfaces in `Subscriber.supports_channels`
+       * so the dispatch path can branch between channel push and the
+       * Monitor watcher fallback. Defaults false. */
+      supports_channels?: boolean;
     },
   ): Subscriber {
     const availability = this.checkAvailability(
@@ -175,6 +180,7 @@ export class ChatRouter {
       last_seen: now,
       status_updated_at: now,
       promoted_at: null,
+      supports_channels: options.supports_channels ?? false,
     };
     this.subscribers.set(subscriber.agent_id, subscriber);
     this.usernameIndex.set(options.username.toLowerCase(), subscriber.agent_id);

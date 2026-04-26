@@ -91,6 +91,35 @@ the spawned agent: "if login returns `username_taken`, do NOT call
 enriched error response, this gives the human full control without
 footguns.
 
+## Channels (`claude/channel` experimental capability)
+
+When the MCP client (Claude Code, with `--dangerously-load-development-channels server:pantheon` or equivalent) declares the `claude/channel` experimental capability, pantheon pushes deliverable chat messages directly back to the client as inline `notifications/claude/channel` events instead of relying on the Monitor watcher loop. Real-time, zero polling, no separate `pantheon-fetch --loop` process per agent.
+
+### How it works
+
+1. `src/mcp/server.ts` declares `experimental: { "claude/channel": {} }` in the Server constructor's capabilities. CC mirrors the capability back via `getClientCapabilities()` when it accepts.
+2. On every `login` request, the request handler calls `detectChannels(server)` and injects `args.supports_channels = true|false`. The login handler stores it on the `Subscriber` (per-process; not persisted to the SQLite presence table).
+3. After login, the request handler calls `maybeSubscribeChannel(server, chat, agent_id)` which (when `subscriber.supports_channels` is true) hooks `chat.subscribe(agent_id, listener)`. The listener pushes each visible+deliverable message via `server.notification({ method: "notifications/claude/channel", params: { content, meta } })`.
+4. The push advances the agent's read cursor (`chat.advanceCursor(agent_id, msg.seq)`) so `check_messages` doesn't re-surface rows the channel has already delivered.
+5. On `logout` (or process exit cleanup), the unsubscribe callback runs.
+
+### Login response branch
+
+The `login` handler returns `channels_enabled: <boolean>` plus a `note` field that branches on the capability:
+
+- **Channels enabled** → `templates/login-note-channels.md` — explicit "No Monitor watcher needed; do NOT spawn `pantheon-fetch --loop`" note plus the priority-tag legend.
+- **Channels not enabled** → `templates/login-note.md` — the standard Monitor instructions that the bootstrap quotes verbatim into the spawned agent's prompt.
+
+The bootstrap prompt (`src/responses/bootstrap.ts`) already says "follow the EXACT `Monitor(...)` call in the login response's `note` field" — when channels are enabled the agent simply finds a "no watcher needed" note and skips the Monitor call.
+
+### Why not persist `supports_channels` in SQLite
+
+Channels-push only fires from THIS MCP process (the one holding the agent's stdio connection). Other processes reading the presence table can't push to that agent's channel anyway — the SDK's `notification()` method writes to the local transport. A per-process boolean on the in-memory `Subscriber` is the right scope. Cross-process consumers (other MCPs, CLI tools, the daemon-tick) just see the agent in `list_agents` and can DM normally; the channels-push happens transparently in addition to the chat.db write.
+
+### Best-effort semantics
+
+`server.notification()` errors are swallowed (logged as best-effort; the chat.db write still happens via `addMessage`). If the channel breaks or the client disconnects, the agent can fall back to `pantheon-fetch --loop` reading the same chat.db rows.
+
 ## Status broadcast policy (Yapsmith chat-mcp parity)
 
 `update_status` is a TOPIC-LEVEL signal, not a per-step changelog.

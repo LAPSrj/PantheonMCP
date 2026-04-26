@@ -8,11 +8,14 @@ parallel implementations.
 
 ```
 pantheon serve                     # Run the MCP server (stdio).
+pantheon summon <user> [...flags]  # Spawn a registered persona.
 pantheon fetch [...flags]          # Watcher loop. Forwards to pantheon-fetch.
+pantheon console [...flags]        # Interactive admin REPL (watch + broadcast).
 pantheon doctor                    # Health check.
 pantheon dump-chat [...flags]      # Export chat history to JSONL.
 pantheon load-chat <file>          # Re-import a JSONL file.
 pantheon validate <file>           # Lint a persona / memory JSON.
+pantheon statusline                # CC plugin statusline hook.
 
 pantheon --version                 # Print version.
 pantheon --help                    # Print this list.
@@ -33,6 +36,56 @@ the integer without parsing stderr:
 
 `process.exit(code)` is the contract — fatal exceptions also
 return 1.
+
+## `pantheon console`
+
+Interactive admin REPL. Watch every chat event in real time and
+broadcast as `admin` (DM, project-scope, or global).
+
+```
+pantheon console [--tail N] [--no-tail] [--color] [--no-color] [--no-roster]
+```
+
+### Prompt commands
+
+| Command                 | Effect                                                              |
+|-------------------------|---------------------------------------------------------------------|
+| `<text>`                | Bare text → broadcast as admin to `scope=global`.                   |
+| `/g <text>`             | Same as bare text — explicit global broadcast.                      |
+| `/dm <user> <text>`     | DM to `<user>` as admin.                                            |
+| `/proj <project> <text>`| Broadcast to project `<project>` (alias: `/p`).                     |
+| `/who`                  | Print currently connected agents (handles only).                    |
+| `/status`               | Print currently connected agents with their status lines.           |
+| `/help`                 | Show the prompt-command list.                                       |
+| `/quit`                 | Exit (Ctrl-C also works).                                           |
+
+### Architectural notes
+
+- **No daemon-client layer.** Pantheon's MCP-process-per-CC-session
+  model means there's no long-running daemon socket to attach to;
+  the console writes straight to `chat.db` via a transient
+  `ChatRouter` and reads via the same `tailLoop` the per-agent
+  watcher uses. SQLite WAL handles concurrent writes from running
+  MCPs.
+- **Synthetic `console` subscriber.** The console writes a
+  `username: "console", project: "admin"` row directly to the
+  presence table (bypassing `router.add` so no `join` system event
+  fires). The row is heartbeated every 5s and removed on shutdown.
+  Peers see "console" in `list_agents` while the REPL is up.
+- **Admin identity.** Outbound messages set `from_agent_id: "system"`
+  + `system_actor: "admin"` + `from_username_inline: "admin"`. The
+  watcher tags them `[likely reply]` (per `priorityTagForRow`) and
+  the body is prefixed with `[ADMIN]` for visual clarity in the tail.
+- **Pinned roster.** When stdout is a TTY, the console keeps a
+  refreshed-every-5s roster strip above the prompt. Disable with
+  `--no-roster`.
+
+### Non-TTY mode
+
+When `stdin` is not a TTY (test harness, piped script), the console
+reads each line, dispatches as a slash command, and exits on EOF —
+same surface, no readline interactivity. Used by
+`src/cli/__tests__/console.test.ts`.
 
 ## `pantheon doctor`
 

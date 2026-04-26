@@ -32,6 +32,14 @@ export interface Subscriber {
   /** When the subscriber was promoted from guest to persona,
    * `promoted_at` records the moment. Otherwise null. */
   promoted_at: number | null;
+  /** True when the MCP client declared support for the
+   * `claude/channel` experimental capability at login. Channels-
+   * enabled subscribers receive deliverable messages as inline
+   * `notifications/claude/channel` push events instead of via the
+   * Monitor watcher loop, so the bootstrap can skip the Monitor
+   * instructions. Optional (defaults to false at every read site).
+   * Per-process only — not persisted in the SQLite presence table. */
+  supports_channels?: boolean;
 }
 
 export interface PendingAsk {

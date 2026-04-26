@@ -75,7 +75,18 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
 
   const server = new Server(
     { name: "pantheon", version: "0.0.1" },
-    { capabilities: { tools: {} } },
+    {
+      capabilities: {
+        tools: {},
+        // Declare the `claude/channel` experimental capability so CC
+        // mirrors it in `getClientCapabilities()`. The dispatch path
+        // below pushes deliverable chat messages as
+        // `notifications/claude/channel` events when both sides
+        // support it. Without channels, agents fall back to the
+        // Monitor watcher reading chat.db.
+        experimental: { "claude/channel": {} },
+      },
+    },
   );
 
   const pushNotification = async (text: string): Promise<void> => {
@@ -106,14 +117,27 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
     } catch {
       // best-effort
     }
-    // The MCP SDK's CallToolResult type spans several discriminated
-    // variants (some include a `task` field for managed-agents flows).
-    // dispatch returns the basic content+isError shape, which is valid
-    // wire output; cast through unknown to satisfy the SDK's wider
-    // union without restating it here.
-    return (await dispatch(name, args, ctx)) as unknown as Awaited<
+    // Inject `supports_channels` into login so the chat handler can
+    // record it on the subscriber + branch the response note. CC
+    // mirrors the server-declared capability back via
+    // `getClientCapabilities()` when it accepts.
+    if (name === "login") {
+      args.supports_channels = detectChannels(server);
+    }
+    const result = (await dispatch(name, args, ctx)) as unknown as Awaited<
       ReturnType<Parameters<typeof server.setRequestHandler>[1]>
     >;
+    // Subscribe THIS process to the agent's channel push stream after
+    // a successful login. Subscription is one-per-MCP-process so the
+    // listener captures the right `server` instance for the
+    // notification call.
+    if (name === "login" && ctx.chat_agent_id && ctx.chat) {
+      maybeSubscribeChannel(server, ctx.chat, ctx.chat_agent_id);
+    }
+    if (name === "logout") {
+      teardownChannelSubscription(ctx.chat_agent_id);
+    }
+    return result;
   });
 
   // §14 plugin-mode watchdog wiring: at boot, sweep stale per-CC-
@@ -190,6 +214,7 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
     clearInterval(heartbeatTimer);
     clearInterval(hookPollTimer);
     clearInterval(pruneTimer);
+    teardownChannelSubscription(ctx.chat_agent_id);
     try {
       chatDb?.close();
     } catch {
@@ -228,6 +253,83 @@ function resolveStatusDigestMs(): number {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return DEFAULT_STATUS_DIGEST_MINUTES * 60_000;
   return n * 60_000;
+}
+
+/** Read the client's `claude/channel` experimental capability. CC
+ * mirrors the server-declared experimental capabilities back via
+ * `getClientCapabilities()` when it accepts. Untyped on the SDK side;
+ * cast through `unknown` to a narrow shape. */
+function detectChannels(server: Server): boolean {
+  try {
+    const caps = (server as unknown as {
+      getClientCapabilities?: () => { experimental?: Record<string, unknown> } | undefined;
+    }).getClientCapabilities?.();
+    return Boolean(caps?.experimental?.["claude/channel"]);
+  } catch {
+    return false;
+  }
+}
+
+/** Per-process map of `agent_id → unsubscribe-callback`. Each MCP
+ * process holds exactly one channel subscription per logged-in agent
+ * (in practice, exactly one — pantheon's stdio model is one MCP
+ * process per CC session). On `logout` (or process exit) the
+ * unsubscribe runs. */
+const channelUnsubscribes = new Map<string, () => void>();
+
+function maybeSubscribeChannel(
+  server: Server,
+  chat: ChatRouter,
+  agent_id: string,
+): void {
+  const sub = chat.getByAgentId(agent_id);
+  if (!sub || !sub.supports_channels) return;
+  // Replace any prior subscription for this agent (e.g., re-login).
+  teardownChannelSubscription(agent_id);
+  const unsubscribe = chat.subscribe(agent_id, (msg) => {
+    const meta: Record<string, unknown> = {
+      from: msg.from_username_inline ?? msg.from_agent_id,
+      scope: msg.scope,
+      message_id: msg.id,
+      seq: msg.seq,
+      ts: msg.ts,
+    };
+    if (msg.target !== undefined) meta.target = msg.target;
+    if (msg.from_project) meta.from_project = msg.from_project;
+    if (msg.reply_to !== undefined) meta.reply_to = msg.reply_to;
+    if (msg.ask_id !== undefined) meta.ask_id = msg.ask_id;
+    if (msg.in_reply_to_ask !== undefined) meta.in_reply_to_ask = msg.in_reply_to_ask;
+    if (msg.mentions.length > 0) meta.mentions = msg.mentions;
+    if (msg.system) meta.system = true;
+    if (msg.system_kind !== undefined) meta.system_kind = msg.system_kind;
+    server
+      .notification({
+        method: "notifications/claude/channel",
+        params: { content: msg.text, meta },
+      })
+      .catch(() => {
+        // Best-effort: drop on transport hiccup; the watcher fallback
+        // can still pick up via chat.db if the agent re-spawns it.
+      });
+    // Per channels-enabled semantics: the channel push IS the
+    // delivery; advance the agent's cursor so check_messages doesn't
+    // re-surface the same row.
+    chat.advanceCursor(agent_id, msg.seq);
+  });
+  channelUnsubscribes.set(agent_id, unsubscribe);
+}
+
+function teardownChannelSubscription(agent_id: string | null): void {
+  if (!agent_id) return;
+  const unsubscribe = channelUnsubscribes.get(agent_id);
+  if (unsubscribe) {
+    try {
+      unsubscribe();
+    } catch {
+      // best-effort
+    }
+    channelUnsubscribes.delete(agent_id);
+  }
 }
 
 function readRestTimeoutFromEnv(): number | "never" {

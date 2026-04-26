@@ -217,6 +217,39 @@ test("renderStatusDigest groups by project, sorts by username, marks mode tags",
   expect(out.indexOf("alpha[Q]")).toBeLessThan(out.indexOf("zeta —"));
 });
 
+// --- channels ---
+
+test("router.add accepts supports_channels and persists it on the subscriber", () => {
+  const sub = router.add({
+    username: "alpha",
+    project: "ops",
+    transient: false,
+    supports_channels: true,
+  });
+  expect(sub.supports_channels).toBe(true);
+});
+
+test("router.add: supports_channels defaults to false when omitted", () => {
+  const sub = router.add({ username: "alpha", project: "ops", transient: false });
+  expect(sub.supports_channels).toBe(false);
+});
+
+test("router.subscribe fires for messages visible to the agent (channel push hook seam)", () => {
+  const alpha = router.add({ username: "alpha", project: "ops", transient: false, supports_channels: true });
+  const beta = router.add({ username: "beta", project: "ops", transient: false });
+  const received: string[] = [];
+  router.subscribe(alpha.agent_id, (m) => {
+    received.push(m.text);
+  });
+  // Message from beta to project ops — alpha should receive.
+  router.addMessage({
+    from_agent_id: beta.agent_id,
+    scope: "project",
+    text: "hello team",
+  });
+  expect(received).toEqual(["hello team"]);
+});
+
 test("renderStatusDigest singular agent count uses 'agent', not 'agents'", async () => {
   const { renderStatusDigest } = await import("../router.ts");
   const subs = [

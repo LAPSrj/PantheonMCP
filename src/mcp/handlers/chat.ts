@@ -39,6 +39,12 @@ export const login: Handler = async (args, ctx) => {
   // (otherwise registered personas can never join chat under their
   // own name — the original bug E2E surfaced).
   const claimedPersona = ctx.session.claimedUsername;
+  // The MCP server's request handler injects `supports_channels`
+  // into args after detecting `claude/channel` experimental
+  // capability on the client. Plumb to the subscriber so the
+  // dispatch path can branch between channel push and the Monitor
+  // watcher fallback.
+  const supportsChannels = asBoolean(args.supports_channels) ?? false;
   let subscriber;
   try {
     subscriber = router.add({
@@ -46,6 +52,7 @@ export const login: Handler = async (args, ctx) => {
       project,
       transient,
       status,
+      supports_channels: supportsChannels,
       ...(claimedPersona === username ? { claimed_persona: claimedPersona } : {}),
     });
   } catch (err) {
@@ -134,17 +141,21 @@ export const login: Handler = async (args, ctx) => {
 
   // §6 HIGH stale-MCP-proxy mitigation: pull the login note from
   // daemon-resolved templates so a daemon restart picks up edits.
+  // When channels are enabled, swap to the channels-enabled template
+  // so the agent doesn't pointlessly start a Monitor watcher.
   let note: string;
+  const noteTemplate = supportsChannels ? "login-note-channels" : "login-note";
   try {
-    note = getResponseTemplate("login-note", {
+    note = getResponseTemplate(noteTemplate, {
       agent_id: subscriber.agent_id,
       username: subscriber.username,
       project: subscriber.project,
     });
   } catch {
-    note =
-      `Logged in as ${subscriber.username}. ` +
-      `Run pantheon-fetch --agent-id ${subscriber.agent_id} --loop to start the watcher.`;
+    note = supportsChannels
+      ? `Logged in as ${subscriber.username}. Channels ARE enabled — peer messages arrive inline as <channel source="pantheon" ...>...</channel> tags. No watcher needed.`
+      : `Logged in as ${subscriber.username}. ` +
+        `Run pantheon-fetch --agent-id ${subscriber.agent_id} --loop to start the watcher.`;
   }
   return {
     ok: true,
@@ -152,6 +163,7 @@ export const login: Handler = async (args, ctx) => {
     username: subscriber.username,
     project: subscriber.project,
     transient: subscriber.transient,
+    channels_enabled: supportsChannels,
     promoted,
     note,
   };

@@ -62,6 +62,38 @@ test("login + logout clears chat_agent_id", async () => {
   expect(ctx.chat_agent_id).toBeNull();
 });
 
+test("login: supports_channels=false returns watcher-instruction note + channels_enabled=false", async () => {
+  const r = await call("login", {
+    username: "alpha",
+    project: "ops",
+    transient: false,
+  });
+  expect(r.ok).toBe(true);
+  expect(r.payload.channels_enabled).toBe(false);
+  expect(r.payload.note).toContain("pantheon-fetch");
+  expect(r.payload.note).not.toContain("Channels ARE enabled");
+});
+
+test("login: supports_channels=true returns channels-enabled note + channels_enabled=true + persists on subscriber", async () => {
+  const r = await call("login", {
+    username: "alpha",
+    project: "ops",
+    transient: false,
+    supports_channels: true,
+  });
+  expect(r.ok).toBe(true);
+  expect(r.payload.channels_enabled).toBe(true);
+  expect(r.payload.note).toContain("Channels ARE enabled");
+  expect(r.payload.note).toContain("<channel source=\"pantheon\"");
+  // The channels-enabled template explicitly tells the agent NOT to
+  // spawn the watcher (instead of the watcher-only template that
+  // tells them to start it).
+  expect(r.payload.note).toContain("No Monitor watcher needed");
+  expect(r.payload.note).toContain("Do NOT spawn");
+  // Persisted on the subscriber so the dispatch path can branch.
+  expect(ctx.chat?.getByUsername("alpha")?.supports_channels).toBe(true);
+});
+
 test("login collision: returns enriched error with options + suggested_suffix; does NOT auto-evict", async () => {
   // First login takes the handle.
   const first = await call("login", {
