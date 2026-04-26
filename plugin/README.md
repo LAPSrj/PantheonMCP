@@ -101,16 +101,16 @@ per-project; guests get `*` suffix.
 
 ## Hook status
 
-| Hook                    | Status            | Notes |
-|-------------------------|-------------------|-------|
-| Watchdog reset (PreToolUse) | partial      | Writes a marker file; daemon-tick polling integration TBD. Vanilla MCP rule (§14) covers the common case. |
-| `/color` binding (PostToolUse) | stub       | Documents intent; needs CC color-exposure path to wire. |
-| Context-pct nudge (UserPromptSubmit) | stub | Documents intent + threshold ladder; needs CC context-pct exposure. |
-| Tab-title-from-status   | stub              | Windows-only design. Needs daemon-side listener; likely folds into watcher loop. |
+| Hook                    | Status     | Notes |
+|-------------------------|------------|-------|
+| Watchdog reset (PreToolUse) | **wired** | `touch`es `<stateDir>/sessions/$PPID/last_tool_use_at`; MCP server polls every 5s, calls `watchdog.touch` on mtime advance. End-to-end. |
+| `/color` binding (PostToolUse) | stub | Needs CC to expose the chosen color value to hooks. |
+| Context-pct nudge (UserPromptSubmit) | stub | Needs CC to expose context-percent to hooks. |
+| Tab-title-from-status   | stub       | Windows-only design. Needs daemon-side listener (likely folds into watcher loop) + per-session tab-id tracking. |
 
-The stubs ship as documented future-extension points. They exit 0
-silently so CC doesn't block on them. Real wiring lands when CC's
-hook integration matures or pantheon's §15 singleton daemon ships.
+The stubs each `cat > /dev/null` + `exit 0` so CC doesn't block.
+Real wiring lands when CC's hook surface grows (color, context-pct)
+or pantheon's §15 singleton daemon ships (tab-title).
 
 ## Capability matrix (per §9b)
 
@@ -119,11 +119,11 @@ hook integration matures or pantheon's §15 singleton daemon ships.
 | Persona register / summon / chat / memory / lifecycle | ✅ | — |
 | Slash commands (`/pantheon-*`)    | —           | ✅          |
 | Statusline integration            | —           | ✅          |
-| `/color` binding                  | —           | ✅ (stub)   |
-| Tab-title-from-status             | —           | ✅ (stub)   |
-| Watchdog reset on CC tool-use     | —           | ✅ (stub)   |
+| Watchdog reset on CC tool-use     | —           | ✅ (wired)  |
 | Settings.json permission templates| —           | ✅          |
-| Auto-context-percent nudge        | partial (surrogate) | ✅ proper hook (stub) |
+| `/color` binding                  | —           | 🟡 stub      |
+| Tab-title-from-status             | —           | 🟡 stub      |
+| Auto-context-percent nudge        | partial (surrogate) | 🟡 stub  |
 
 The plugin is **NOT** required to use pantheon. Vanilla MCP carries
 the full feature surface. The plugin only adds CC-side ergonomics.

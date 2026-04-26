@@ -15,6 +15,7 @@ import { expireHandoffs } from "../memory/index.ts";
 import { openChatDb, resolvePaths } from "../storage/index.ts";
 import { createContext } from "./context.ts";
 import { dispatch } from "./dispatch.ts";
+import { HookPoller, sweepStaleSessionDirs } from "./hook-poller.ts";
 import { TOOLS } from "./tools.ts";
 
 export interface ServerOptions {
@@ -115,6 +116,14 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
     >;
   });
 
+  // §14 plugin-mode watchdog wiring: at boot, sweep stale per-CC-
+  // session marker dirs from previous runs.
+  try {
+    sweepStaleSessionDirs(paths);
+  } catch {
+    // best-effort
+  }
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
@@ -125,6 +134,18 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
   const heartbeatTimer = setInterval(() => {
     const id = ctx.chat_agent_id;
     if (id) ctx.chat?.heartbeat(id);
+  }, 5_000);
+  // §14 plugin-mode watchdog reset: poll the per-CC-session marker
+  // file the PreToolUse hook touches. When mtime advances, reset
+  // this session's watchdog. Same 5s cadence as the heartbeat.
+  const hookPoller = new HookPoller({
+    paths: ctx.paths,
+    watchdog: ctx.watchdog,
+    session_id: ctx.session.id,
+    ppid: process.ppid,
+  });
+  const hookPollTimer = setInterval(() => {
+    hookPoller.poll();
   }, 5_000);
   // Daemon-tick: prune stale subscriber rows every 30s, prune the
   // in-memory tombstone map, and auto-fade expired handoff memory
@@ -153,6 +174,7 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
   const cleanup = () => {
     ctx.watchdog.shutdown();
     clearInterval(heartbeatTimer);
+    clearInterval(hookPollTimer);
     clearInterval(pruneTimer);
     try {
       chatDb?.close();

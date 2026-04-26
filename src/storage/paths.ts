@@ -19,6 +19,12 @@ export interface Paths {
   daemonSocketPath: string;
   daemonPidPath: string;
   runtimeDir: string;
+  /** Per-CC-session marker dir for plugin hooks. Each CC parent
+   * process gets `<sessionsDir>/<ppid>/`; hooks `touch` files
+   * inside it (e.g. `last_tool_use_at`) and the MCP server's
+   * daemon-tick polls them to drive watchdog resets per §14
+   * plugin-mode. */
+  sessionsDir: string;
 }
 
 export function resolvePaths(env: NodeJS.ProcessEnv = process.env): Paths {
@@ -33,6 +39,7 @@ export function resolvePaths(env: NodeJS.ProcessEnv = process.env): Paths {
     daemonSocketPath: path.join(stateRoot, "daemon.sock"),
     daemonPidPath: path.join(stateRoot, "daemon.pid"),
     runtimeDir: path.join(stateRoot, "runtime"),
+    sessionsDir: path.join(stateRoot, "sessions"),
   };
 }
 
