@@ -125,3 +125,72 @@ test("recordExit clamps tabCount at 0 and is a no-op for unknown windows", () =>
 
   expect(recordExit(paths, "ghost-window")).toBeNull();
 });
+
+// --- per-tab geometry persistence ---
+
+test("recordSpawn (mode 'new-tab') seeds a fresh TabGeometry with one pane", async () => {
+  const { getTabGeometry } = await import("../window-registry.ts");
+  recordSpawn(paths, "win", { summoner: null, persona: "a", mode: "new-tab" });
+  const g = getTabGeometry(paths, "win", 0);
+  expect(g).not.toBeNull();
+  expect(g!.columns).toEqual([[0]]);
+  expect(g!.next_pane_id).toBe(1);
+});
+
+test("five sequential split-pane spawns into one tab evolve to shape [2,2,1]", async () => {
+  const { getTabGeometry } = await import("../window-registry.ts");
+  // Initial new-tab seeds the first pane.
+  recordSpawn(paths, "win", { summoner: null, persona: "a", mode: "new-tab" });
+  // Four more split-panes — registry uses the policy each time when no
+  // explicit decision is supplied.
+  for (let i = 0; i < 4; i++) {
+    recordSpawn(paths, "win", {
+      summoner: null,
+      persona: `p${i}`,
+      mode: "split-pane",
+      tab_index: 0,
+    });
+  }
+  const g = getTabGeometry(paths, "win", 0);
+  expect(g).not.toBeNull();
+  expect(g!.columns.map((c) => c.length)).toEqual([2, 2, 1]);
+  expect(g!.next_pane_id).toBe(5);
+});
+
+test("recordSpawn persists an explicit SplitDecision verbatim", async () => {
+  const { getTabGeometry } = await import("../window-registry.ts");
+  recordSpawn(paths, "win", { summoner: null, persona: "a", mode: "new-tab" });
+  // Hand-built decision (e.g. caller-overridden direction): force an
+  // H-split into col 0 of the first split.
+  recordSpawn(paths, "win", {
+    summoner: null,
+    persona: "b",
+    mode: "split-pane",
+    tab_index: 0,
+    decision: {
+      direction: "H",
+      target_pane_id: 0,
+      target_col: 0,
+      target_row: 1,
+      reason: "explicit-test",
+    },
+  });
+  const g = getTabGeometry(paths, "win", 0);
+  // Pane 1 stacks below pane 0 in col 0 (NOT a new column).
+  expect(g!.columns).toEqual([[0, 1]]);
+});
+
+test("recordExit preserves geometryByTab so the next split picks up the same shape", async () => {
+  const { getTabGeometry } = await import("../window-registry.ts");
+  recordSpawn(paths, "win", { summoner: null, persona: "a", mode: "new-tab" });
+  recordSpawn(paths, "win", {
+    summoner: null,
+    persona: "b",
+    mode: "split-pane",
+    tab_index: 0,
+  });
+  recordExit(paths, "win"); // tabCount decrements but geometry persists
+  const g = getTabGeometry(paths, "win", 0);
+  expect(g).not.toBeNull();
+  expect(g!.columns.map((c) => c.length)).toEqual([1, 1]);
+});

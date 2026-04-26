@@ -393,6 +393,84 @@ test("summon: per-call remote_control: true on a persona without rc adds the fla
   expect(argv[idx + 1]).toBe("pantheon");
 });
 
+// --- pane geometry: multi-summon end-to-end ---
+
+test("five sequential split-pane summons evolve the tab's geometry to shape [2,2,1] AND emit focus-pane argv", async () => {
+  // Force WT detection so split-pane is supported.
+  ctx = createContext({
+    paths: ctx.paths,
+    session: ctx.session,
+    watchdog: ctx.watchdog,
+    parent_pid: ctx.parent_pid,
+    platform: ctx.platform,
+    spawn_executor: makeMockExecutor(() => mockStderr),
+    stderr_probe_ms: 5,
+    spawn_env: { WT_SESSION: "test" } as NodeJS.ProcessEnv,
+  });
+  fixturePersona({ username: "alpha" });
+  fixturePersona({ username: "beta", cwd: "/work/beta" });
+  fixturePersona({ username: "gamma", cwd: "/work/gamma" });
+  fixturePersona({ username: "delta", cwd: "/work/delta" });
+  fixturePersona({ username: "epsilon", cwd: "/work/epsilon" });
+
+  // First summon: new-tab-window (seeds the tab geometry).
+  await call("summon", {
+    username: "alpha",
+    target: { mode: "new-tab-window", window: "image-gallery" },
+  });
+  // Four split-pane follow-ups into the same window/tab.
+  for (const u of ["beta", "gamma", "delta", "epsilon"]) {
+    await call("summon", {
+      username: u,
+      target: { mode: "split-pane", window: "image-gallery", tab_index: 0 },
+    });
+  }
+
+  const { getTabGeometry } = await import("../../launcher/index.ts");
+  const g = getTabGeometry(ctx.paths, "image-gallery", 0);
+  expect(g).not.toBeNull();
+  expect(g!.columns.map((c) => c.length)).toEqual([2, 2, 1]);
+
+  // Each split-pane spawn should have emitted focus-pane in the argv.
+  const splitInvocations = recorder.slice(1); // skip the new-tab seed
+  for (const inv of splitInvocations) {
+    expect(inv.args).toContain("focus-pane");
+    expect(inv.args).toContain("split-pane");
+  }
+});
+
+test("split-pane: caller-explicit target.split overrides policy direction; focus_pane stays policy-chosen", async () => {
+  ctx = createContext({
+    paths: ctx.paths,
+    session: ctx.session,
+    watchdog: ctx.watchdog,
+    parent_pid: ctx.parent_pid,
+    platform: ctx.platform,
+    spawn_executor: makeMockExecutor(() => mockStderr),
+    stderr_probe_ms: 5,
+    spawn_env: { WT_SESSION: "test" } as NodeJS.ProcessEnv,
+  });
+  fixturePersona({ username: "alpha" });
+  fixturePersona({ username: "beta", cwd: "/work/beta" });
+  // Seed the tab.
+  await call("summon", {
+    username: "alpha",
+    target: { mode: "new-tab-window", window: "win" },
+  });
+  // Caller forces horizontal even though the policy would say vertical
+  // (n=1 → cols<3 + rows>=cols ✓ → add column → V).
+  await call("summon", {
+    username: "beta",
+    target: { mode: "split-pane", window: "win", split: "horizontal" },
+  });
+  const splitInv = recorder[1]!;
+  // Direction the caller asked for.
+  expect(splitInv.args).toContain("-H");
+  expect(splitInv.args).not.toContain("-V");
+  // focus-pane is still emitted (policy-chosen target pane).
+  expect(splitInv.args).toContain("focus-pane");
+});
+
 test("summon: bare summon (no --prompt) STILL embeds the bootstrap so the agent logs into chat", async () => {
   fixturePersona();
   await call("summon", { username: "moth-whistle" });

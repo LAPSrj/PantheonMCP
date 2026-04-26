@@ -107,6 +107,92 @@ The legacy summon-mcp environment variable is honored:
 
 Per-call `target.mode` always wins over both env vars.
 
+## Pane-geometry policy (split-pane defaults)
+
+Multi-pane summons into the same tab grow into a balanced grid
+(capped at 3 columns) instead of column-narrowing. The policy lives
+in `src/launcher/pane-geometry.ts`; the spawn handler reads/writes
+per-tab geometry from the window registry and passes the resolved
+direction + target-pane to the wt adapter.
+
+Confirmed sequence as panes accumulate (n = total pane count after
+the spawn):
+
+| n  | shape       | what changed                                           |
+|----|-------------|--------------------------------------------------------|
+| 1  | `[1]`       | initial tab pane                                       |
+| 2  | `[1, 1]`    | add column (V-split off pane 0)                        |
+| 3  | `[2, 1]`    | add row to col 0 (H-split below col-0 bottom)          |
+| 4  | `[2, 2]`    | add row to col 1 (H-split below col-1 bottom)          |
+| 5  | `[2, 2, 1]` | add column (V-split off TOP of rightmost column)       |
+| 6  | `[2, 2, 2]` | add row to col 2 (H-split)                             |
+| 7  | `[3, 2, 2]` | add row to leftmost-smallest col (col 0)               |
+| 8  | `[3, 3, 2]` | add row to next leftmost-smallest col (col 1)          |
+| 9  | `[3, 3, 3]` | add row to col 2 — 3x3 capacity                        |
+| 10+| `[4, ...]`  | continue adding rows to leftmost-smallest column       |
+
+### Unified rule
+
+> Add a new COLUMN if `cols < 3` AND every existing column has
+> `row_count >= cols` (the layout is a balanced rectangle wanting to
+> grow wider). Otherwise add a ROW to the leftmost column with the
+> smallest row count.
+
+Verify by hand: at `[2, 2]` (n=4), cols=2, all rows=2 ≥ 2 ✓ → add
+column → `[2, 2, 1]`. At `[2, 2, 1]` (n=5), cols=3 → first clause
+fails → add row to leftmost-smallest col (col 2, row count 1) →
+`[2, 2, 2]`.
+
+### Direction + focus pane
+
+Each decision returns BOTH a direction (`V` for new column, `H` for
+new row) AND a wt pane index to focus before the split:
+
+- **Add column**: focus the TOP pane of the rightmost column;
+  `split-pane -V` carves the new column out of its right half.
+- **Add row**: focus the BOTTOM pane of the target column;
+  `split-pane -H` stacks the new pane below it.
+
+The wt adapter emits `focus-pane -t <id> ; split-pane -V|-H ; ...`.
+Without the `focus-pane` step, `wt split-pane` lands on whichever
+pane is currently focused — which yields the column-narrowing
+pattern.
+
+### Caller override
+
+`target.split = "horizontal" | "vertical"` (or CLI
+`--target-split h|v`) forces the direction and bypasses the policy
+clause that picks direction. The focus-pane step still runs with the
+policy-chosen target so even an explicit-direction split lands in
+the right pane. To override BOTH direction and target, callers can
+pass `target.focus_pane_id` directly (mostly an internal field; not
+documented for end users).
+
+### Persistence
+
+Per-tab geometry persists in `~/.local/state/pantheon/windows.json`
+under each window's `geometryByTab[tab_index]` field as a
+column-major `PaneId[][]` plus `next_pane_id`. Survives across CLI
+invocations (`pantheon summon` / `mcp__pantheon__summon` share the
+same registry). `pantheon doctor` doesn't reconcile against
+externally-closed panes — drift is accepted per the best-effort
+caveat below.
+
+### Best-effort caveat
+
+The registry is a SHADOW of wt's actual layout, not authoritative.
+Users can:
+
+- Close panes via mouse / `Ctrl+Shift+W` — pantheon doesn't see
+  these. The next split into that tab walks from a stale geometry
+  and may land off-target.
+- Manually `wt focus-pane` before a split — pantheon's geometry
+  doesn't track manual focus.
+
+Documented; we don't try to be a window server. The 3x3 capacity
+limit minimises drift impact since we don't grow into arbitrarily
+deep trees.
+
 ## WSL launch scripts (wt adapter)
 
 When the `wt` adapter spawns into a WSL target (`SpawnArgs.wsl_distro`
@@ -180,19 +266,36 @@ interface WindowRecord {
     persona: string;          // who's now living in the new tab/pane
     tab_index?: number;       // 0-based; populated when known
   }>;
+  geometryByTab?: Record<number, TabGeometry>;
+}
+
+interface TabGeometry {
+  /** column-major: columns[c][r] = wt pane index at column c, row r */
+  columns: number[][];
+  /** next wt pane index assigned on the next split */
+  next_pane_id: number;
 }
 ```
 
-`recordSpawn(paths, windowName, spawn)` appends to the history and
-increments `tabCount`. Writes go through `mutateJsonAtomic` so
-concurrent spawns can't lose entries.
+`recordSpawn(paths, windowName, spawn)` appends to the history,
+increments `tabCount`, and updates `geometryByTab[spawn.tab_index]`:
+
+- `mode: "new-tab"` / `"new-window"` seeds a fresh single-pane
+  `TabGeometry`.
+- `mode: "split-pane"` applies the spawn handler's `SplitDecision`
+  via `applyDecision(currentGeometry, decision)` so the registry
+  always reflects the post-split state.
+
+Writes go through `mutateJsonAtomic` so concurrent spawns can't lose
+entries.
 
 The registry is **best-effort**: the user can close tabs externally
-and `tabCount` will drift; on the next spawn we rebuild from
-observation by simply appending. No reconciler runs against external
-state. The dispatcher uses `predictNextTabIndex(paths, windowName)`
-as a guess for `target.tab_index` when split-pane requests don't
-supply one.
+and `tabCount` (or per-tab geometry) will drift; on the next spawn
+we walk from the stale state and append. No reconciler runs against
+external state. `predictNextTabIndex(paths, windowName)` returns a
+guess for `target.tab_index` when split-pane requests don't supply
+one. `getTabGeometry(paths, window, tab_index)` returns the
+persisted geometry for the spawn handler's policy decision.
 
 ## Stderr probe
 

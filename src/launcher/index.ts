@@ -31,12 +31,24 @@ export {
   recordSpawn,
   recordExit,
   getWindowState,
+  getTabGeometry,
   predictNextTabIndex,
   predictPaneCount,
   type WindowRegistry,
   type WindowRecord,
   type TabSpawn,
 } from "./window-registry.ts";
+
+export {
+  freshTab,
+  decideNextSplit,
+  applyDecision,
+  paneCount,
+  shape,
+  type TabGeometry,
+  type SplitDecision,
+  type PaneId,
+} from "./pane-geometry.ts";
 
 export {
   executeSpawnPlan,

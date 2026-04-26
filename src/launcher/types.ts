@@ -29,6 +29,12 @@ export interface SpawnTarget {
   /** When true and the detected adapter is tmux, dispatch picks the
    * next-priority adapter (the host terminal tmux runs inside). */
   escape_tmux?: boolean;
+  /** wt pane index to focus before split-pane. The wt adapter emits
+   * `focus-pane -t <id> ;` before `split-pane`. Set by the spawn
+   * handler from the per-tab geometry decision; callers don't pass
+   * this directly. Without it, split-pane lands on whichever pane wt
+   * has focused, yielding the column-narrowing pattern we don't want. */
+  focus_pane_id?: number;
 }
 
 export interface SpawnArgs {

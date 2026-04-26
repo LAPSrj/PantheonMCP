@@ -79,6 +79,16 @@ export const wt: Adapter = {
       if (target.tab_index != null) {
         subcommands.push("focus-tab", "-t", String(target.tab_index), ";");
       }
+      // Geometry policy: focus the target pane BEFORE split-pane so the
+      // new pane lands where the policy chose. Without this, wt splits
+      // whichever pane is currently focused, which yields the
+      // column-narrowing pattern Leandro hit. The spawn handler computes
+      // `focus_pane_id` from the per-tab geometry; callers can override
+      // direction via `target.split` but the focus pane stays policy-
+      // chosen. (Caller-explicit focus_pane_id, if any, takes precedence.)
+      if (target.focus_pane_id !== undefined) {
+        subcommands.push("focus-pane", "-t", String(target.focus_pane_id), ";");
+      }
       const dir = splitDirection === "horizontal" ? "-H" : "-V";
       subcommands.push("split-pane", dir);
       subcommands.push("--title", args.tab_title);

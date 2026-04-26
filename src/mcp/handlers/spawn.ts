@@ -5,14 +5,19 @@ import {
   stampSummoned,
 } from "../../identity/index.ts";
 import {
+  decideNextSplit,
   ensureCwdTrusted,
   executeSpawnPlan,
+  freshTab,
+  getTabGeometry,
+  paneCount,
   predictNextTabIndex,
-  predictPaneCount,
   recordSpawn,
   resolveSpawnPlan,
   type SpawnArgs,
   type SpawnTarget,
+  type SplitDecision,
+  type TabGeometry,
 } from "../../launcher/index.ts";
 import { buildSummonBootstrap } from "../../responses/bootstrap.ts";
 import { DEFAULT_REST_TIMEOUT_SECONDS } from "../../watchdog/index.ts";
@@ -156,10 +161,32 @@ export async function spawnPersona(
   const wslDistro =
     persona.platform === "wsl" ? (persona.wsl_distro ?? ctx.spawn_env.WSL_DISTRO_NAME) : undefined;
 
-  // Default split-direction policy needs the existing pane count for
-  // the target tab. Best-effort read from the registry; the wt adapter
-  // applies the policy when target.split is omitted.
-  const existingPaneCount = predictPaneCount(ctx.paths, windowName, predictedTabIndex);
+  // Pane-geometry policy. For split-pane spawns we read the per-tab
+  // geometry, decide where the next pane lands (direction +
+  // target_pane_id), and pass the resolution into SpawnArgs. The wt
+  // adapter renders `focus-pane -t <id> ; split-pane -V|-H` from those
+  // fields. Caller-explicit `target.split` still wins on direction;
+  // the focus pane stays policy-chosen so even an explicit-direction
+  // split lands in the right place. Non-split spawns (new-tab,
+  // new-window) skip this entirely.
+  const isSplit = (target?.mode ?? "") === "split-pane";
+  const currentGeometry: TabGeometry | null = isSplit
+    ? (getTabGeometry(ctx.paths, windowName, predictedTabIndex) ?? freshTab())
+    : null;
+  const splitDecision: SplitDecision | null =
+    isSplit && currentGeometry ? decideNextSplit(currentGeometry) : null;
+
+  const resolvedTarget: SpawnTarget = { ...(target ?? {}), window: windowName };
+  if (splitDecision) {
+    // Don't clobber a caller-explicit split direction; honor policy
+    // when the caller didn't specify.
+    if (resolvedTarget.split === undefined) {
+      resolvedTarget.split = splitDecision.direction === "V" ? "vertical" : "horizontal";
+    }
+    if (resolvedTarget.focus_pane_id === undefined) {
+      resolvedTarget.focus_pane_id = splitDecision.target_pane_id;
+    }
+  }
 
   const spawnArgs: SpawnArgs = {
     exec_command: launchCommand,
@@ -168,9 +195,9 @@ export async function spawnPersona(
     cwd: persona.cwd,
     tab_title: tabTitle,
     ...(persona.color ? { color: persona.color } : {}),
-    target: { ...(target ?? {}), window: windowName },
+    target: resolvedTarget,
     ...(wslDistro !== undefined ? { wsl_distro: wslDistro } : {}),
-    existing_pane_count: existingPaneCount,
+    existing_pane_count: currentGeometry ? paneCount(currentGeometry) : 0,
   };
 
   const plan = resolveSpawnPlan(spawnArgs, { env: ctx.spawn_env });
@@ -217,6 +244,14 @@ export async function spawnPersona(
       mode: plan.resolved_mode === "split-pane" ? "split-pane"
         : plan.resolved_mode === "new-window" ? "new-window"
         : "new-tab",
+      // For split-pane, persist the EXACT decision the wt adapter
+      // emitted so the next spawn into this tab walks from the correct
+      // post-split state. For non-split spawns (new-tab/new-window),
+      // recordSpawn seeds a fresh single-pane TabGeometry — no
+      // decision needed.
+      ...(plan.resolved_mode === "split-pane" && splitDecision
+        ? { decision: splitDecision }
+        : {}),
     });
   } catch (err) {
     stampWarnings.push(`window_registry: ${(err as Error).message}`);

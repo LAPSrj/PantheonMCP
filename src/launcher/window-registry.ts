@@ -1,19 +1,31 @@
 import { mutateJsonAtomic, readJson, type Paths } from "../storage/index.ts";
+import {
+  applyDecision,
+  decideNextSplit,
+  freshTab,
+  paneCount,
+  type SplitDecision,
+  type TabGeometry,
+} from "./pane-geometry.ts";
 
 /** Per-window record. `tabCount` is best-effort — the user can close
  * tabs externally; on next spawn the registry reconciles by appending
  * to history without trusting the count.
  *
- * `panesByTab` tracks the per-tab pane count so the wt adapter's
- * default split-direction policy (vertical for the 1st split,
- * horizontal for the 2nd onward) can read it. Same best-effort
+ * `geometryByTab` stores per-tab `TabGeometry` (column-major pane
+ * indices) so the wt adapter's default-split policy can decide BOTH
+ * direction and which pane to focus before the split. Replaces the
+ * older `panesByTab: Record<number, number>` (which only knew counts,
+ * not positions). `panesByTab` is computed on the fly from
+ * `geometryByTab` for any callers still asking. Same best-effort
  * caveat: panes closed via the user's mouse aren't visible to
- * pantheon — registry can drift. Document and accept; this isn't
- * a window-server. */
+ * pantheon — registry can drift. Document and accept; this isn't a
+ * window-server. */
 export interface WindowRecord {
   tabCount: number;
   tabSpawnHistory: TabSpawn[];
-  panesByTab?: Record<number, number>;
+  /** column-major pane geometry per tab_index. */
+  geometryByTab?: Record<number, TabGeometry>;
 }
 
 export interface TabSpawn {
@@ -43,15 +55,24 @@ export function loadRegistry(paths: Paths): WindowRegistry {
  * possible here (spawns are real events); concurrent writes go through
  * `mutateJsonAtomic`'s fingerprint guard.
  *
- * `mode` ("split-pane" vs other) drives the pane-count bookkeeping:
- * a split-pane spawn increments `panesByTab[tab_index]` (default
- * tab 0); other modes seed the new tab's pane count to 1. */
+ * `mode` drives the per-tab geometry bookkeeping:
+ *   - `"new-tab"` / `"new-window"` → seed a fresh `TabGeometry` for the
+ *     tab (single implicit pane, index 0).
+ *   - `"split-pane"` → apply `decision` to the existing tab's geometry,
+ *     extending columns/rows per the policy.
+ *
+ * `decision` is the resolved `SplitDecision` (target_pane_id +
+ * direction) that the wt adapter actually emitted. The spawn handler
+ * computes it via `decideNextSplit(currentGeometry)` BEFORE invoking
+ * the adapter, so the registry can persist the post-split state
+ * deterministically. Pass `decision: null` for non-split spawns. */
 export function recordSpawn(
   paths: Paths,
   windowName: string,
   spawn: Omit<TabSpawn, "when"> & {
     when?: number;
     mode?: "split-pane" | "new-tab" | "new-window";
+    decision?: SplitDecision | null;
   },
 ): WindowRecord {
   let updated!: WindowRecord;
@@ -60,7 +81,7 @@ export function recordSpawn(
     const prev = reg.windows[windowName] ?? {
       tabCount: 0,
       tabSpawnHistory: [],
-      panesByTab: {},
+      geometryByTab: {},
     };
     const entry: TabSpawn = {
       when: spawn.when ?? Date.now(),
@@ -69,17 +90,19 @@ export function recordSpawn(
       ...(spawn.tab_index !== undefined ? { tab_index: spawn.tab_index } : {}),
     };
     const tabIndex = spawn.tab_index ?? 0;
-    const panesByTab = { ...(prev.panesByTab ?? {}) };
+    const geometryByTab = { ...(prev.geometryByTab ?? {}) };
     if (spawn.mode === "split-pane") {
-      panesByTab[tabIndex] = (panesByTab[tabIndex] ?? 1) + 1;
+      const current = geometryByTab[tabIndex] ?? freshTab();
+      const decision = spawn.decision ?? decideNextSplit(current);
+      geometryByTab[tabIndex] = applyDecision(current, decision);
     } else {
-      // new tab / new window — seed the pane count for this tab.
-      panesByTab[tabIndex] = (panesByTab[tabIndex] ?? 0) + 1;
+      // new-tab / new-window seed a fresh single-pane tab.
+      geometryByTab[tabIndex] = freshTab();
     }
     updated = {
       tabCount: prev.tabCount + 1,
       tabSpawnHistory: [...prev.tabSpawnHistory, entry],
-      panesByTab,
+      geometryByTab,
     };
     return {
       ...reg,
@@ -97,9 +120,21 @@ export function predictPaneCount(
   windowName: string,
   tab_index: number = 0,
 ): number {
+  const g = getTabGeometry(paths, windowName, tab_index);
+  return g ? paneCount(g) : 0;
+}
+
+/** Read the persisted geometry for a tab. Returns null when the
+ * window/tab isn't tracked yet (pre-split policy uses `freshTab()`
+ * as the implicit base). */
+export function getTabGeometry(
+  paths: Paths,
+  windowName: string,
+  tab_index: number,
+): TabGeometry | null {
   const state = getWindowState(paths, windowName);
-  if (!state) return 0;
-  return state.panesByTab?.[tab_index] ?? 0;
+  if (!state) return null;
+  return state.geometryByTab?.[tab_index] ?? null;
 }
 
 export function getWindowState(
@@ -137,6 +172,7 @@ export function recordExit(
     updated = {
       tabCount: Math.max(0, prev.tabCount - 1),
       tabSpawnHistory: prev.tabSpawnHistory,
+      ...(prev.geometryByTab !== undefined ? { geometryByTab: prev.geometryByTab } : {}),
     };
     return {
       ...reg,
