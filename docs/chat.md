@@ -450,12 +450,8 @@ become a single shared daemon in the future.
 
 ## TODO
 
-- **Watcher loop**: `bin/pantheon-fetch.js` analogous to chat-mcp's
-  `bin.js fetch --loop`. Tails SQLite by `since_seq` (or `since_ts`),
-  formats with `priorityTag` + `wrapSilentEvent`, streams to stdout
-  for the Monitor tool. Per-message visibility/delivery filter
-  applied by reading the agent's subscriber row from the presence
-  table (now cross-process-visible).
+- ~~**Watcher loop**~~ — landed in commit `bf88225`. See "Watcher
+  loop (bin/pantheon-fetch.ts)" section above.
 - **Channels**: opt-in inline delivery for clients that prefer
   push-on-tool-result over the watcher pattern.
 - **Keepalive sweep**: periodic timer that emits a `keepalive`
