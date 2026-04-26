@@ -265,16 +265,24 @@ export class ChatRouter {
       from_username_inline: fromUsernameInline,
     };
 
-    this.recent.push(msg);
-    if (this.recent.length > this.maxInMemory) {
-      this.recent.splice(0, this.recent.length - this.maxInMemory);
-    }
+    // SQLite-managed seq: when a db is wired, persistMessage chooses
+    // the next seq atomically via SELECT MAX(seq)+1 inside its
+    // transaction. Update msg.seq so dispatch + cursor + watcher all
+    // agree on the same value. In-memory-only routers (test
+    // harnesses) keep the pre-assigned per-process seq from
+    // ++this.seqCounter above.
     if (this.db) {
       try {
-        persistMessage(this.db, msg);
+        const persistedSeq = persistMessage(this.db, msg);
+        msg.seq = persistedSeq;
+        if (persistedSeq > this.seqCounter) this.seqCounter = persistedSeq;
       } catch {
         // best-effort — never fail a send because of persistence
       }
+    }
+    this.recent.push(msg);
+    if (this.recent.length > this.maxInMemory) {
+      this.recent.splice(0, this.recent.length - this.maxInMemory);
     }
 
     // Suppression — sender, explicit not_for, ask-reply asker (their

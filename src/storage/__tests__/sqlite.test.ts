@@ -71,7 +71,7 @@ test("openChatDb is idempotent on a populated database", () => {
     const versions = db
       .query("SELECT version FROM schema_version ORDER BY version")
       .all() as { version: number }[];
-    expect(versions.map((v) => v.version)).toEqual([1, 2]);
+    expect(versions.map((v) => v.version)).toEqual([1, 2, 3]);
   } finally {
     db.close();
   }

@@ -1,10 +1,25 @@
 import type { Database } from "bun:sqlite";
 import type { Message, Scope } from "./types.ts";
 
-/** Persist a single message + its mentions. Runs inside a transaction
- * so a crash mid-write leaves no partial mentions. */
-export function persistMessage(db: Database, msg: Message): void {
+/** Persist a single message + its mentions inside a transaction.
+ *
+ * The `seq` column is **SQLite-managed**: even if `msg.seq` is set
+ * by the caller, persistMessage overrides it with `MAX(seq) + 1` from
+ * the existing rows. SQLite's WAL serializes writes so the SELECT +
+ * INSERT pair is atomic; cross-process writers can't issue duplicate
+ * seqs. The assigned seq is returned so the caller can update its
+ * in-memory copy of the message.
+ *
+ * For in-memory-only routers (no db wired), the caller falls back to
+ * a per-process counter — the cross-process consistency guarantee
+ * only applies when the db is the seq source. */
+export function persistMessage(db: Database, msg: Message): number {
+  let assignedSeq = msg.seq;
   db.transaction(() => {
+    const next = db
+      .query("SELECT COALESCE(MAX(seq), 0) + 1 AS s FROM messages")
+      .get() as { s: number };
+    assignedSeq = next.s;
     db.run(
       `INSERT INTO messages (
          id, seq, ts, scope, project, target_username,
@@ -13,7 +28,7 @@ export function persistMessage(db: Database, msg: Message): void {
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         msg.id,
-        msg.seq,
+        assignedSeq,
         msg.ts,
         msg.scope,
         msg.project ?? null,
@@ -39,6 +54,7 @@ export function persistMessage(db: Database, msg: Message): void {
       );
     }
   })();
+  return assignedSeq;
 }
 
 /** Pull recent messages matching scope/project/target/since. Used by

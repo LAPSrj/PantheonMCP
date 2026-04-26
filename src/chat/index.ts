@@ -69,3 +69,22 @@ export {
   GUEST_ALLOWED_TOOLS,
   isGuestAllowed,
 } from "./guests.ts";
+
+export {
+  selectReceivableRows,
+  isVisibleRow,
+  isDeliverableRow,
+  formatBatch,
+  tailOnce,
+  tailLoop,
+  readMaxSeq,
+  SessionExpiredError,
+  DEFAULT_BATCH_SIZE,
+  DEFAULT_WAIT_MS,
+  DEFAULT_COALESCE_WINDOW_MS,
+  DEFAULT_RECEIVER_REFRESH_MS,
+  type ReceiverState,
+  type TailOptions,
+  type WatcherEvent,
+  type LoopOptions,
+} from "./watcher.ts";

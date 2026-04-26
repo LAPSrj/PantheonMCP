@@ -4,6 +4,7 @@ import {
   type PromoteFields,
 } from "../../chat/index.ts";
 import { listPersonas } from "../../identity/index.ts";
+import { getResponseTemplate } from "../../responses/templates.ts";
 import {
   asBoolean,
   asNumber,
@@ -73,6 +74,20 @@ export const login: Handler = async (args, ctx) => {
     promoted = true;
   }
 
+  // §6 HIGH stale-MCP-proxy mitigation: pull the login note from
+  // daemon-resolved templates so a daemon restart picks up edits.
+  let note: string;
+  try {
+    note = getResponseTemplate("login-note", {
+      agent_id: subscriber.agent_id,
+      username: subscriber.username,
+      project: subscriber.project,
+    });
+  } catch {
+    note =
+      `Logged in as ${subscriber.username}. ` +
+      `Run pantheon-fetch --agent-id ${subscriber.agent_id} --loop to start the watcher.`;
+  }
   return {
     ok: true,
     agent_id: subscriber.agent_id,
@@ -80,6 +95,7 @@ export const login: Handler = async (args, ctx) => {
     project: subscriber.project,
     transient: subscriber.transient,
     promoted,
+    note,
   };
 };
 

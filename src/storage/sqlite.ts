@@ -5,7 +5,7 @@ import fs from "node:fs";
 /** Bumped when the schema changes. Each `vN` migration runs once and is
  * recorded in `schema_version`. Migrations are idempotent: re-opening an
  * up-to-date DB applies nothing. */
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 
 /** Migrations indexed by the version they bring the schema to. So
  * `MIGRATIONS[1]` brings a fresh DB from version 0 to version 1. */
@@ -70,6 +70,12 @@ const MIGRATIONS: Record<number, (db: Database) => void> = {
       CREATE INDEX idx_subscribers_project ON subscribers(project);
       CREATE INDEX idx_subscribers_heartbeat ON subscribers(last_heartbeat DESC);
     `);
+  },
+  3: (db) => {
+    // §11c watcher loop hot path: SELECT WHERE seq > ? ORDER BY seq.
+    // The existing idx_messages_ts is per-timestamp; seq is the
+    // cursor the watcher tracks across polls.
+    db.exec(`CREATE INDEX idx_messages_seq ON messages(seq);`);
   },
 };
 
