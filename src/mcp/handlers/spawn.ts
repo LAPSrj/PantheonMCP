@@ -7,6 +7,7 @@ import {
 import {
   executeSpawnPlan,
   predictNextTabIndex,
+  predictPaneCount,
   recordSpawn,
   resolveSpawnPlan,
   type SpawnArgs,
@@ -116,6 +117,18 @@ export async function spawnPersona(
   // Color export so the spawned MCP can echo it via session_info.
   if (persona.color) execEnv.PANTHEON_COLOR = persona.color;
 
+  // WSL targets need the wt adapter to wrap exec in `wsl.exe -d
+  // <distro> -- bash -lc 'cd <cwd> && exec ...'` (see wt.ts notes
+  // for the wt.exe error 0x8007010b background). Detect: persona
+  // platform == "wsl" with a wsl_distro field set.
+  const wslDistro =
+    persona.platform === "wsl" ? (persona.wsl_distro ?? ctx.spawn_env.WSL_DISTRO_NAME) : undefined;
+
+  // Default split-direction policy needs the existing pane count for
+  // the target tab. Best-effort read from the registry; the wt adapter
+  // applies the policy when target.split is omitted.
+  const existingPaneCount = predictPaneCount(ctx.paths, windowName, predictedTabIndex);
+
   const spawnArgs: SpawnArgs = {
     exec_command: launchCommand,
     exec_args: launchArgs,
@@ -124,6 +137,8 @@ export async function spawnPersona(
     tab_title: tabTitle,
     ...(persona.color ? { color: persona.color } : {}),
     target: { ...(target ?? {}), window: windowName },
+    ...(wslDistro !== undefined ? { wsl_distro: wslDistro } : {}),
+    existing_pane_count: existingPaneCount,
   };
 
   const plan = resolveSpawnPlan(spawnArgs, { env: ctx.spawn_env });
@@ -157,6 +172,9 @@ export async function spawnPersona(
       summoner: summonerHandle ?? null,
       persona: persona.username,
       ...(target?.tab_index !== undefined ? { tab_index: target.tab_index } : {}),
+      mode: plan.resolved_mode === "split-pane" ? "split-pane"
+        : plan.resolved_mode === "new-window" ? "new-window"
+        : "new-tab",
     });
   } catch (err) {
     stampWarnings.push(`window_registry: ${(err as Error).message}`);

@@ -32,6 +32,7 @@ export {
   recordExit,
   getWindowState,
   predictNextTabIndex,
+  predictPaneCount,
   type WindowRegistry,
   type WindowRecord,
   type TabSpawn,

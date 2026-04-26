@@ -133,6 +133,96 @@ test("WT adapter applies named color hex when persona color set", () => {
   expect(plan.args).toContain("#b48ead");
 });
 
+test("WT adapter (WSL target): drops -d <cwd>, wraps in wsl.exe + bash -lc", () => {
+  const plan = resolveSpawnPlan(
+    args({
+      cwd: "/home/leandro/builder/nyus",
+      exec_command: "claude",
+      exec_args: ["--print", "go"],
+      exec_env: { PANTHEON_USERNAME: "swoopfinch", PANTHEON_REST_TIMEOUT: "3600" },
+      wsl_distro: "Ubuntu-22.04",
+      target: { mode: "new-tab-window", window: "image-gallery-finish" },
+    }),
+    { adapter: wt },
+  );
+  expect(plan.command).toBe("wt.exe");
+  // Crucially: NO `-d /home/leandro/builder/nyus` arg (would error 0x8007010b on wt.exe).
+  const dIdx = plan.args.indexOf("-d");
+  // The only "-d" allowed is the wsl.exe distro flag, not wt.exe's cwd flag.
+  if (dIdx !== -1) {
+    expect(plan.args[dIdx + 1]).toBe("Ubuntu-22.04");
+  }
+  // Inner wsl invocation present.
+  expect(plan.args).toContain("wsl.exe");
+  expect(plan.args).toContain("Ubuntu-22.04");
+  expect(plan.args).toContain("bash");
+  expect(plan.args).toContain("-lc");
+  // The bash -lc payload contains cd + exec + env exports.
+  const bashLcIdx = plan.args.indexOf("-lc");
+  const inner = plan.args[bashLcIdx + 1] as string;
+  expect(inner).toContain("cd '/home/leandro/builder/nyus'");
+  expect(inner).toContain("exec 'claude' '--print' 'go'");
+  expect(inner).toContain("export PANTHEON_USERNAME='swoopfinch'");
+  expect(inner).toContain("export PANTHEON_REST_TIMEOUT='3600'");
+});
+
+test("WT adapter (split-pane WSL target): same wsl wrap, no -d", () => {
+  const plan = resolveSpawnPlan(
+    args({
+      cwd: "/home/leandro/monitor/nyus",
+      wsl_distro: "Ubuntu-22.04",
+      target: {
+        mode: "split-pane",
+        window: "image-gallery-finish",
+        split: "horizontal",
+      },
+    }),
+    { adapter: wt },
+  );
+  expect(plan.args).toContain("split-pane");
+  expect(plan.args).toContain("-H");
+  expect(plan.args).toContain("wsl.exe");
+  // The persona's cwd shows up in the inner bash, NOT in a wt.exe -d.
+  const bashLcIdx = plan.args.indexOf("-lc");
+  const inner = plan.args[bashLcIdx + 1] as string;
+  expect(inner).toContain("cd '/home/leandro/monitor/nyus'");
+});
+
+test("WT adapter default split direction: vertical when ≤1 existing pane", () => {
+  const plan = resolveSpawnPlan(
+    args({
+      target: { mode: "split-pane", window: "win" },
+      // existing_pane_count not set → treat as fresh
+    }),
+    { adapter: wt },
+  );
+  expect(plan.args).toContain("-V");
+  expect(plan.args).not.toContain("-H");
+});
+
+test("WT adapter default split direction: horizontal once 2+ panes exist", () => {
+  const plan = resolveSpawnPlan(
+    args({
+      target: { mode: "split-pane", window: "win" },
+      existing_pane_count: 2,
+    }),
+    { adapter: wt },
+  );
+  expect(plan.args).toContain("-H");
+  expect(plan.args).not.toContain("-V");
+});
+
+test("WT adapter caller-explicit split overrides existing_pane_count default", () => {
+  const plan = resolveSpawnPlan(
+    args({
+      target: { mode: "split-pane", window: "win", split: "vertical" },
+      existing_pane_count: 5, // would default to horizontal
+    }),
+    { adapter: wt },
+  );
+  expect(plan.args).toContain("-V");
+});
+
 test("tmux adapter emits tmux new-window or split-window argv", () => {
   const here = resolveSpawnPlan(
     args({ target: { mode: "new-tab-here" } }),

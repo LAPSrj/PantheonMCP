@@ -15,11 +15,30 @@ const CAPS: ReadonlySet<Capability> = new Set([
   "tab-title",
 ]);
 
-/** Windows Terminal adapter. Wraps `wt.exe` via Windows interop. The
- * §11a / §5 sequencing rule: when the named window doesn't exist and
- * the request is `split-pane`, emit `new-tab` BEFORE `split-pane` so
+/** Windows Terminal adapter. Wraps `wt.exe` via Windows interop.
+ *
+ * §11a sequencing rule: when the named window doesn't exist and the
+ * request is `split-pane`, emit `new-tab` BEFORE `split-pane` so
  * there's a focused base pane to split. We default to `wt.exe`; under
- * WSL this resolves through the Windows path mount. */
+ * WSL this resolves through the Windows path mount.
+ *
+ * **WSL cwd handling** (mirrors summon-mcp's working pattern, fixes
+ * wt.exe error 0x8007010b "directory name is invalid" on WSL paths
+ * passed via `-d`): when `args.wsl_distro` is set, DROP wt.exe's
+ * `-d <cwd>` and instead wrap the inner exec as
+ * `wsl.exe -d <distro> -- bash -lc 'cd <cwd> && exec <cmd> <args>'`.
+ * The cwd belongs in the inner shell, not in the outer wt.exe.
+ *
+ * **Default split direction** policy (when `target.split` is omitted
+ * AND the registry's pane count is supplied via
+ * `args.existing_pane_count`):
+ *   - 0–1 existing panes → vertical (side by side, two columns)
+ *   - 2+ existing panes  → horizontal (grows to 2×N grid as agents
+ *                          join the same tab)
+ * Caller-explicit `target.split` always wins. The pane-count tracking
+ * is best-effort — manually-closed panes drift the registry and
+ * pantheon doesn't try to be a window server.
+ */
 export const wt: Adapter = {
   name: "wt",
   detect(env) {
@@ -35,38 +54,27 @@ export const wt: Adapter = {
     const colorHex = colorToHex(target.color ?? args.color);
     const subcommands: string[] = [];
 
+    const splitDirection = resolveSplitDirection(args, target.split);
+
     if (mode === "split-pane") {
-      // §11a: if a tab_index is supplied, focus it first so split-pane
-      // targets the right tab. If not, we still need a focused base
-      // pane — for unknown / fresh windows wt creates a new tab on
-      // -w <name> automatically, so split-pane lands cleanly.
       if (target.tab_index != null) {
         subcommands.push("focus-tab", "-t", String(target.tab_index), ";");
-      } else {
-        // Belt-and-braces: emit a no-op new-tab placeholder followed by
-        // split-pane in the same wt invocation, so a freshly-created
-        // window has something to split. We achieve this by emitting
-        // new-tab + split-pane in the same chain only when the window
-        // is brand new — but since we cannot detect that cheaply
-        // without probing the registry, we always lead with a
-        // focus-tab on the last tab (-t -1 isn't supported; instead
-        // we emit `; split-pane`, which on a fresh window wt opens
-        // the launch-tab AND splits it — empirically reliable).
       }
-      const dir = target.split === "horizontal" ? "-H" : "-V";
+      const dir = splitDirection === "horizontal" ? "-H" : "-V";
       subcommands.push("split-pane", dir);
       subcommands.push("--title", args.tab_title);
       if (colorHex) subcommands.push("--tabColor", colorHex);
-      subcommands.push("-d", args.cwd);
-      subcommands.push(args.exec_command, ...args.exec_args);
+      // Per WSL cwd rule: cwd lives in the inner bash, not in -d.
+      if (!args.wsl_distro) subcommands.push("-d", args.cwd);
+      subcommands.push(...buildExecCommand(args));
     } else {
       // new-window / new-tab-here / new-tab-window all reduce to a
       // single `new-tab` invocation; the windowName flag distinguishes
       // them.
       subcommands.push("new-tab", "--title", args.tab_title);
       if (colorHex) subcommands.push("--tabColor", colorHex);
-      subcommands.push("-d", args.cwd);
-      subcommands.push(args.exec_command, ...args.exec_args);
+      if (!args.wsl_distro) subcommands.push("-d", args.cwd);
+      subcommands.push(...buildExecCommand(args));
     }
 
     const argv = ["-w", windowName, ...subcommands];
@@ -75,7 +83,7 @@ export const wt: Adapter = {
       command: "wt.exe",
       args: argv,
       env: args.exec_env,
-      description: `wt.exe → window=${windowName} mode=${mode}${colorHex ? ` color=${colorHex}` : ""}`,
+      description: `wt.exe → window=${windowName} mode=${mode}${colorHex ? ` color=${colorHex}` : ""}${args.wsl_distro ? ` wsl=${args.wsl_distro}` : ""}${mode === "split-pane" ? ` split=${splitDirection}` : ""}`,
       tab_title: args.tab_title,
       resolved_mode: mode,
       adapter: "wt",
@@ -83,6 +91,43 @@ export const wt: Adapter = {
     };
   },
 };
+
+/** Build the trailing argv that goes after wt.exe's subcommand.
+ *
+ * For WSL targets:
+ *   wsl.exe -d <distro> -- bash -lc 'export X=Y; cd <cwd> && exec <cmd> <args>'
+ * For native targets:
+ *   <exec_command> <exec_args...>
+ *
+ * Env vars are exported INSIDE the bash -lc string for WSL targets so
+ * they reach the spawned process even though wt.exe doesn't forward
+ * its own env to the wsl child. */
+function buildExecCommand(args: SpawnArgs): string[] {
+  if (!args.wsl_distro) {
+    return [args.exec_command, ...args.exec_args];
+  }
+  const exports = Object.entries(args.exec_env)
+    .map(([k, v]) => `export ${k}=${quoteBash(v)};`)
+    .join(" ");
+  const execLine = [args.exec_command, ...args.exec_args]
+    .map(quoteBash)
+    .join(" ");
+  const inner = `${exports} cd ${quoteBash(args.cwd)} && exec ${execLine}`;
+  return ["wsl.exe", "-d", args.wsl_distro, "--", "bash", "-lc", inner];
+}
+
+/** Per the §11a default-split-direction policy. Caller-explicit wins;
+ * otherwise vertical for fresh + 1-pane tabs, horizontal once 2+
+ * panes already exist. */
+function resolveSplitDirection(
+  args: SpawnArgs,
+  explicit: "horizontal" | "vertical" | undefined,
+): "horizontal" | "vertical" {
+  if (explicit) return explicit;
+  const existing = args.existing_pane_count ?? 0;
+  if (existing < 2) return "vertical";
+  return "horizontal";
+}
 
 /** Map a `target.window` value to the `-w` argument:
  *   undefined / "current" / "same" → `0` (the current window)
@@ -109,4 +154,10 @@ const NAMED_TO_HEX: Record<string, string> = {
 function colorToHex(color?: string): string | undefined {
   if (!color) return undefined;
   return NAMED_TO_HEX[color];
+}
+
+/** POSIX single-quote bash quoting. Embeds literal single quotes via
+ * the standard `'\''` escape sequence. */
+function quoteBash(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
 }

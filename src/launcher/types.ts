@@ -44,6 +44,19 @@ export interface SpawnArgs {
   /** Persona color, falls back to `target.color`. */
   color?: ClaudeColor;
   target?: SpawnTarget;
+  /** Set when the target persona is on WSL. The wt adapter wraps the
+   * exec invocation in `wsl.exe -d <distro> -- bash -lc 'cd <cwd> &&
+   * exec ...'` and DROPS the wt.exe `-d <cwd>` flag (Windows wt.exe
+   * can't access WSL paths via `-d` without UNC translation; the cwd
+   * belongs in the inner shell instead). Mirrors summon-mcp's working
+   * pattern. */
+  wsl_distro?: string;
+  /** Best-effort hint of the existing pane count in the target tab,
+   * used by the wt adapter's default split-direction policy when the
+   * caller didn't specify `target.split` explicitly. The dispatcher
+   * (or spawn handler) sets this from the window registry; absent
+   * means "treat as fresh window/tab." */
+  existing_pane_count?: number;
 }
 
 export interface SpawnPlan {

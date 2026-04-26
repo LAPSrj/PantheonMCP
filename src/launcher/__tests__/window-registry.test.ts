@@ -7,6 +7,7 @@ import {
   getWindowState,
   loadRegistry,
   predictNextTabIndex,
+  predictPaneCount,
   recordExit,
   recordSpawn,
 } from "../window-registry.ts";
@@ -74,6 +75,46 @@ test("recordExit decrements tabCount but preserves history", () => {
   expect(after?.tabCount).toBe(1);
   // Audit history retained.
   expect(after?.tabSpawnHistory).toHaveLength(2);
+});
+
+test("predictPaneCount returns 0 for unknown windows / tabs", () => {
+  expect(predictPaneCount(paths, "ghost", 0)).toBe(0);
+});
+
+test("recordSpawn (mode 'new-tab') seeds panesByTab[tab_index] = 1", () => {
+  recordSpawn(paths, "win", { summoner: null, persona: "a", mode: "new-tab" });
+  expect(predictPaneCount(paths, "win", 0)).toBe(1);
+});
+
+test("recordSpawn (mode 'split-pane') increments the target tab's pane count", () => {
+  recordSpawn(paths, "win", { summoner: null, persona: "a", mode: "new-tab" });
+  recordSpawn(paths, "win", {
+    summoner: null,
+    persona: "b",
+    mode: "split-pane",
+    tab_index: 0,
+  });
+  expect(predictPaneCount(paths, "win", 0)).toBe(2);
+  recordSpawn(paths, "win", {
+    summoner: null,
+    persona: "c",
+    mode: "split-pane",
+    tab_index: 0,
+  });
+  expect(predictPaneCount(paths, "win", 0)).toBe(3);
+});
+
+test("recordSpawn tracks per-tab pane counts independently", () => {
+  recordSpawn(paths, "win", { summoner: null, persona: "a", mode: "new-tab", tab_index: 0 });
+  recordSpawn(paths, "win", { summoner: null, persona: "b", mode: "new-tab", tab_index: 1 });
+  recordSpawn(paths, "win", {
+    summoner: null,
+    persona: "c",
+    mode: "split-pane",
+    tab_index: 0,
+  });
+  expect(predictPaneCount(paths, "win", 0)).toBe(2);
+  expect(predictPaneCount(paths, "win", 1)).toBe(1);
 });
 
 test("recordExit clamps tabCount at 0 and is a no-op for unknown windows", () => {
