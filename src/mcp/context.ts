@@ -3,6 +3,7 @@ import { Session } from "../identity/index.ts";
 import { resolvePaths, type Paths } from "../storage/index.ts";
 import { Watchdog, realScheduler } from "../watchdog/index.ts";
 import { realSpawnExecutor, type SpawnExecutor } from "../launcher/index.ts";
+import type { ChatRouter } from "../chat/index.ts";
 import type { HandlerContext, SpawnMetadata } from "./types.ts";
 
 export interface CreateContextOptions {
@@ -24,6 +25,7 @@ export interface CreateContextOptions {
   stderr_probe_ms?: number;
   spawn_env?: NodeJS.ProcessEnv;
   spawn_metadata?: SpawnMetadata | null;
+  chat?: ChatRouter | null;
 }
 
 /** Build a runtime context around the four foundation layers. The MCP
@@ -34,6 +36,7 @@ export function createContext(options: CreateContextOptions = {}): HandlerContex
   const session = options.session ?? new Session(`session-${process.ppid}`);
   const watchdog = options.watchdog ?? new Watchdog(realScheduler);
   let allowRestAuthorized = false;
+  let chatAgentId: string | null = null;
   return {
     paths,
     session,
@@ -55,6 +58,13 @@ export function createContext(options: CreateContextOptions = {}): HandlerContex
     stderr_probe_ms: options.stderr_probe_ms ?? 200,
     spawn_env: options.spawn_env ?? process.env,
     spawn_metadata: options.spawn_metadata ?? null,
+    chat: options.chat ?? null,
+    get chat_agent_id(): string | null {
+      return chatAgentId;
+    },
+    setChatAgentId(id: string | null): void {
+      chatAgentId = id;
+    },
     get allow_rest_authorized(): boolean {
       return allowRestAuthorized;
     },

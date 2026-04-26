@@ -60,12 +60,12 @@ test("dispatch maps MemoryError on missing claim → no_persona ToolError", asyn
   expect(payload.error).toBe("no_persona");
 });
 
-test("dispatch maps a chat-stub ToolError → MCP error payload", async () => {
+test("dispatch maps a chat-handler ToolError → MCP error payload", async () => {
+  // No chat router attached to ctx → chat handlers return chat_unavailable.
   const r = await dispatch("send_message", { text: "x" }, ctx);
   expect(r.isError).toBe(true);
   const payload = parseResult(r) as Record<string, unknown>;
-  expect(payload.error).toBe("not_implemented");
-  expect(payload.layer).toBe("chat-router-§11c");
+  expect(payload.error).toBe("chat_unavailable");
 });
 
 // --- tool surface coverage ---

@@ -10,6 +10,8 @@ import {
   defaultOnDeadline,
 } from "../watchdog/index.ts";
 import { stampRested } from "../identity/index.ts";
+import { ChatRouter } from "../chat/index.ts";
+import { openChatDb, resolvePaths } from "../storage/index.ts";
 import { createContext } from "./context.ts";
 import { dispatch } from "./dispatch.ts";
 import { TOOLS } from "./tools.ts";
@@ -24,13 +26,30 @@ export interface ServerOptions {
 export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
   const summoner = process.env.PANTHEON_SUMMONER ?? null;
   const spawnMetadata = readSpawnMetadataFromEnv();
+  const paths = resolvePaths();
+
+  // Open the chat DB lazily — it's the same connection the router
+  // persists into. Per §15, the daemon owns this; for now the per-MCP
+  // process opens its own (one daemon per MCP server, per the
+  // single-process model).
+  let chatDb: ReturnType<typeof openChatDb> | null = null;
+  try {
+    chatDb = openChatDb(paths.chatDbPath);
+  } catch {
+    // best-effort — chat persistence is not strictly required for the
+    // tools to function (in-memory dispatch still works).
+  }
+
+  const router = new ChatRouter({ paths, db: chatDb });
 
   const ctx =
     options.context ??
     createContext({
+      paths,
       summoner_username: summoner,
       scheduleExit: makeRealExitScheduler(process.ppid),
       spawn_metadata: spawnMetadata,
+      chat: router,
     });
 
   // Arm the watchdog with the per-summon rest_timeout if our spawner
@@ -100,6 +119,11 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
 
   const cleanup = () => {
     ctx.watchdog.shutdown();
+    try {
+      chatDb?.close();
+    } catch {
+      // best-effort
+    }
   };
   process.on("exit", cleanup);
   process.on("SIGTERM", () => {

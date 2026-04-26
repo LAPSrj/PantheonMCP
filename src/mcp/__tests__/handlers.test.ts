@@ -288,11 +288,10 @@ test("exit schedules SIGTERM with the requested delay", async () => {
 
 // --- stub surface ---
 
-test("chat tool stubs return not_implemented with the chat-router layer hint", async () => {
+test("chat tool errors chat_unavailable when no router attached to context", async () => {
   const r = await call("send_message", { text: "x" });
   expect(r.ok).toBe(false);
-  expect(r.payload.error).toBe("not_implemented");
-  expect(r.payload.layer).toBe("chat-router-§11c");
+  expect(r.payload.error).toBe("chat_unavailable");
 });
 
 test("summon errors not_registered when target persona doesn't exist", async () => {

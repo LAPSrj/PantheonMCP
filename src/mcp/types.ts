@@ -2,6 +2,7 @@ import type { Session } from "../identity/index.ts";
 import type { Watchdog } from "../watchdog/index.ts";
 import type { Paths } from "../storage/index.ts";
 import type { SpawnExecutor } from "../launcher/index.ts";
+import type { ChatRouter } from "../chat/index.ts";
 
 export interface ToolDef {
   name: string;
@@ -49,11 +50,28 @@ export interface HandlerContext {
    * `PANTHEON_TAB_INDEX` from env at boot and stores them here so
    * the `exit` handler can decrement the window registry. */
   spawn_metadata: SpawnMetadata | null;
+  /** Chat router instance. `null` when no router is attached to this
+   * context (e.g. early bootstrap, identity-only test harnesses). */
+  chat: ChatRouter | null;
+  /** This session's chat subscriber id. Set on `login`, cleared on
+   * `logout`. */
+  chat_agent_id: string | null;
+  /** Mutator for `chat_agent_id` — `login` calls this to record the
+   * subscriber id, `logout` clears it. */
+  setChatAgentId(id: string | null): void;
 }
 
 export interface SpawnMetadata {
   window_name: string;
   tab_index?: number;
+}
+
+/** Chat-router accessors mirror the persona-claim half: `chat` is the
+ * router instance the daemon owns; `chat_agent_id` is this session's
+ * subscriber id (set on login, cleared on logout). The MCP server
+ * wires both at boot when a router is attached. */
+declare module "./types.ts" {
+  // (Augmentation handled inline below; left here for grep discoverability.)
 }
 
 export type HandlerResult = unknown;

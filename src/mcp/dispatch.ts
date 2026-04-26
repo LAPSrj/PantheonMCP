@@ -1,6 +1,7 @@
 import { IdentityError } from "../identity/index.ts";
 import { MemoryError } from "../memory/index.ts";
 import { WatchdogError, isResetTrigger } from "../watchdog/index.ts";
+import { ChatError } from "../chat/index.ts";
 import { HANDLERS } from "./handlers/index.ts";
 import { ToolError, type HandlerContext, type MCPCallResult } from "./types.ts";
 
@@ -59,6 +60,9 @@ function mapError(err: unknown): ErrorPayload {
   }
   if (err instanceof WatchdogError) {
     return { error: err.code, message: err.message };
+  }
+  if (err instanceof ChatError) {
+    return { error: err.code, message: err.message, ...err.extra };
   }
   if (err instanceof ToolError) {
     return { error: err.code, message: err.message, ...err.extra };
