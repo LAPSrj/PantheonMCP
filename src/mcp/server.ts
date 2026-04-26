@@ -10,7 +10,7 @@ import {
   defaultOnDeadline,
 } from "../watchdog/index.ts";
 import { stampRested } from "../identity/index.ts";
-import { ChatRouter } from "../chat/index.ts";
+import { ChatRouter, pruneStale } from "../chat/index.ts";
 import { openChatDb, resolvePaths } from "../storage/index.ts";
 import { createContext } from "./context.ts";
 import { dispatch } from "./dispatch.ts";
@@ -117,8 +117,36 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
+  // §11c presence cross-process: heartbeat this MCP's chat
+  // subscriber every 5s so other processes' `list_agents` sees us.
+  // The 5s cadence is well under the 30s stale-threshold default;
+  // a missed heartbeat or two won't evict.
+  const heartbeatTimer = setInterval(() => {
+    const id = ctx.chat_agent_id;
+    if (id) ctx.chat?.heartbeat(id);
+  }, 5_000);
+  // Daemon-tick: prune stale subscriber rows every 30s, plus the
+  // tombstone map (the router owns its own tombstones, but we trigger
+  // the prune from here so a single timer drives both sweeps).
+  const pruneTimer = setInterval(() => {
+    if (chatDb) {
+      try {
+        pruneStale(chatDb);
+      } catch {
+        // best-effort
+      }
+    }
+    try {
+      ctx.chat?.tombstones.prune();
+    } catch {
+      // best-effort
+    }
+  }, 30_000);
+
   const cleanup = () => {
     ctx.watchdog.shutdown();
+    clearInterval(heartbeatTimer);
+    clearInterval(pruneTimer);
     try {
       chatDb?.close();
     } catch {

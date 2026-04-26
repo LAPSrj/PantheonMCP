@@ -243,9 +243,9 @@ export const find_role: Handler = async (args, ctx) => {
   const onlineOnly = asBoolean(args.online) ?? false;
 
   const personas = listPersonas(ctx.paths);
-  const onlineUsernames = new Set(
-    Array.from(router.allSubscribers()).map((s) => s.username.toLowerCase()),
-  );
+  // Use the cross-process presence snapshot; falls back to the
+  // in-memory router map when no SQLite db is wired (test harnesses).
+  const onlineUsernames = router.onlineUsernames();
 
   const filtered = personas.filter((p) => {
     if (onlineOnly && !onlineUsernames.has(p.username.toLowerCase())) return false;

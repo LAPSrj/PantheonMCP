@@ -17,6 +17,13 @@ import {
 } from "./collision.ts";
 import { TombstoneMap } from "./tombstones.ts";
 import { persistMessage } from "./persistence.ts";
+import {
+  DEFAULT_STALE_THRESHOLD_MS,
+  heartbeat as presenceHeartbeat,
+  listActive,
+  removeSubscriber as presenceRemove,
+  upsertSubscriber,
+} from "./presence.ts";
 
 const MENTION_RE = /@([a-zA-Z0-9_.\-]+)/g;
 
@@ -106,6 +113,7 @@ export class ChatRouter {
     this.subscribers.set(subscriber.agent_id, subscriber);
     this.usernameIndex.set(options.username.toLowerCase(), subscriber.agent_id);
     this.cursors.set(subscriber.agent_id, this.seqCounter);
+    this.presenceUpsert(subscriber);
     return subscriber;
   }
 
@@ -119,6 +127,7 @@ export class ChatRouter {
     this.usernameIndex.delete(sub.username.toLowerCase());
     this.cursors.delete(agent_id);
     this.emitter.removeAllListeners(`message:${agent_id}`);
+    this.presenceRemove(agent_id);
     if (sub.transient) {
       this.tombstones.add(sub.username, agent_id);
     }
@@ -163,6 +172,7 @@ export class ChatRouter {
       sub.status_updated_at = this.clock();
     }
     sub.last_seen = this.clock();
+    this.presenceUpsert(sub);
     return sub;
   }
 
@@ -170,6 +180,7 @@ export class ChatRouter {
     const sub = this.subscribers.get(agent_id);
     if (!sub) throw new ChatError("not_logged_in", `Agent '${agent_id}' is not logged in.`);
     sub.mode = mode;
+    this.presenceUpsert(sub);
   }
 
   /** Mark a subscriber as freshly promoted from guest to persona. The
@@ -182,7 +193,21 @@ export class ChatRouter {
     if (!sub.transient) return sub; // idempotent
     sub.transient = false;
     sub.promoted_at = this.clock();
+    this.presenceUpsert(sub);
     return sub;
+  }
+
+  /** Bump this subscriber's `last_heartbeat` in the SQLite presence
+   * table. Called every 5-10s by the MCP server's heartbeat scheduler.
+   * No-op when no DB is wired (in-memory-only test routers). */
+  heartbeat(agent_id: string): void {
+    if (!this.db) return;
+    if (!this.subscribers.has(agent_id)) return;
+    try {
+      presenceHeartbeat(this.db, agent_id, this.clock());
+    } catch {
+      // best-effort
+    }
   }
 
   /** Handle was just reclaimed within the tombstone window — clear
@@ -454,6 +479,30 @@ export class ChatRouter {
   }
 
   publicList(project?: string): PublicAgent[] {
+    // Cross-process: when a SQLite db is wired, prefer the presence
+    // table — it sees subscribers across every MCP process. Falls
+    // back to the in-memory map for in-process-only test routers.
+    if (this.db) {
+      try {
+        const rows = listActive(this.db, {
+          ...(project !== undefined ? { project } : {}),
+          stale_threshold_ms: DEFAULT_STALE_THRESHOLD_MS,
+          now: this.clock(),
+        });
+        return rows.map((r) => ({
+          username: r.username,
+          project: r.project,
+          status: r.status,
+          transient: r.transient,
+          mode: r.mode,
+          connected_at: r.connected_at,
+          last_seen: r.last_heartbeat,
+          status_updated_at: r.status_updated_at,
+        }));
+      } catch {
+        // fall through to in-memory below
+      }
+    }
     const out: PublicAgent[] = [];
     for (const sub of this.subscribers.values()) {
       if (project && sub.project !== project) continue;
@@ -471,9 +520,44 @@ export class ChatRouter {
     return out.sort((a, b) => a.username.localeCompare(b.username));
   }
 
+  /** Cross-process online-handles snapshot. Used by `find_role` to
+   * compute the `online` flag against the persona registry. Falls
+   * back to in-memory when no DB is wired. */
+  onlineUsernames(): Set<string> {
+    if (this.db) {
+      try {
+        const rows = listActive(this.db, { now: this.clock() });
+        return new Set(rows.map((r) => r.username.toLowerCase()));
+      } catch {
+        // fall through
+      }
+    }
+    const out = new Set<string>();
+    for (const sub of this.subscribers.values()) out.add(sub.username.toLowerCase());
+    return out;
+  }
+
   // -------------------------------------------------------------------- //
   // Internals
   // -------------------------------------------------------------------- //
+
+  private presenceUpsert(sub: Subscriber): void {
+    if (!this.db) return;
+    try {
+      upsertSubscriber(this.db, sub, this.clock());
+    } catch {
+      // best-effort — never fail a router op because of presence write
+    }
+  }
+
+  private presenceRemove(agent_id: string): void {
+    if (!this.db) return;
+    try {
+      presenceRemove(this.db, agent_id);
+    } catch {
+      // best-effort
+    }
+  }
 
   private checkAvailability(
     username: string,

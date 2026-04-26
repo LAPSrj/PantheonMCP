@@ -39,6 +39,18 @@ export {
 } from "./persistence.ts";
 
 export {
+  upsertSubscriber,
+  heartbeat,
+  removeSubscriber,
+  listActive,
+  pruneStale,
+  totalSubscribers,
+  DEFAULT_STALE_THRESHOLD_MS,
+  DEFAULT_PRUNE_GRACE_MS,
+  type PresenceRow,
+} from "./presence.ts";
+
+export {
   priorityTag,
   wrapSilentEvent,
   SILENT_KINDS,

@@ -5,7 +5,7 @@ import fs from "node:fs";
 /** Bumped when the schema changes. Each `vN` migration runs once and is
  * recorded in `schema_version`. Migrations are idempotent: re-opening an
  * up-to-date DB applies nothing. */
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 /** Migrations indexed by the version they bring the schema to. So
  * `MIGRATIONS[1]` brings a fresh DB from version 0 to version 1. */
@@ -45,6 +45,30 @@ const MIGRATIONS: Record<number, (db: Database) => void> = {
       );
 
       CREATE INDEX idx_mentions_user ON mentions(mentioned_username, message_id);
+    `);
+  },
+  2: (db) => {
+    // §11c presence cross-process: each connected chat subscriber gets
+    // a row here, refreshed on every heartbeat. `list_agents` reads
+    // rows whose `last_heartbeat` is fresher than the stale-threshold
+    // (configurable; default 30s). The daemon-tick `pruneStale`
+    // sweep deletes stale rows after a longer grace.
+    db.exec(`
+      CREATE TABLE subscribers (
+        agent_id TEXT PRIMARY KEY,
+        username TEXT NOT NULL,
+        project TEXT NOT NULL,
+        transient INTEGER NOT NULL DEFAULT 0,
+        mode TEXT NOT NULL DEFAULT 'all',
+        status TEXT NOT NULL DEFAULT '',
+        connected_at INTEGER NOT NULL,
+        status_updated_at INTEGER NOT NULL,
+        last_heartbeat INTEGER NOT NULL,
+        promoted_at INTEGER
+      );
+      CREATE INDEX idx_subscribers_username ON subscribers(username);
+      CREATE INDEX idx_subscribers_project ON subscribers(project);
+      CREATE INDEX idx_subscribers_heartbeat ON subscribers(last_heartbeat DESC);
     `);
   },
 };

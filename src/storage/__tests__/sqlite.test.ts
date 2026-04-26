@@ -66,11 +66,12 @@ test("openChatDb is idempotent on a populated database", () => {
     };
     expect(count.c).toBe(1);
 
-    // schema_version unchanged: still 1 row at version 1.
+    // schema_version captures every applied migration. Re-opening
+    // doesn't add new rows.
     const versions = db
       .query("SELECT version FROM schema_version ORDER BY version")
       .all() as { version: number }[];
-    expect(versions).toEqual([{ version: 1 }]);
+    expect(versions.map((v) => v.version)).toEqual([1, 2]);
   } finally {
     db.close();
   }
