@@ -1,13 +1,17 @@
 import {
   appendEntry,
+  deleteSnapshot,
   fadeEntry,
   forgetEntry,
   getDetails,
   getEntry,
   listIndex,
+  listSnapshots,
   recallEntry,
   renderForPrompt,
+  restoreMemory,
   setMemory,
+  snapshotMemory,
   updateEntry,
   type ListIndexFilter,
 } from "../../memory/index.ts";
@@ -138,4 +142,40 @@ export const get_memory_details: Handler = async (args, ctx) => {
     throw new ToolError("entry_not_found", `No memory entry '${id}' for '${username}'.`);
   }
   return { id, username, details: getDetails(ctx.paths, username, id) };
+};
+
+// --- §6 LOW memory snapshots ---
+
+export const snapshot_memory: Handler = async (args, ctx) => {
+  const claimed = ctx.session.claimedUsername;
+  if (!claimed) {
+    throw new ToolError("no_persona", "snapshot_memory requires a claimed persona.");
+  }
+  const label = asStringRequired(args.label, "label");
+  return snapshotMemory(ctx.paths, claimed, label);
+};
+
+export const restore_memory: Handler = async (args, ctx) => {
+  const claimed = ctx.session.claimedUsername;
+  if (!claimed) {
+    throw new ToolError("no_persona", "restore_memory requires a claimed persona.");
+  }
+  const label = asStringRequired(args.label, "label");
+  return restoreMemory(ctx.paths, claimed, label);
+};
+
+export const list_snapshots: Handler = async (args, ctx) => {
+  const username = targetUsername(args, ctx.session.claimedUsername);
+  const snapshots = listSnapshots(ctx.paths, username);
+  return { username, count: snapshots.length, snapshots };
+};
+
+export const delete_snapshot: Handler = async (args, ctx) => {
+  const claimed = ctx.session.claimedUsername;
+  if (!claimed) {
+    throw new ToolError("no_persona", "delete_snapshot requires a claimed persona.");
+  }
+  const label = asStringRequired(args.label, "label");
+  const existed = deleteSnapshot(ctx.paths, claimed, label);
+  return { label, deleted: existed };
 };

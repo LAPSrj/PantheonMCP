@@ -330,6 +330,63 @@ export const TOOLS: readonly ToolDef[] = [
       },
     },
   },
+  {
+    name: "snapshot_memory",
+    description:
+      "Persist a labeled snapshot of your current memory store at " +
+      "`personas/<handle>/memory.snapshots/<label>.json`. Snapshots are " +
+      "atomic-rename JSON files, count toward disk usage, and have NO " +
+      "auto-cleanup — call `delete_snapshot` to free space. Use before " +
+      "a risky update_memory / set_memory you might want to roll back.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["label"],
+      properties: {
+        label: {
+          type: "string",
+          description:
+            "Label for this snapshot. Alphanumeric + _ . -, ≤64 chars, leading alphanumeric.",
+        },
+      },
+    },
+  },
+  {
+    name: "restore_memory",
+    description:
+      "Restore your memory store from a labeled snapshot. Overwrites the " +
+      "current main store; reversible only by another snapshot before " +
+      "calling this. Errors `entry_not_found` when the label doesn't exist.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["label"],
+      properties: { label: { type: "string" } },
+    },
+  },
+  {
+    name: "list_snapshots",
+    description:
+      "List every snapshot for a persona (default: your own). Returns " +
+      "label + size_bytes + created_at, sorted newest-first.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: { username: { type: "string" } },
+    },
+  },
+  {
+    name: "delete_snapshot",
+    description:
+      "Delete a labeled snapshot of your memory. Returns `deleted: false` " +
+      "when the label didn't exist (idempotent).",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["label"],
+      properties: { label: { type: "string" } },
+    },
+  },
 
   // -------- Spawn (stubs until §11a launcher adapters land) --------
   {

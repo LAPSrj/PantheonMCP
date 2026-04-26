@@ -29,6 +29,10 @@ export const HANDLERS: Record<string, Handler> = {
   forget_memory: memory.forget_memory,
   list_memory: memory.list_memory,
   get_memory_details: memory.get_memory_details,
+  snapshot_memory: memory.snapshot_memory,
+  restore_memory: memory.restore_memory,
+  list_snapshots: memory.list_snapshots,
+  delete_snapshot: memory.delete_snapshot,
 
   // Lifecycle (rest family)
   allow_rest: lifecycle.allow_rest,

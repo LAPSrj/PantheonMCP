@@ -37,3 +37,12 @@ export {
 } from "./render.ts";
 
 export { loadStore, mutateStore } from "./store.ts";
+
+export {
+  snapshotMemory,
+  restoreMemory,
+  listSnapshots,
+  deleteSnapshot,
+  validateLabel,
+  type SnapshotMeta,
+} from "./snapshots.ts";

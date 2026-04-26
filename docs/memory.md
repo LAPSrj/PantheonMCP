@@ -166,6 +166,38 @@ both confirmed with semaphoremole:
   weren't touched. Auto-fading user-pinned core content is
   explicitly forbidden (§4 / §11b).
 
+## Snapshots (§6 LOW)
+
+Labeled snapshots of the persona's memory store live as parallel
+JSON files at:
+
+```
+~/.local/share/pantheon/personas/<handle>/memory.snapshots/<label>.json
+```
+
+`snapshot_memory({ label })` writes the current store via
+`writeJsonAtomic`. `restore_memory({ label })` reads the snapshot
+back via `mutateStore`, replacing the main store atomically.
+`list_snapshots({ username? })` returns
+`{ label, size_bytes, created_at }` rows sorted newest-first.
+`delete_snapshot({ label })` removes a single snapshot
+(idempotent — returns `deleted: false` for unknown labels).
+
+**No auto-cleanup.** Snapshots count toward disk usage and
+persist until explicitly deleted. The implicit assumption: an
+operator who took a snapshot intends to keep it until they say
+otherwise. A future `pantheon doctor` check could surface
+"persona X has N snapshots totaling Y MB" but doesn't auto-prune.
+
+Labels match `/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/` — alphanumeric
+with `_ . -`, leading alphanumeric, ≤64 chars. Reserved
+characters (`/`, whitespace) are rejected.
+
+`restore_memory` is **destructive** to the main store: the
+overwrite is reversible only by another snapshot taken before
+the restore. The intended pattern is "snapshot → risky edit →
+keep or restore".
+
 ## Concurrency
 
 All store writes route through `mutateStore` → `mutateJsonAtomic`,
