@@ -307,6 +307,55 @@ test("--rc followed by another flag treats --rc as boolean (no name eaten)", asy
   expect(argv.some((a) => a.includes("hi"))).toBe(true);
 });
 
+// --- chat-username-suffix passthrough ---
+
+test("--chat-username-suffix N embeds the suffixed handle in the bootstrap login call", async () => {
+  seedPersona();
+  await runSummon({
+    args: ["swoopfinch", "--chat-username-suffix", "3"],
+    stdout: new StringSink(),
+    stderr: new StringSink(),
+    paths,
+    spawn_executor: makeMockExecutor(),
+    spawn_env: {} as NodeJS.ProcessEnv,
+  });
+  const finalArg = recorder[0]!.args[recorder[0]!.args.length - 1] as string;
+  expect(finalArg).toContain("mcp__pantheon__login({ username: \"swoopfinch3\"");
+  expect(finalArg).toContain("persona identity is still `swoopfinch`");
+});
+
+test("--chat-username-suffix rejects non-integer / < 2 / empty", async () => {
+  seedPersona();
+  for (const v of ["abc", "1", "0", "-2"]) {
+    const stderr = new StringSink();
+    const code = await runSummon({
+      args: ["swoopfinch", "--chat-username-suffix", v],
+      stdout: new StringSink(),
+      stderr,
+      paths,
+      spawn_executor: makeMockExecutor(),
+      spawn_env: {} as NodeJS.ProcessEnv,
+    });
+    expect(code).toBe(1);
+    expect(stderr.buf).toContain("--chat-username-suffix");
+  }
+});
+
+test("--chat-username-suffix accepts 'auto' and writes a suffix the bootstrap embeds", async () => {
+  // No subscribers in the chat DB → auto picks the first candidate (2).
+  seedPersona();
+  await runSummon({
+    args: ["swoopfinch", "--chat-username-suffix", "auto"],
+    stdout: new StringSink(),
+    stderr: new StringSink(),
+    paths,
+    spawn_executor: makeMockExecutor(),
+    spawn_env: {} as NodeJS.ProcessEnv,
+  });
+  const finalArg = recorder[0]!.args[recorder[0]!.args.length - 1] as string;
+  expect(finalArg).toContain("mcp__pantheon__login({ username: \"swoopfinch2\"");
+});
+
 test("--rc honors persisted persona.remote_control via just running --help on a persona that has it", async () => {
   // No persona-level set test in CLI suite; covered fully in src/mcp/__tests__/spawn.test.ts.
   // This one just guarantees CLI flag and persona-default coexist without crashing.

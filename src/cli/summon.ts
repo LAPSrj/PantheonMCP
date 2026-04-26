@@ -1,5 +1,5 @@
 import { IdentityError, readPersona } from "../identity/index.ts";
-import { resolvePaths, type Paths } from "../storage/index.ts";
+import { openChatDb, resolvePaths, type Paths } from "../storage/index.ts";
 import {
   AdapterError,
   realSpawnExecutor,
@@ -7,6 +7,7 @@ import {
   type SpawnMode,
   type SpawnTarget,
 } from "../launcher/index.ts";
+import { listActive } from "../chat/presence.ts";
 import { spawnPersona } from "../mcp/handlers/spawn.ts";
 import { ToolError } from "../mcp/types.ts";
 import { createContext } from "../mcp/context.ts";
@@ -48,6 +49,12 @@ interface ParsedArgs {
   /** Per-call --remote-control / --rc override. `true` uses
    * persona.project as the RC name; a string is the explicit name. */
   remote_control?: boolean | string;
+  /** Per-call --chat-username-suffix override. Numeric suffix string
+   * (e.g. "2", "3") OR the literal "auto" — the CLI walks 2..99 in
+   * the chat presence DB and picks the first available number. The
+   * persona's REGISTRY identity stays canonical; only the bootstrap-
+   * embedded chat login uses `<base><N>`. */
+  chat_username_suffix?: string | "auto";
 }
 
 export async function runSummon(options: RunSummonOptions): Promise<number> {
@@ -81,6 +88,15 @@ export async function runSummon(options: RunSummonOptions): Promise<number> {
   if (parsed.prompt !== undefined) handlerArgs.prompt = parsed.prompt;
   if (parsed.channels !== undefined) handlerArgs.channels = parsed.channels;
   if (parsed.remote_control !== undefined) handlerArgs.remote_control = parsed.remote_control;
+
+  // Resolve --chat-username-suffix BEFORE spawning so the bootstrap
+  // text embeds the right chat handle. `auto` walks the presence DB
+  // for the first free `<base><N>`.
+  if (parsed.chat_username_suffix !== undefined) {
+    const resolved = resolveChatSuffix(paths, persona.username, parsed.chat_username_suffix, stderr);
+    if (resolved === null) return SUMMON_EXIT.USER_ERROR;
+    handlerArgs.chat_username_suffix = resolved;
+  }
 
   try {
     const result = await spawnPersona(handlerArgs, ctx, persona);
@@ -119,6 +135,7 @@ function parseArgs(argv: string[], stderr: NodeJS.WritableStream): ParsedArgs | 
   let prompt: string | undefined;
   const channels: string[] = [];
   let remote_control: boolean | string | undefined;
+  let chat_username_suffix: string | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -220,6 +237,26 @@ function parseArgs(argv: string[], stderr: NodeJS.WritableStream): ParsedArgs | 
         }
         break;
       }
+      case "--chat-username-suffix": {
+        const v = argv[++i] ?? "";
+        if (v === "" || v.startsWith("--")) {
+          stderr.write(
+            "pantheon-summon: --chat-username-suffix requires a value (positive integer or 'auto')\n",
+          );
+          return "error";
+        }
+        if (v !== "auto") {
+          const n = Number(v);
+          if (!Number.isFinite(n) || !Number.isInteger(n) || n < 2) {
+            stderr.write(
+              `pantheon-summon: --chat-username-suffix must be 'auto' or a positive integer ≥ 2; got '${v}'\n`,
+            );
+            return "error";
+          }
+        }
+        chat_username_suffix = v;
+        break;
+      }
       default:
         if (a.startsWith("--")) {
           stderr.write(`pantheon-summon: unknown flag '${a}'\n`);
@@ -243,7 +280,49 @@ function parseArgs(argv: string[], stderr: NodeJS.WritableStream): ParsedArgs | 
   if (prompt !== undefined) result.prompt = prompt;
   if (channels.length > 0) result.channels = channels;
   if (remote_control !== undefined) result.remote_control = remote_control;
+  if (chat_username_suffix !== undefined) result.chat_username_suffix = chat_username_suffix;
   return result;
+}
+
+/** Resolve `--chat-username-suffix N|auto` to the literal suffix
+ * string the bootstrap embeds. `auto` walks the chat presence DB
+ * (active subscribers) for the first available `<base><N>` (n=2..99).
+ * Returns null and writes an error to stderr on failure (DB unreadable
+ * or no slot found within the search window). */
+function resolveChatSuffix(
+  paths: Paths,
+  base: string,
+  raw: string,
+  stderr: NodeJS.WritableStream,
+): string | null {
+  if (raw !== "auto") return raw;
+  let db: ReturnType<typeof openChatDb> | null = null;
+  try {
+    db = openChatDb(paths.chatDbPath);
+  } catch (err) {
+    stderr.write(
+      `pantheon-summon: --chat-username-suffix auto: failed to open chat db (${(err as Error).message}). Pass an explicit number instead.\n`,
+    );
+    return null;
+  }
+  try {
+    const active = listActive(db);
+    const taken = new Set(active.map((s) => s.username.toLowerCase()));
+    for (let n = 2; n <= 99; n++) {
+      const candidate = `${base}${n}`;
+      if (!taken.has(candidate.toLowerCase())) return String(n);
+    }
+    stderr.write(
+      `pantheon-summon: --chat-username-suffix auto: no free '${base}<N>' in [2..99]. Pass a higher explicit number.\n`,
+    );
+    return null;
+  } finally {
+    try {
+      db.close();
+    } catch {
+      // best-effort
+    }
+  }
 }
 
 function printHelp(stderr: NodeJS.WritableStream): void {
@@ -266,6 +345,10 @@ Flags:
   --prompt <text>               Runtime prompt forwarded to the spawned agent
   --channels <plugin:name@mkt>  Forward as --channels to claude (repeatable; overrides persona.channels)
   --remote-control [name], --rc Forward as --remote-control to claude. Default name = persona.project.
+  --chat-username-suffix <N|auto>
+                                Chat as <persona><N> instead of <persona>. Use when another session
+                                already holds the canonical handle. 'auto' picks the next free
+                                number from the chat presence DB. Persona identity stays canonical.
   --help                        This message
 
 Exit codes:

@@ -99,8 +99,14 @@ export function recordSpawn(
       // new-tab / new-window seed a fresh single-pane tab.
       geometryByTab[tabIndex] = freshTab();
     }
+    // tabCount tracks the number of distinct TABS (new-tab /
+    // new-window). split-pane spawns add panes to an existing tab and
+    // must NOT bump tabCount — otherwise the spawn handler's "predict
+    // last existing tab index" math walks off into nonexistent tabs.
+    // Without this, the geometry policy would be fed `freshTab()` on
+    // every split (the off-by-one semaphoremole repro'd at n=3).
     updated = {
-      tabCount: prev.tabCount + 1,
+      tabCount: spawn.mode === "split-pane" ? prev.tabCount : prev.tabCount + 1,
       tabSpawnHistory: [...prev.tabSpawnHistory, entry],
       geometryByTab,
     };

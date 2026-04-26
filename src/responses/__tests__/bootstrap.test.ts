@@ -119,6 +119,34 @@ test("provisional persona renders the conjure-bootstrap variant", () => {
   expect(out).not.toContain("specialist agent summoned via pantheon");
 });
 
+test("chat_username_suffix embeds <persona><N> in the login call and notes the canonical identity", () => {
+  const out = buildSummonBootstrap(persona(), {
+    rest_timeout: 3600,
+    chat_username_suffix: "2",
+  });
+  // Login call uses the suffixed handle.
+  expect(out).toContain(
+    `mcp__pantheon__login({ username: "swoopfinch2", project: "image-gallery"`,
+  );
+  expect(out).toContain("Use EXACTLY `swoopfinch2`");
+  // Note clarifies persona identity stays canonical.
+  expect(out).toContain("sibling-incarnation alias");
+  expect(out).toContain("persona identity is still `swoopfinch`");
+  // Re-summon hint still references the canonical handle.
+  expect(out).toContain("pantheon summon swoopfinch --chat-username-suffix");
+});
+
+test("collision-handling clause always present (instructs no auto-logout, surface options, stop)", () => {
+  const out = buildSummonBootstrap(persona(), { rest_timeout: 3600 });
+  expect(out).toContain("error: \"username_taken\"");
+  expect(out).toContain("DO NOT call `logout`");
+  expect(out).toContain("STOP and wait for human direction");
+  // The three remediation options reach the human.
+  expect(out).toContain("close the other session");
+  expect(out).toContain("close THIS pane");
+  expect(out).toContain("--chat-username-suffix");
+});
+
 test("non-WSL platform renders the platform line without the distro suffix", () => {
   const base = persona({ platform: "linux" });
   delete base.wsl_distro;

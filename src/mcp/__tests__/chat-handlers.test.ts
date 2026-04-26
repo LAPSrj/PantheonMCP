@@ -62,6 +62,81 @@ test("login + logout clears chat_agent_id", async () => {
   expect(ctx.chat_agent_id).toBeNull();
 });
 
+test("login collision: returns enriched error with options + suggested_suffix; does NOT auto-evict", async () => {
+  // First login takes the handle.
+  const first = await call("login", {
+    username: "swoopfinch",
+    project: "ops",
+    transient: true,
+  });
+  expect(first.ok).toBe(true);
+  // Second session tries the same handle; chat router rejects.
+  // Build a second session for clarity.
+  const sess2 = new Session("test-session-2");
+  const ctx2 = createContext({
+    paths: ctx.paths,
+    session: sess2,
+    watchdog: ctx.watchdog,
+    parent_pid: ctx.parent_pid,
+    platform: ctx.platform,
+    chat: ctx.chat,
+  });
+  const r = await dispatch(
+    "login",
+    { username: "swoopfinch", project: "ops", transient: true },
+    ctx2,
+  );
+  expect(r.isError).toBe(true);
+  const payload = JSON.parse(r.content[0]!.text) as Record<string, unknown>;
+  expect(payload.error).toBe("username_taken");
+  // Three remediation options spelled out.
+  const options = payload.options as string[];
+  expect(options).toBeInstanceOf(Array);
+  expect(options).toHaveLength(3);
+  expect(options[0]).toContain("Close the OTHER session");
+  expect(options[1]).toContain("Close THIS pane");
+  expect(options[2]).toContain("--chat-username-suffix");
+  // suggested_suffix is the next-free `<base><N>` (typically 2).
+  expect(payload.suggested_suffix).toBe("swoopfinch2");
+  // Critical: the OTHER session is NOT evicted.
+  expect(payload.do_not_auto_logout).toContain("DO NOT call `logout`");
+  // The first agent stays subscribed.
+  expect(ctx.chat?.getByUsername("swoopfinch")).not.toBeNull();
+});
+
+test("login collision: suggested_suffix walks past taken numbers", async () => {
+  // Take swoopfinch + swoopfinch2 + swoopfinch3 first.
+  for (const u of ["swoopfinch", "swoopfinch2", "swoopfinch3"]) {
+    const sess = new Session(`s-${u}`);
+    const c = createContext({
+      paths: ctx.paths,
+      session: sess,
+      watchdog: ctx.watchdog,
+      parent_pid: ctx.parent_pid,
+      platform: ctx.platform,
+      chat: ctx.chat,
+    });
+    await dispatch("login", { username: u, project: "ops", transient: true }, c);
+  }
+  // Now try swoopfinch from yet another session — suggested should be 4.
+  const sess4 = new Session("test-session-4");
+  const ctx4 = createContext({
+    paths: ctx.paths,
+    session: sess4,
+    watchdog: ctx.watchdog,
+    parent_pid: ctx.parent_pid,
+    platform: ctx.platform,
+    chat: ctx.chat,
+  });
+  const r = await dispatch(
+    "login",
+    { username: "swoopfinch", project: "ops", transient: true },
+    ctx4,
+  );
+  const payload = JSON.parse(r.content[0]!.text) as Record<string, unknown>;
+  expect(payload.suggested_suffix).toBe("swoopfinch4");
+});
+
 test("login with promote flips guest → claimed_persona via promoteInPlace", async () => {
   const r = await call("login", {
     username: "leandro",

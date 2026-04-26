@@ -127,8 +127,9 @@ export function isHandleAvailable(args: AvailabilityArgs): AvailabilityResult {
   return { available: true };
 }
 
-/** Allow `<base>2` to share a prefix with `<base>` (incarnation
- * relationship) per the §11c sibling-incarnation rule. */
+/** Allow `<base>2` (or `<base>-2` / `<base>_2`) to share a prefix
+ * with `<base>` (incarnation relationship) per the §11c sibling-
+ * incarnation rule. Both `swoopfinch2` and `swoopfinch-2` count. */
 function isIncarnationOf(
   candidate: string,
   conflicting: string,
@@ -137,13 +138,25 @@ function isIncarnationOf(
   const candLower = candidate.toLowerCase();
   const confLower = conflicting.toLowerCase();
   const declared = declaredBase?.toLowerCase();
-  const re = /^(.+?)(\d+)$/;
+  // Optional `-` or `_` separator between base and digit suffix.
+  const re = /^(.+?)[-_]?(\d+)$/;
   const match = re.exec(candLower);
   if (!match) return false;
   const base = match[1]!;
   if (base === confLower) return true;
   if (declared && base === declared && declared === confLower) return true;
   return false;
+}
+
+/** Strip a digit-suffix (with optional `-`/`_` separator) from an
+ * incarnation handle. `swoopfinch-2` → `swoopfinch`, `swoopfinch` →
+ * `swoopfinch` (no change). Used to derive the canonical base when
+ * the chat handle is suffixed but the persona registry stays
+ * canonical. */
+export function incarnationBase(handle: string): string {
+  const match = /^(.+?)[-_]?(\d+)$/.exec(handle);
+  if (!match) return handle;
+  return match[1]!;
 }
 
 function subscriberPrefixCollision(

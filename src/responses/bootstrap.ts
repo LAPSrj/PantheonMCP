@@ -12,6 +12,12 @@ export interface BootstrapOptions {
    * a number of seconds; rendered as "Auto-rest is OFF/ON (Xmin)" in
    * the operating-rules section. */
   rest_timeout: number | "never";
+  /** When set, the agent logs into chat as `<persona.username><N>`
+   * instead of `<persona.username>`. The persona's REGISTRY identity
+   * stays canonical — this is a chat-only sibling-incarnation alias
+   * for cases where another session already holds the canonical
+   * handle (testing, multi-tab work, observer instances). */
+  chat_username_suffix?: string;
 }
 
 /** Build the bootstrap prompt prepended to every summoned agent's
@@ -45,6 +51,13 @@ export function buildSummonBootstrap(
     ? `You were summoned by **${opts.summoner_username}**.`
     : "You were summoned.";
 
+  const chatHandle = opts.chat_username_suffix
+    ? `${persona.username}${opts.chat_username_suffix}`
+    : persona.username;
+  const suffixNote = opts.chat_username_suffix
+    ? `\n   _Note: your chat handle is \`${chatHandle}\` (sibling-incarnation alias). Your persona identity is still \`${persona.username}\` — memory writes, summon, and identity tools all use the canonical handle._\n`
+    : "";
+
   const restBlock = renderRestBlock(opts.rest_timeout);
 
   const resumeHint = persona.resume_session_id
@@ -66,8 +79,9 @@ export function buildSummonBootstrap(
 (Pantheon merges identity + memory + chat into ONE MCP server. All tools are namespaced \`mcp__pantheon__*\`. Your identity is **already fixed** via env vars — do NOT call \`claim\`, \`register\`, \`whoami\`, or pick a new name.)
 
 1. **Log into chat** so peers can reach you and the watchdog observes your activity:
-   \`mcp__pantheon__login({ username: "${persona.username}", project: "${persona.project}", status: "summoned; <what you're about to do>" })\`
-   Use EXACTLY \`${persona.username}\`. If the tool isn't visible yet, run \`Bash({ command: "sleep 3" })\` and retry up to 3 times.
+   \`mcp__pantheon__login({ username: "${chatHandle}", project: "${persona.project}", status: "summoned; <what you're about to do>" })\`
+   Use EXACTLY \`${chatHandle}\`. If the tool isn't visible yet, run \`Bash({ command: "sleep 3" })\` and retry up to 3 times.${suffixNote}
+   **If login returns \`error: "username_taken"\` (or \`already_registered\` / \`username_prefix_collision\`):** another session is already chatting under that name. **DO NOT call \`logout\`** — that other session may be doing real work and you would evict it. Instead, surface the error's \`options\` field (and \`suggested_suffix\`, if present) to the human verbatim, then **STOP and wait for human direction**. The human picks: (a) close the other session and have you retry, (b) close THIS pane if the other session is the intended one, or (c) re-summon you with \`pantheon summon ${persona.username} --chat-username-suffix <N|auto>\` to chat as a numbered sibling-incarnation handle.
 
 2. **Start the watcher** — follow the EXACT \`Monitor(...)\` call in the login response's \`note\` field (it has your agent_id baked in). Without the watcher you won't see incoming messages and other agents will think you're ignoring them.
 

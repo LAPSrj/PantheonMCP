@@ -395,6 +395,45 @@ test("summon: per-call remote_control: true on a persona without rc adds the fla
 
 // --- pane geometry: multi-summon end-to-end ---
 
+test("five sequential split-pane summons WITHOUT explicit tab_index still evolve to [2,2,1] (Leandro repro)", async () => {
+  // Repro for semaphoremole's report: when the CLI summons split-pane
+  // and doesn't pass --target-tab-index, the spawn handler must default
+  // to the LAST EXISTING tab (not predict a new tab via tabCount).
+  // The previous test below had explicit tab_index=0 and masked this bug.
+  ctx = createContext({
+    paths: ctx.paths,
+    session: ctx.session,
+    watchdog: ctx.watchdog,
+    parent_pid: ctx.parent_pid,
+    platform: ctx.platform,
+    spawn_executor: makeMockExecutor(() => mockStderr),
+    stderr_probe_ms: 5,
+    spawn_env: { WT_SESSION: "test" } as NodeJS.ProcessEnv,
+  });
+  fixturePersona({ username: "alpha" });
+  fixturePersona({ username: "beta", cwd: "/work/beta" });
+  fixturePersona({ username: "gamma", cwd: "/work/gamma" });
+  fixturePersona({ username: "delta", cwd: "/work/delta" });
+  fixturePersona({ username: "epsilon", cwd: "/work/epsilon" });
+
+  await call("summon", {
+    username: "alpha",
+    target: { mode: "new-tab-window", window: "wname" },
+  });
+  // CRITICAL: no tab_index in any of these.
+  for (const u of ["beta", "gamma", "delta", "epsilon"]) {
+    await call("summon", {
+      username: u,
+      target: { mode: "split-pane", window: "wname" },
+    });
+  }
+  const { getTabGeometry } = await import("../../launcher/index.ts");
+  const g = getTabGeometry(ctx.paths, "wname", 0);
+  expect(g).not.toBeNull();
+  // Without the fix this would be [[0],[1],[2],[3],[4]] = [1,1,1,1,1].
+  expect(g!.columns.map((c) => c.length)).toEqual([2, 2, 1]);
+});
+
 test("five sequential split-pane summons evolve the tab's geometry to shape [2,2,1] AND emit focus-pane argv", async () => {
   // Force WT detection so split-pane is supported.
   ctx = createContext({

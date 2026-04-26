@@ -797,7 +797,7 @@ export class ChatRouter {
     }
   }
 
-  private checkAvailability(
+  checkAvailability(
     username: string,
     ignoreSelf?: string,
     claimedPersona?: string,
@@ -810,6 +810,35 @@ export class ChatRouter {
       ...(ignoreSelf !== undefined ? { ignore_self_username: ignoreSelf } : {}),
       ...(claimedPersona !== undefined ? { claimed_persona: claimedPersona } : {}),
     });
+  }
+
+  /** Walk `<base>2`, `<base>3`, ..., `<base><max>` and return the
+   * first incarnation handle that passes `isHandleAvailable`. Used by
+   * the login handler to surface a `suggested_suffix` when a username
+   * collision blocks a spawn — the human (or the
+   * `--chat-username-suffix auto` flag) can grab that handle without
+   * a separate availability probe round trip.
+   *
+   * Returns `null` when nothing is available within the search window
+   * (defaults to 99 — well past any realistic concurrent-incarnation
+   * count). The candidate uses the dotless form (`<base><N>`) which
+   * always passes the incarnation rule even without the dash-suffix
+   * relaxation. */
+  nextAvailableIncarnation(
+    base: string,
+    opts: { max?: number; claimed_persona?: string } = {},
+  ): string | null {
+    const max = opts.max ?? 99;
+    for (let n = 2; n <= max; n++) {
+      const candidate = `${base}${n}`;
+      const r = this.checkAvailability(
+        candidate,
+        undefined,
+        opts.claimed_persona,
+      );
+      if (r.available) return candidate;
+    }
+    return null;
   }
 
   private throwForAvailability(username: string, result: AvailabilityResult): never {

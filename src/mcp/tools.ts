@@ -482,6 +482,11 @@ export const TOOLS: readonly ToolDef[] = [
           description:
             "Per-call override for the persona's `remote_control` field. `true` uses the persona's project as the RC name; pass a string for an explicit name.",
         },
+        chat_username_suffix: {
+          type: "string",
+          description:
+            "Chat as `<persona><N>` instead of `<persona>` (sibling-incarnation alias). Use when another session already holds the canonical handle. Persona identity stays canonical — only the bootstrap-embedded chat login uses the suffixed handle.",
+        },
       },
     },
   },
@@ -513,6 +518,11 @@ export const TOOLS: readonly ToolDef[] = [
           description:
             "Per-call override for the persona's `remote_control` field. `true` uses the persona's project as the RC name; pass a string for an explicit name.",
         },
+        chat_username_suffix: {
+          type: "string",
+          description:
+            "Chat as `<persona><N>` instead of `<persona>` (sibling-incarnation alias). Use when another session already holds the canonical handle. Persona identity stays canonical — only the bootstrap-embedded chat login uses the suffixed handle.",
+        },
       },
     },
   },
@@ -543,6 +553,11 @@ export const TOOLS: readonly ToolDef[] = [
         remote_control: {
           type: "boolean",
           description: "Initial remote_control flag persisted on the new persona.",
+        },
+        chat_username_suffix: {
+          type: "string",
+          description:
+            "Chat as `<persona><N>` instead of `<persona>` for this spawn (sibling-incarnation alias). Persona identity stays canonical.",
         },
         target: SPAWN_TARGET_SCHEMA,
         rest_timeout: REST_TIMEOUT_SCHEMA,
@@ -576,6 +591,11 @@ export const TOOLS: readonly ToolDef[] = [
         remote_control: {
           type: "boolean",
           description: "Initial remote_control flag persisted on the new persona.",
+        },
+        chat_username_suffix: {
+          type: "string",
+          description:
+            "Chat as `<persona><N>` instead of `<persona>` for this spawn (sibling-incarnation alias). Persona identity stays canonical.",
         },
         target: SPAWN_TARGET_SCHEMA,
         rest_timeout: REST_TIMEOUT_SCHEMA,

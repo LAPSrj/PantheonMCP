@@ -39,13 +39,60 @@ export const login: Handler = async (args, ctx) => {
   // (otherwise registered personas can never join chat under their
   // own name — the original bug E2E surfaced).
   const claimedPersona = ctx.session.claimedUsername;
-  const subscriber = router.add({
-    username,
-    project,
-    transient,
-    status,
-    ...(claimedPersona === username ? { claimed_persona: claimedPersona } : {}),
-  });
+  let subscriber;
+  try {
+    subscriber = router.add({
+      username,
+      project,
+      transient,
+      status,
+      ...(claimedPersona === username ? { claimed_persona: claimedPersona } : {}),
+    });
+  } catch (err) {
+    // Enrich `username_taken` (and the related `already_registered` /
+    // `username_prefix_collision`) with structured remediation
+    // options so the caller (a spawned agent's bootstrap, typically)
+    // has a clear next-step instead of being a zombie pane.
+    //
+    // We DO NOT auto-evict the existing session — that other session
+    // may be load-bearing. Three options:
+    //   1. close the OTHER session
+    //   2. close THIS pane
+    //   3. re-summon with --chat-username-suffix to pick a numbered alias
+    //
+    // `suggested_suffix` is the next free `<base><N>` so the caller
+    // can act on option 3 without a probe round trip.
+    const e = err as { code?: string; message?: string; extra?: Record<string, unknown> };
+    const code = e.code ?? "";
+    if (
+      code === "username_taken" ||
+      code === "already_registered" ||
+      code === "username_prefix_collision"
+    ) {
+      const baseForSuffix = (e.extra?.["conflicting"] as string | undefined) ?? username;
+      const suggestedSuffix = router.nextAvailableIncarnation(baseForSuffix, {
+        ...(claimedPersona ? { claimed_persona: claimedPersona } : {}),
+      });
+      throw new ToolError(
+        code,
+        `Cannot log into chat as '${username}': ${e.message}`,
+        {
+          ...(e.extra ?? {}),
+          options: [
+            `Close the OTHER session (the one already chatting as '${username}'), then retry login from this pane.`,
+            "Close THIS pane if the other session is the intended one.",
+            suggestedSuffix
+              ? `Re-summon this persona with \`--chat-username-suffix ${suggestedSuffix.slice(baseForSuffix.length)}\` (or \`--chat-username-suffix auto\`) to chat as '${suggestedSuffix}' — your persona identity stays canonical.`
+              : "Re-summon this persona with `--chat-username-suffix <N>` to chat under a numbered alias.",
+          ],
+          ...(suggestedSuffix ? { suggested_suffix: suggestedSuffix } : {}),
+          do_not_auto_logout:
+            "DO NOT call `logout` — that would evict the other session, which may be doing real work.",
+        },
+      );
+    }
+    throw err;
+  }
   // Bind this MCP session to the new chat subscriber so subsequent
   // chat handlers (send_message, ask, set_mode, …) can resolve it
   // without re-authenticating.

@@ -48,13 +48,67 @@ composes three sources in one pass:
    window IS allowed (it's the §10 reclaim flow). Caller invokes
    `consumeTombstoneAndBroadcast` after the subscriber is added.
 4. **Prefix collisions (registry)** — 3-4 char prefix → reject,
-   *unless* the candidate is a `<base><N>` digit-suffix incarnation
-   of the colliding handle (incarnation rule).
+   *unless* the candidate is a `<base><N>` (or `<base>-<N>`,
+   `<base>_<N>`) digit-suffix incarnation of the colliding handle
+   (incarnation rule).
 5. **Prefix collisions (subscribers)** — same rule.
 
 Validation rules: 1-48 chars, alphanumeric + `_` / `-` / `.`, no
 whitespace, not a reserved name (`admin`/`system`/`pantheon`). Digit
 suffixes are allowed at the chat layer (incarnation handles).
+
+## Concurrent-session collision UX
+
+Same persona running multiple concurrent chat sessions is a real
+workflow (testing, multi-tab work, observer instances). Pantheon
+must allow it without forcing a kick of the existing session — that
+session may be doing real work, and an auto-evict would be the
+opposite kind of bug from the silent zombie pane the gap originally
+produced.
+
+The login handler enforces three guarantees when `router.add` throws
+`username_taken` / `already_registered` / `username_prefix_collision`:
+
+1. **The existing session is NEVER auto-evicted.** The new session's
+   login fails; the existing subscriber stays connected.
+2. **The error response carries structured remediation.** The
+   `options` array spells out three actions for the human:
+   - Close the OTHER session (the one already chatting under that
+     name), then retry login from this pane.
+   - Close THIS pane if the other session is the intended one.
+   - Re-summon with `--chat-username-suffix <N|auto>` to chat as
+     `<persona><N>` (a sibling-incarnation alias).
+3. **`suggested_suffix` carries the next-free `<base><N>`.** Computed
+   via `router.nextAvailableIncarnation(base)` which walks 2..99
+   against the in-memory subscriber map. The human (or the `auto`
+   flag) can copy-paste it into a re-summon command without a
+   separate availability probe.
+
+The summon-bootstrap prompt always includes a clause instructing
+the spawned agent: "if login returns `username_taken`, do NOT call
+`logout` (that would evict the other session). Surface the
+`options` verbatim to the human and STOP." Combined with the
+enriched error response, this gives the human full control without
+footguns.
+
+### `--chat-username-suffix` flag
+
+`pantheon summon <persona> --chat-username-suffix <N|auto>`:
+
+- `<N>` — chat as `<persona><N>` (e.g. `--chat-username-suffix 2`
+  → `swoopfinch2`). Numeric, ≥ 2.
+- `auto` — walk the chat presence DB (`subscribers` table) for the
+  first free `<persona><N>` in [2..99] and use it.
+
+The persona's REGISTRY identity stays canonical (`swoopfinch`).
+Only the bootstrap-embedded `mcp__pantheon__login` call uses the
+suffixed handle. Memory writes, summon, identity tools — all use
+`swoopfinch`. The `summoner_username` field on memory entries
+records the originating persona, so the audit trail still ties to
+the canonical handle.
+
+The MCP `summon` / `conjure` tools accept the same override via
+the `chat_username_suffix?: string` arg.
 
 ## Tombstones (§10)
 

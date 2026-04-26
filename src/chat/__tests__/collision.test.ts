@@ -140,6 +140,51 @@ test("isHandleAvailable allows incarnation handles (`<base><N>`)", () => {
   expect(r.available).toBe(true);
 });
 
+test("isHandleAvailable allows dash-suffix incarnation handles (`<base>-<N>`)", () => {
+  // Per Leandro's `--chat-username-suffix` proposal, both `swoopfinch2`
+  // and `swoopfinch-2` should count as sibling-incarnations of
+  // `swoopfinch`. Pre-existing code only recognized the dotless form.
+  createPersona(paths, {
+    username: "swoopfinch",
+    project: "pantheon",
+    cwd: "/work",
+    platform: "linux",
+  });
+  for (const candidate of ["swoopfinch-2", "swoopfinch_3", "swoopfinch9"]) {
+    const r = isHandleAvailable({
+      username: candidate,
+      subscribers: [],
+      tombstones,
+      paths,
+    });
+    expect(r.available).toBe(true);
+  }
+});
+
+test("isHandleAvailable still rejects non-incarnation prefix collisions", () => {
+  // semaphoremole's edge case: a candidate that LOOKS like it could
+  // be an incarnation (digits at the end) but the base doesn't match
+  // any persona/subscriber falls through to the regular prefix-
+  // collision check. Verify a non-digit candidate still trips on the
+  // prefix walk against `swoopfinch`.
+  createPersona(paths, {
+    username: "swoopfinch",
+    project: "pantheon",
+    cwd: "/work",
+    platform: "linux",
+  });
+  const r = isHandleAvailable({
+    username: "swoopster",
+    subscribers: [],
+    tombstones,
+    paths,
+  });
+  expect(r.available).toBe(false);
+  if (!r.available) {
+    expect(r.reason).toBe("registry_prefix_collision");
+  }
+});
+
 test("isHandleAvailable returns available for fresh handles", () => {
   const r = isHandleAvailable({
     username: "obsidianfox",

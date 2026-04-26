@@ -10,6 +10,7 @@ import {
   executeSpawnPlan,
   freshTab,
   getTabGeometry,
+  getWindowState,
   paneCount,
   predictNextTabIndex,
   recordSpawn,
@@ -125,18 +126,38 @@ export async function spawnPersona(
   // The runtime prompt (if any) appears under a separator after the
   // bootstrap; an empty runtime prompt yields a placeholder line so the
   // template's structure stays consistent.
+  const chatSuffix = asString(args.chat_username_suffix);
   const bootstrap = buildSummonBootstrap(persona, {
     runtime_prompt: prompt,
     summoner_username: summonerHandle ?? null,
     rest_timeout: restTimeout,
+    ...(chatSuffix !== undefined ? { chat_username_suffix: chatSuffix } : {}),
   });
   launchArgs.push(bootstrap);
   const tabTitle = `${persona.username}${persona.session_name ? ` (${persona.summon_count + 1})` : ""}`;
   const windowName = target?.window ?? `summon-${persona.username}`;
   // Predict the tab_index the new spawn will land on so the spawned
-  // MCP server can record it for `exit`-time decrement. Best-effort —
-  // the user can close tabs manually and shift the actual layout.
-  const predictedTabIndex = target?.tab_index ?? predictNextTabIndex(ctx.paths, windowName);
+  // MCP server can record it for `exit`-time decrement.
+  //
+  // Default depends on mode:
+  //   - split-pane → the LAST EXISTING tab (max(0, tabCount-1)). The
+  //     spawn lands INSIDE an existing tab; the prior off-by-one used
+  //     `predictNextTabIndex` (= count, not last-index), which made
+  //     every split think it was a brand-new tab. That's the bug
+  //     semaphoremole repro'd at n=3 [[0],[1],[2]].
+  //   - new-tab modes → predictNextTabIndex (= current tabCount, the
+  //     index wt will assign when it creates the new tab).
+  // Best-effort either way; the user can close tabs externally.
+  const isSplitMode = (target?.mode ?? "") === "split-pane";
+  let predictedTabIndex: number;
+  if (target?.tab_index !== undefined) {
+    predictedTabIndex = target.tab_index;
+  } else if (isSplitMode) {
+    const wstate = getWindowState(ctx.paths, windowName);
+    predictedTabIndex = Math.max(0, (wstate?.tabCount ?? 1) - 1);
+  } else {
+    predictedTabIndex = predictNextTabIndex(ctx.paths, windowName);
+  }
 
   const execEnv: Record<string, string> = {
     PANTHEON_SUMMONED: "1",
@@ -169,12 +190,11 @@ export async function spawnPersona(
   // the focus pane stays policy-chosen so even an explicit-direction
   // split lands in the right place. Non-split spawns (new-tab,
   // new-window) skip this entirely.
-  const isSplit = (target?.mode ?? "") === "split-pane";
-  const currentGeometry: TabGeometry | null = isSplit
+  const currentGeometry: TabGeometry | null = isSplitMode
     ? (getTabGeometry(ctx.paths, windowName, predictedTabIndex) ?? freshTab())
     : null;
   const splitDecision: SplitDecision | null =
-    isSplit && currentGeometry ? decideNextSplit(currentGeometry) : null;
+    isSplitMode && currentGeometry ? decideNextSplit(currentGeometry) : null;
 
   const resolvedTarget: SpawnTarget = { ...(target ?? {}), window: windowName };
   if (splitDecision) {
