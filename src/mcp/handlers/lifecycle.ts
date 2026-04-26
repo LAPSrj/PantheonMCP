@@ -70,11 +70,18 @@ export const extend_rest: Handler = async (args, ctx) => {
 
 export const exit: Handler = async (args, ctx) => {
   const delay = asNumber(args.delay_seconds) ?? 2;
+  // Teardown: clear the watchdog timer for this session so the daemon
+  // doesn't fire onDeadline mid-shutdown.
+  try {
+    ctx.watchdog.unregister(ctx.session.id);
+  } catch {
+    // best-effort
+  }
   ctx.scheduleExit(Math.max(0, delay), "explicit_exit");
   return {
     ok: true,
     delay_seconds: delay,
-    note: "SIGTERM scheduled. Goodbye.",
+    note: "SIGTERM scheduled. Watchdog cleared. Goodbye.",
   };
 };
 

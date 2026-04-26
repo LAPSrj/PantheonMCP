@@ -35,3 +35,13 @@ export {
   type WindowRecord,
   type TabSpawn,
 } from "./window-registry.ts";
+
+export {
+  executeSpawnPlan,
+  realSpawnExecutor,
+  type SpawnExecutor,
+  type SpawnedProcess,
+  type NodeSpawnOptions,
+  type ExecuteResult,
+  type ExecuteOptions,
+} from "./spawn.ts";

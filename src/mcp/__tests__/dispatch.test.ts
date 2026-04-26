@@ -60,14 +60,12 @@ test("dispatch maps MemoryError on missing claim → no_persona ToolError", asyn
   expect(payload.error).toBe("no_persona");
 });
 
-test("dispatch wraps internal Errors as internal_error", async () => {
-  // Force a thrown plain Error by registering a bad handler — call a
-  // stub handler that throws not_implemented (ToolError, NOT internal).
-  const r = await dispatch("summon", { username: "nobody" }, ctx);
+test("dispatch maps a chat-stub ToolError → MCP error payload", async () => {
+  const r = await dispatch("send_message", { text: "x" }, ctx);
   expect(r.isError).toBe(true);
   const payload = parseResult(r) as Record<string, unknown>;
   expect(payload.error).toBe("not_implemented");
-  expect(payload.layer).toBe("launcher-adapters-§11a");
+  expect(payload.layer).toBe("chat-router-§11c");
 });
 
 // --- tool surface coverage ---

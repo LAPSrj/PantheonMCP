@@ -54,10 +54,10 @@ src/mcp/
 | `allow_idle` | ⚠ deprecated | Alias → `allow_rest`. Surfaces `deprecation` field. |
 | `idle` | ⚠ deprecated | Alias → `rest`. |
 | `extend_idle` | ⚠ deprecated | Alias → `extend_rest`. |
-| `summon` | 🟡 stub | Schema final; handler returns `not_implemented` (§11a). |
-| `summon_any` | 🟡 stub | Same. |
-| `conjure` | 🟡 stub | Same. |
-| `conjure_any` | 🟡 stub | Same. |
+| `summon` | ✅ | Composes registry → resolveSpawnPlan → executeSpawnPlan (200ms stderr probe) → recordSpawn → stampSummoned → watchdog.register. |
+| `summon_any` | ✅ | Bypasses caller-target project equality (§9b). |
+| `conjure` | ✅ | Atomic register-then-spawn. Persona stays registered if spawn fails. |
+| `conjure_any` | ✅ | Same; bypasses project gate. |
 | `login` | 🟡 stub | Schema includes `transient` + `promote` per §10. (§11c) |
 | `logout` | 🟡 stub | (§11c) |
 | `send_message` | 🟡 stub | Scope: project / dm / global. (§11c) |
@@ -162,13 +162,78 @@ which:
 6. Connects to a `StdioServerTransport`.
 7. Wires `SIGTERM` / `SIGINT` / `exit` to `watchdog.shutdown()`.
 
+## Summon family wiring
+
+`summon` / `summon_any` / `conjure` / `conjure_any` compose the four
+foundation layers end-to-end:
+
+1. `readPersona(paths, username)` — registry lookup. `not_registered`
+   if no entry. (Conjure variants `createPersona` first with
+   `provisional: true`.)
+2. `enforceSameProject(ctx, target)` for the non-`_any` variants.
+   Blocks with `cross_project_blocked` when caller's claimed
+   persona is in a different project.
+3. Build `SpawnArgs` from the persona profile + caller args:
+   - `exec_command` ← `persona.launch_command || "claude"`.
+   - `exec_args` ← `persona.launch_args` + (if `resume: true` and a
+     `resume_session_id` is stored) `--resume <id>` + (if `prompt`)
+     the prompt string.
+   - `exec_env` ← `PANTHEON_SUMMONED=1`,
+     `PANTHEON_USERNAME=<persona>`,
+     `PANTHEON_SUMMONER=<caller>`,
+     `PANTHEON_REST_TIMEOUT=<seconds-or-"never">`,
+     `PANTHEON_COLOR=<color>` if set.
+   - `cwd` ← persona's registered cwd.
+   - `tab_title` ← persona handle (with incarnation suffix when one
+     is in flight).
+   - `target` defaults `window` to `summon-<persona>` to match the
+     legacy summon-mcp window-name pattern.
+4. `resolveSpawnPlan(args, { env: ctx.spawn_env })` — adapter
+   detection + downgrade ladder.
+5. `executeSpawnPlan(plan, { executor, stderr_probe_ms })` — actual
+   `child_process.spawn`. The `requires_stderr_probe` flag from §11a
+   triggers the 200ms stderr capture.
+6. **Edge case**: if the probe captured anything, throw
+   `spawn_failed` with the captured stderr in the response payload.
+   The tab may or may not have actually opened — caller decides.
+7. `recordSpawn(paths, windowName, { summoner, persona, tab_index })`
+   in the window registry. Best-effort; failures surface as
+   `stamp_warnings` rather than aborting.
+8. `stampSummoned(paths, persona)` — bumps `summon_count` and
+   `last_summoned_at` on the persona profile.
+9. `watchdog.register({ session: <new>, rest_timeout, onDeadline })`
+   — daemon-side tracking entry. The spawned MCP server arms its
+   own watchdog from `PANTHEON_REST_TIMEOUT` on boot; the daemon
+   tracks via the registry entry's session id.
+
+The MCP response shape mirrors today's summon-mcp for vanilla MCP
+parity, plus the new fields:
+
+```json
+{
+  "ok": true,
+  "summoned": "moth-whistle",
+  "project": "pantheon",
+  "cwd": "/work/moth",
+  "mode": "fresh",
+  "plan_description": "...",
+  "spawn_pid": 12345,
+  "tab_title": "moth-whistle",
+  "color": "purple",
+  "resolved_mode": "split-pane",
+  "adapter": "wt",
+  "rest_timeout": 3600,
+  "note": "split-pane requested; downgraded to new-tab-window."
+}
+```
+
 ## TODOs
 
-- Wire `summon` / `conjure` family handlers when §11a launcher
-  adapters land.
 - Wire chat handlers when §11c chat router lands. Chat handlers will
   also emit `<silent-event>` XML wrapper on ambient events (§7).
 - Add per-session JSON file for restart-tolerant proxy state once
   the daemon model is wired (currently single-process MCP server).
 - `pantheon doctor` / `pantheon dump-chat` / `pantheon load-chat`
   CLI subcommands (§11d).
+- Cross-platform spawn routing (WSL ↔ Windows) — defer until a real
+  use case appears.

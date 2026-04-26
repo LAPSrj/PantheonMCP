@@ -295,9 +295,8 @@ test("chat tool stubs return not_implemented with the chat-router layer hint", a
   expect(r.payload.layer).toBe("chat-router-§11c");
 });
 
-test("spawn tool stubs return not_implemented with the launcher layer hint", async () => {
-  const r = await call("summon", { username: "x" });
+test("summon errors not_registered when target persona doesn't exist", async () => {
+  const r = await call("summon", { username: "ghost" });
   expect(r.ok).toBe(false);
-  expect(r.payload.error).toBe("not_implemented");
-  expect(r.payload.layer).toBe("launcher-adapters-§11a");
+  expect(r.payload.error).toBe("not_registered");
 });

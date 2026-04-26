@@ -1,6 +1,7 @@
 import type { Session } from "../identity/index.ts";
 import type { Watchdog } from "../watchdog/index.ts";
 import type { Paths } from "../storage/index.ts";
+import type { SpawnExecutor } from "../launcher/index.ts";
 
 export interface ToolDef {
   name: string;
@@ -31,6 +32,18 @@ export interface HandlerContext {
   /** Push notification surface (MCP `notifications/message`). The
    * server wires a real push; tests use a recorder. */
   pushNotification: (text: string) => Promise<void>;
+  /** Spawn shim — defaults to `realSpawnExecutor` (Node's
+   * child_process.spawn). Tests inject a fake to capture argv without
+   * launching real subprocesses. */
+  spawn_executor: SpawnExecutor;
+  /** Stderr probe duration in ms. Default 200 per §11a. Tests pass
+   * 0 or a smaller value for speed. */
+  stderr_probe_ms: number;
+  /** Env used by the launcher dispatcher for adapter detection.
+   * Defaults to `process.env`; tests pass a controlled subset so
+   * detection is deterministic regardless of the test runner's
+   * inherited terminal. */
+  spawn_env: NodeJS.ProcessEnv;
 }
 
 export type HandlerResult = unknown;

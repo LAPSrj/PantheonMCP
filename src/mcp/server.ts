@@ -31,12 +31,13 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
       scheduleExit: makeRealExitScheduler(process.ppid),
     });
 
-  // Arm the watchdog with the default 60min rest_timeout. The summon
-  // family will replace this when the §11a launcher lands and a per-
-  // summon `rest_timeout` flows in via env.
+  // Arm the watchdog with the per-summon rest_timeout if our spawner
+  // set PANTHEON_REST_TIMEOUT (the env contract from §14 / spawn handler);
+  // otherwise the 60-min default per §14.
+  const restTimeout = readRestTimeoutFromEnv();
   ctx.watchdog.register({
     session: ctx.session,
-    rest_timeout: DEFAULT_REST_TIMEOUT_SECONDS,
+    rest_timeout: restTimeout,
     onDeadline: (s) => {
       defaultOnDeadline(s);
       if (s.claimedUsername) {
@@ -107,6 +108,17 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
     cleanup();
     process.exit(0);
   });
+}
+
+function readRestTimeoutFromEnv(): number | "never" {
+  const raw = process.env.PANTHEON_REST_TIMEOUT;
+  if (!raw) return DEFAULT_REST_TIMEOUT_SECONDS;
+  if (raw === "never") return "never";
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < DEFAULT_REST_TIMEOUT_SECONDS) {
+    return DEFAULT_REST_TIMEOUT_SECONDS;
+  }
+  return n;
 }
 
 function makeRealExitScheduler(parentPid: number) {

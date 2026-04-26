@@ -2,6 +2,7 @@ import os from "node:os";
 import { Session } from "../identity/index.ts";
 import { resolvePaths, type Paths } from "../storage/index.ts";
 import { Watchdog, realScheduler } from "../watchdog/index.ts";
+import { realSpawnExecutor, type SpawnExecutor } from "../launcher/index.ts";
 import type { HandlerContext } from "./types.ts";
 
 export interface CreateContextOptions {
@@ -19,6 +20,9 @@ export interface CreateContextOptions {
   /** Default no-op; the stdio server wires the real SIGTERM-based exit. */
   scheduleExit?: (delaySeconds: number, reason: string) => void;
   pushNotification?: (text: string) => Promise<void>;
+  spawn_executor?: SpawnExecutor;
+  stderr_probe_ms?: number;
+  spawn_env?: NodeJS.ProcessEnv;
 }
 
 /** Build a runtime context around the four foundation layers. The MCP
@@ -46,6 +50,9 @@ export function createContext(options: CreateContextOptions = {}): HandlerContex
       (async (_text) => {
         // No-op default for non-MCP-attached contexts (tests, scripts).
       }),
+    spawn_executor: options.spawn_executor ?? realSpawnExecutor,
+    stderr_probe_ms: options.stderr_probe_ms ?? 200,
+    spawn_env: options.spawn_env ?? process.env,
     get allow_rest_authorized(): boolean {
       return allowRestAuthorized;
     },
