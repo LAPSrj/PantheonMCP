@@ -222,6 +222,34 @@ test("personasForCwd filters by cwd", () => {
   expect(a).toEqual(["vellumpike"]);
 });
 
+test("createPersona persists channels[] and remote_control when provided", () => {
+  const persona = createPersona(paths, fixtureInput({
+    channels: ["plugin:foo@core", "plugin:bar@extra"],
+    remote_control: true,
+  }));
+  expect(persona.channels).toEqual(["plugin:foo@core", "plugin:bar@extra"]);
+  expect(persona.remote_control).toBe(true);
+  const reread = readPersona(paths, "vellumpike");
+  expect(reread?.channels).toEqual(["plugin:foo@core", "plugin:bar@extra"]);
+  expect(reread?.remote_control).toBe(true);
+});
+
+test("createPersona omits channels/remote_control fields when not provided", () => {
+  const persona = createPersona(paths, fixtureInput());
+  expect(persona.channels).toBeUndefined();
+  expect(persona.remote_control).toBeUndefined();
+});
+
+test("patchPersona updates channels and remote_control", () => {
+  createPersona(paths, fixtureInput());
+  const updated = patchPersona(paths, "vellumpike", {
+    channels: ["plugin:new@x"],
+    remote_control: true,
+  });
+  expect(updated.channels).toEqual(["plugin:new@x"]);
+  expect(updated.remote_control).toBe(true);
+});
+
 test("stampSummoned increments summon_count + last_summoned_at", () => {
   createPersona(paths, fixtureInput());
   stampSummoned(paths, "vellumpike");

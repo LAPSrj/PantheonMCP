@@ -110,6 +110,18 @@ function validatePersonaShape(p: Record<string, unknown>): string[] {
   if (typeof p.last_summoned_at !== "number" && p.last_summoned_at !== null && p.last_summoned_at !== undefined) {
     errors.push("last_summoned_at must be number | null");
   }
+  if ("channels" in p) {
+    if (!Array.isArray(p.channels)) {
+      errors.push("channels must be an array of strings if present");
+    } else {
+      for (const c of p.channels as unknown[]) {
+        if (typeof c !== "string") errors.push("channels entries must be strings");
+      }
+    }
+  }
+  if ("remote_control" in p && typeof p.remote_control !== "boolean") {
+    errors.push("remote_control must be boolean if present");
+  }
   return errors;
 }
 

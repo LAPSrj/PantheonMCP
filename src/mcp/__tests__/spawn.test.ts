@@ -314,3 +314,125 @@ test("summon sets PANTHEON_WINDOW_NAME + PANTHEON_TAB_INDEX in spawned env", asy
   expect(recorder[0]!.env?.PANTHEON_WINDOW_NAME).toBe("summon-moth-whistle");
   expect(recorder[0]!.env?.PANTHEON_TAB_INDEX).toBe("0");
 });
+
+// --- channels passthrough ---
+
+test("summon: persona.channels forwards as repeated --channels flags", async () => {
+  fixturePersona({ channels: ["plugin:foo@core", "plugin:bar@extra"] });
+  await call("summon", { username: "moth-whistle" });
+  const argv = recorder[0]!.args;
+  // Each channel becomes one --channels <value> pair.
+  const idxs: number[] = [];
+  for (let i = 0; i < argv.length; i++) if (argv[i] === "--channels") idxs.push(i);
+  expect(idxs).toHaveLength(2);
+  expect(argv[idxs[0]! + 1]).toBe("plugin:foo@core");
+  expect(argv[idxs[1]! + 1]).toBe("plugin:bar@extra");
+});
+
+test("summon: per-call args.channels overrides persona.channels entirely", async () => {
+  fixturePersona({ channels: ["plugin:foo@core"] });
+  await call("summon", {
+    username: "moth-whistle",
+    channels: ["plugin:override@x", "plugin:override@y"],
+  });
+  const argv = recorder[0]!.args;
+  // Only the override values appear — persona.channels is NOT additive.
+  expect(argv.filter((a) => a === "--channels")).toHaveLength(2);
+  expect(argv).toContain("plugin:override@x");
+  expect(argv).toContain("plugin:override@y");
+  expect(argv).not.toContain("plugin:foo@core");
+});
+
+test("summon: no channels anywhere → no --channels flags emitted", async () => {
+  fixturePersona();
+  await call("summon", { username: "moth-whistle" });
+  expect(recorder[0]!.args).not.toContain("--channels");
+});
+
+// --- remote_control passthrough ---
+
+test("summon: persona.remote_control true forwards --remote-control with persona.project", async () => {
+  fixturePersona({ remote_control: true });
+  await call("summon", { username: "moth-whistle" });
+  const argv = recorder[0]!.args;
+  const idx = argv.indexOf("--remote-control");
+  expect(idx).toBeGreaterThanOrEqual(0);
+  expect(argv[idx + 1]).toBe("pantheon"); // persona.project from fixture
+});
+
+test("summon: per-call remote_control as string overrides the persona.project default", async () => {
+  fixturePersona({ remote_control: true });
+  await call("summon", { username: "moth-whistle", remote_control: "custom-rc-name" });
+  const argv = recorder[0]!.args;
+  const idx = argv.indexOf("--remote-control");
+  expect(argv[idx + 1]).toBe("custom-rc-name");
+});
+
+test("summon: per-call remote_control: false suppresses the flag even when persona has it", async () => {
+  fixturePersona({ remote_control: true });
+  await call("summon", { username: "moth-whistle", remote_control: false });
+  expect(recorder[0]!.args).not.toContain("--remote-control");
+});
+
+test("summon: per-call remote_control: true on a persona without rc adds the flag", async () => {
+  fixturePersona(); // no remote_control on persona
+  await call("summon", { username: "moth-whistle", remote_control: true });
+  const argv = recorder[0]!.args;
+  const idx = argv.indexOf("--remote-control");
+  expect(argv[idx + 1]).toBe("pantheon");
+});
+
+test("summon: no remote_control anywhere → flag absent", async () => {
+  fixturePersona();
+  await call("summon", { username: "moth-whistle" });
+  expect(recorder[0]!.args).not.toContain("--remote-control");
+});
+
+// --- auto-trust ~/.claude.json ---
+
+test("summon: writes hasTrustDialogAccepted=true to claude_config_path before spawn", async () => {
+  fixturePersona();
+  // Override to a tmp path so we don't touch the user's real config.
+  const cfgPath = path.join(tmpDir, "claude.json");
+  ctx = createContext({
+    paths: ctx.paths,
+    session: ctx.session,
+    watchdog: ctx.watchdog,
+    parent_pid: ctx.parent_pid,
+    platform: ctx.platform,
+    spawn_executor: makeMockExecutor(() => mockStderr),
+    stderr_probe_ms: 5,
+    spawn_env: {} as NodeJS.ProcessEnv,
+    claude_config_path: cfgPath,
+  });
+  const r = await call("summon", { username: "moth-whistle" });
+  expect(r.ok).toBe(true);
+  const trust = r.payload.trust as Record<string, unknown>;
+  expect(trust?.path).toBe(cfgPath);
+  expect(trust?.trusted_now).toBe(true);
+  expect(trust?.trusted_already).toBe(false);
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8")) as Record<string, unknown>;
+  const projects = cfg.projects as Record<string, Record<string, unknown>>;
+  expect(projects["/work/moth"]?.hasTrustDialogAccepted).toBe(true);
+});
+
+test("summon: trust call is idempotent on a second summon to the same cwd", async () => {
+  fixturePersona();
+  const cfgPath = path.join(tmpDir, "claude.json");
+  ctx = createContext({
+    paths: ctx.paths,
+    session: ctx.session,
+    watchdog: ctx.watchdog,
+    parent_pid: ctx.parent_pid,
+    platform: ctx.platform,
+    spawn_executor: makeMockExecutor(() => mockStderr),
+    stderr_probe_ms: 5,
+    spawn_env: {} as NodeJS.ProcessEnv,
+    claude_config_path: cfgPath,
+  });
+  await call("summon", { username: "moth-whistle" });
+  const second = await call("summon", { username: "moth-whistle" });
+  const trust = second.payload.trust as Record<string, unknown>;
+  expect(trust?.trusted_now).toBe(false);
+  expect(trust?.trusted_already).toBe(true);
+});

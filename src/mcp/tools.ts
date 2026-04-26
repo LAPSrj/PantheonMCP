@@ -89,6 +89,17 @@ export const TOOLS: readonly ToolDef[] = [
         owns: { type: "array", items: { type: "string" } },
         mode: { type: "string", enum: ["fresh", "resume"] },
         color: { type: "string", enum: COLOR_ENUM as unknown as string[] },
+        channels: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Plugin channels forwarded to every summon as `--channels <value>`. CLI flag (`--channels`) overrides per-call.",
+        },
+        remote_control: {
+          type: "boolean",
+          description:
+            "When true, every summon forwards `--remote-control \"<persona.project>\"`. CLI flag (`--remote-control` / `--rc`) overrides per-call.",
+        },
         force: { type: "boolean", description: "Override cwd-mismatch + prefix-collision checks." },
         claim_after: {
           type: "boolean",
@@ -157,6 +168,8 @@ export const TOOLS: readonly ToolDef[] = [
         },
         launch_command: { type: "string" },
         launch_args: { type: "array", items: { type: "string" } },
+        channels: { type: "array", items: { type: "string" } },
+        remote_control: { type: "boolean" },
       },
     },
   },
@@ -455,6 +468,20 @@ export const TOOLS: readonly ToolDef[] = [
         resume: { type: "boolean" },
         target: SPAWN_TARGET_SCHEMA,
         rest_timeout: REST_TIMEOUT_SCHEMA,
+        channels: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Per-call override for the persona's `channels` field. Each value forwards as `--channels <value>` to the spawned `claude`.",
+        },
+        remote_control: {
+          oneOf: [
+            { type: "boolean" },
+            { type: "string", description: "Explicit RC name." },
+          ],
+          description:
+            "Per-call override for the persona's `remote_control` field. `true` uses the persona's project as the RC name; pass a string for an explicit name.",
+        },
       },
     },
   },
@@ -472,6 +499,20 @@ export const TOOLS: readonly ToolDef[] = [
         resume: { type: "boolean" },
         target: SPAWN_TARGET_SCHEMA,
         rest_timeout: REST_TIMEOUT_SCHEMA,
+        channels: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Per-call override for the persona's `channels` field. Each value forwards as `--channels <value>` to the spawned `claude`.",
+        },
+        remote_control: {
+          oneOf: [
+            { type: "boolean" },
+            { type: "string", description: "Explicit RC name." },
+          ],
+          description:
+            "Per-call override for the persona's `remote_control` field. `true` uses the persona's project as the RC name; pass a string for an explicit name.",
+        },
       },
     },
   },
@@ -494,6 +535,15 @@ export const TOOLS: readonly ToolDef[] = [
         launch_args: { type: "array", items: { type: "string" } },
         color: { type: "string", enum: COLOR_ENUM as unknown as string[] },
         mode: { type: "string", enum: ["fresh", "resume"] },
+        channels: {
+          type: "array",
+          items: { type: "string" },
+          description: "Initial channels[] persisted on the new persona.",
+        },
+        remote_control: {
+          type: "boolean",
+          description: "Initial remote_control flag persisted on the new persona.",
+        },
         target: SPAWN_TARGET_SCHEMA,
         rest_timeout: REST_TIMEOUT_SCHEMA,
       },
@@ -518,6 +568,15 @@ export const TOOLS: readonly ToolDef[] = [
         launch_args: { type: "array", items: { type: "string" } },
         color: { type: "string", enum: COLOR_ENUM as unknown as string[] },
         mode: { type: "string", enum: ["fresh", "resume"] },
+        channels: {
+          type: "array",
+          items: { type: "string" },
+          description: "Initial channels[] persisted on the new persona.",
+        },
+        remote_control: {
+          type: "boolean",
+          description: "Initial remote_control flag persisted on the new persona.",
+        },
         target: SPAWN_TARGET_SCHEMA,
         rest_timeout: REST_TIMEOUT_SCHEMA,
       },

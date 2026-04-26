@@ -25,11 +25,24 @@ export interface Paths {
    * daemon-tick polls them to drive watchdog resets per §14
    * plugin-mode. */
   sessionsDir: string;
+  /** Default location of the user's `~/.claude.json` config (the file
+   * pantheon writes to auto-trust persona cwds before spawn). When
+   * `PANTHEON_HOME` is set (test sandbox), redirects to
+   * `<PANTHEON_HOME>/.claude.json` so tests can't clobber the real
+   * config. The MCP HandlerContext seeds `claude_config_path` from
+   * this field. */
+  claudeConfigPath: string;
 }
 
 export function resolvePaths(env: NodeJS.ProcessEnv = process.env): Paths {
   const dataRoot = env.PANTHEON_DATA_HOME ?? env.PANTHEON_HOME ?? path.join(xdgDataHome(env), "pantheon");
   const stateRoot = env.PANTHEON_STATE_HOME ?? env.PANTHEON_HOME ?? path.join(xdgStateHome(env), "pantheon");
+  // PANTHEON_CLAUDE_CONFIG > <PANTHEON_HOME>/.claude.json (test sandbox) > real ~/.claude.json
+  const claudeConfigPath =
+    env.PANTHEON_CLAUDE_CONFIG ??
+    (env.PANTHEON_HOME
+      ? path.join(env.PANTHEON_HOME, ".claude.json")
+      : path.join(os.homedir(), ".claude.json"));
   return {
     dataDir: dataRoot,
     stateDir: stateRoot,
@@ -40,6 +53,7 @@ export function resolvePaths(env: NodeJS.ProcessEnv = process.env): Paths {
     daemonPidPath: path.join(stateRoot, "daemon.pid"),
     runtimeDir: path.join(stateRoot, "runtime"),
     sessionsDir: path.join(stateRoot, "sessions"),
+    claudeConfigPath,
   };
 }
 

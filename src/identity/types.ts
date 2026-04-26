@@ -39,6 +39,15 @@ export interface Persona {
    * before any other tool is allowed. Cleared once the agent's first
    * `update_profile` provides all three fields. */
   provisional: boolean;
+  /** Plugin channels to enable for every summon of this persona. Each
+   * value is forwarded to the spawned `claude` as `--channels <value>`.
+   * The CLI flag (`--channels`, repeatable) overrides per-call. */
+  channels?: string[];
+  /** When true, every summon of this persona forwards
+   * `--remote-control "<persona.project>"` to the spawned `claude`.
+   * The CLI flag (`--remote-control` / `--rc [name]`) overrides
+   * per-call. */
+  remote_control?: boolean;
 }
 
 export interface PersonaPatch {
@@ -52,6 +61,8 @@ export interface PersonaPatch {
   session_name?: string | null;
   summon_count?: number;
   provisional?: boolean;
+  channels?: string[];
+  remote_control?: boolean;
 }
 
 export type Platform = "wsl" | "windows" | "mac" | "linux";
@@ -87,6 +98,8 @@ export interface PersonaCreate {
   /** When `provisional: true`, the registry persists the entry but
    * does not require description/expertise/owns. Used by `conjure`. */
   provisional?: boolean;
+  channels?: string[];
+  remote_control?: boolean;
 }
 
 export class IdentityError extends Error {

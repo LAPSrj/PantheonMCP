@@ -143,6 +143,38 @@ after spawn before calling `unref` on the child, so silent failures
 ("pane too small to split", etc.) surface as a warning in the summon
 response.
 
+## Auto-trust `~/.claude.json`
+
+Before every spawn, the summon handler writes the persona's `cwd` into
+the user's `~/.claude.json` `projects` map with
+`hasTrustDialogAccepted: true` (and `hasCompletedOnboarding: true`).
+This skips Claude Code's first-time trust prompt, which would
+otherwise block the spawned session at startup until the user clicks
+"Yes, trust." Idempotent: when the project entry already has
+`hasTrustDialogAccepted: true`, the call is a no-op.
+
+The write goes through `mutateJsonAtomic` (fingerprint-guarded
+mutate-then-rename) so concurrent CC instances reading or writing
+the same file never see a partial JSON document. This matters because
+**Claude Code itself writes `~/.claude.json`** on every CC session;
+clobbering it mid-write would torch other sessions' state.
+
+Path resolution (in order of precedence):
+1. `claude_config_path` field on `HandlerContext` (tests inject directly).
+2. `paths.claudeConfigPath`, which honors:
+   - `PANTHEON_CLAUDE_CONFIG` env override.
+   - `<PANTHEON_HOME>/.claude.json` when `PANTHEON_HOME` is set (test sandbox redirect).
+   - Otherwise `path.join(os.homedir(), ".claude.json")`.
+
+The auto-trust step is **best-effort**: read or write failures land in
+the summon response's `stamp_warnings` array and do not block the
+spawn. The summon response also surfaces a `trust:
+{ path, trusted_now, trusted_already }` block so callers can verify
+which file was touched.
+
+The trust write happens BEFORE `executeSpawnPlan` so the new
+`claude` process finds the trust flag set on its first boot.
+
 ## Failure modes (caller-visible)
 
 The summon handler composes several layers; each can fail
@@ -158,6 +190,7 @@ caller knows which step tripped:
 | `recordSpawn` write failure          | Best-effort: appears in `stamp_warnings` array; spawn succeeds |
 | `stampSummoned` write failure        | Same — best-effort warning                      |
 | `recordExit` write failure on `exit` | Best-effort: `registry_decremented: false` in response |
+| `~/.claude.json` write failure       | Best-effort: appears in `stamp_warnings`; spawn proceeds (user can hit "Yes, trust" manually) |
 
 The best-effort failures (registry / stamps) are deliberate: the tab
 is already open by the time these run. Aborting the spawn would mean

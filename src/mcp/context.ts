@@ -26,6 +26,9 @@ export interface CreateContextOptions {
   spawn_env?: NodeJS.ProcessEnv;
   spawn_metadata?: SpawnMetadata | null;
   chat?: ChatRouter | null;
+  /** Override the path to `~/.claude.json` (for tests). Defaults to
+   * `path.join(os.homedir(), ".claude.json")`. */
+  claude_config_path?: string;
 }
 
 /** Build a runtime context around the four foundation layers. The MCP
@@ -59,6 +62,7 @@ export function createContext(options: CreateContextOptions = {}): HandlerContex
     spawn_env: options.spawn_env ?? process.env,
     spawn_metadata: options.spawn_metadata ?? null,
     chat: options.chat ?? null,
+    claude_config_path: options.claude_config_path ?? paths.claudeConfigPath,
     get chat_agent_id(): string | null {
       return chatAgentId;
     },

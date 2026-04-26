@@ -224,6 +224,8 @@ export function createPersona(
     session_name: null,
     summon_count: 0,
     provisional: input.provisional ?? false,
+    ...(input.channels !== undefined ? { channels: input.channels } : {}),
+    ...(input.remote_control !== undefined ? { remote_control: input.remote_control } : {}),
   };
   writePersona(paths, entry);
   return entry;

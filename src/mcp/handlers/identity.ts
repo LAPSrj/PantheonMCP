@@ -77,6 +77,12 @@ export const register: Handler = async (args, ctx) => {
       ...(asStringArray(args.owns) !== undefined ? { owns: asStringArray(args.owns)! } : {}),
       ...(asString(args.mode) !== undefined ? { mode: asString(args.mode) as never } : {}),
       ...(asString(args.color) !== undefined ? { color: asString(args.color) as never } : {}),
+      ...(asStringArray(args.channels) !== undefined
+        ? { channels: asStringArray(args.channels)! }
+        : {}),
+      ...(asBoolean(args.remote_control) !== undefined
+        ? { remote_control: asBoolean(args.remote_control)! }
+        : {}),
     },
     {
       ...(asBoolean(args.force) !== undefined ? { force: asBoolean(args.force)! } : {}),
@@ -170,6 +176,9 @@ export const update_profile: Handler = async (args, ctx) => {
     patch.launch_args = asStringArray(args.launch_args);
   if (asString(args.mode) !== undefined) patch.mode = asString(args.mode);
   if ("color" in args) patch.color = args.color === null ? null : asString(args.color);
+  if (asStringArray(args.channels) !== undefined) patch.channels = asStringArray(args.channels);
+  if (asBoolean(args.remote_control) !== undefined)
+    patch.remote_control = asBoolean(args.remote_control);
   const updated = patchPersona(ctx.paths, username, patch);
   // Conjure-bootstrap clear: once description / expertise / owns are all
   // supplied, drop the provisional flag.

@@ -50,6 +50,10 @@ export interface HandlerContext {
    * `PANTHEON_TAB_INDEX` from env at boot and stores them here so
    * the `exit` handler can decrement the window registry. */
   spawn_metadata: SpawnMetadata | null;
+  /** Path to the user's `~/.claude.json` config. Used by the summon
+   * handler to auto-trust the persona's cwd before spawn. Defaults to
+   * `path.join(os.homedir(), ".claude.json")`; tests inject a tmp path. */
+  claude_config_path: string;
   /** Chat router instance. `null` when no router is attached to this
    * context (e.g. early bootstrap, identity-only test harnesses). */
   chat: ChatRouter | null;

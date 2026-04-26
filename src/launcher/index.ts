@@ -47,3 +47,5 @@ export {
   type ExecuteResult,
   type ExecuteOptions,
 } from "./spawn.ts";
+
+export { ensureCwdTrusted, type TrustResult } from "./trust.ts";

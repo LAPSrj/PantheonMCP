@@ -5,6 +5,7 @@ import {
   stampSummoned,
 } from "../../identity/index.ts";
 import {
+  ensureCwdTrusted,
   executeSpawnPlan,
   predictNextTabIndex,
   predictPaneCount,
@@ -86,6 +87,25 @@ export async function spawnPersona(
   // Build the exec command from the persona profile.
   const launchCommand = persona.launch_command || "claude";
   const launchArgs = [...(persona.launch_args ?? [])];
+
+  // Channels passthrough — per-call args.channels (when supplied)
+  // overrides persona.channels. Each value becomes one
+  // `--channels <value>` flag on the spawned `claude`.
+  const channelsArg = asStringArray(args.channels);
+  const effectiveChannels = channelsArg ?? persona.channels ?? [];
+  for (const channel of effectiveChannels) {
+    launchArgs.push("--channels", channel);
+  }
+
+  // Remote-control passthrough — per-call args.remote_control overrides
+  // persona.remote_control. `true` (or persona-default) → use persona.project
+  // as the RC name; a string value is taken verbatim. `false` (or omitted
+  // both per-call and on persona) → no flag.
+  const rcResolved = resolveRemoteControl(args.remote_control, persona);
+  if (rcResolved !== null) {
+    launchArgs.push("--remote-control", rcResolved);
+  }
+
   if (resume && persona.resume_session_id) {
     launchArgs.push("--resume", persona.resume_session_id);
   }
@@ -142,6 +162,15 @@ export async function spawnPersona(
   };
 
   const plan = resolveSpawnPlan(spawnArgs, { env: ctx.spawn_env });
+
+  // Best-effort: mark the persona's cwd as trusted in ~/.claude.json
+  // BEFORE spawning so a fresh `claude` launch doesn't block on the
+  // first-time trust prompt. Failures land in stamp_warnings; the spawn
+  // proceeds either way (the user can hit "Yes, trust" manually).
+  const trustResult = ensureCwdTrusted(persona.cwd, {
+    claudeJsonPath: ctx.claude_config_path,
+  });
+
   const exec = await executeSpawnPlan(plan, {
     executor: ctx.spawn_executor,
     stderr_probe_ms: ctx.stderr_probe_ms,
@@ -167,6 +196,7 @@ export async function spawnPersona(
   // spawn — the user already has a tab open. Surface the error in the
   // response if it actually trips.
   const stampWarnings: string[] = [];
+  if (trustResult.warning) stampWarnings.push(trustResult.warning);
   try {
     recordSpawn(ctx.paths, windowName, {
       summoner: summonerHandle ?? null,
@@ -205,6 +235,11 @@ export async function spawnPersona(
     resolved_mode: plan.resolved_mode,
     adapter: plan.adapter,
     rest_timeout: restTimeout,
+    trust: {
+      path: trustResult.path,
+      trusted_now: trustResult.trusted_now,
+      trusted_already: trustResult.trusted_already,
+    },
     ...(plan.downgrade_note ? { note: plan.downgrade_note } : {}),
     ...(exec.stderr_warning ? { spawn_stderr: exec.stderr_warning } : {}),
     ...(stampWarnings.length > 0 ? { stamp_warnings: stampWarnings } : {}),
@@ -216,6 +251,26 @@ function parseRestTimeout(raw: unknown): number | "never" {
   const n = asNumber(raw);
   if (n === undefined) return DEFAULT_REST_TIMEOUT_SECONDS;
   return n;
+}
+
+/** Resolve the effective remote-control name for a spawn.
+ *
+ * Returns the RC name to pass as `--remote-control "<name>"`, or
+ * `null` to omit the flag entirely.
+ *
+ * Resolution order:
+ *   1. Per-call `args.remote_control` is a string → use it.
+ *   2. Per-call `args.remote_control === true` → persona.project.
+ *   3. Per-call `args.remote_control === false` → no flag (explicit off).
+ *   4. Per-call omitted, `persona.remote_control === true` → persona.project.
+ *   5. Otherwise → no flag.
+ */
+function resolveRemoteControl(raw: unknown, persona: Persona): string | null {
+  if (typeof raw === "string" && raw.length > 0) return raw;
+  if (raw === true) return persona.project;
+  if (raw === false) return null;
+  if (persona.remote_control === true) return persona.project;
+  return null;
 }
 
 export const summon: Handler = (args, ctx) => performSummon(args, ctx, { any_project: false });
@@ -266,6 +321,12 @@ async function performConjure(
       : {}),
     ...(asString(args.color) !== undefined ? { color: asString(args.color) as never } : {}),
     ...(asString(args.mode) !== undefined ? { mode: asString(args.mode) as never } : {}),
+    ...(asStringArray(args.channels) !== undefined
+      ? { channels: asStringArray(args.channels)! }
+      : {}),
+    ...(asBoolean(args.remote_control) !== undefined
+      ? { remote_control: asBoolean(args.remote_control)! }
+      : {}),
     provisional: true,
   });
 

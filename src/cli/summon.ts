@@ -41,6 +41,13 @@ interface ParsedArgs {
   rest_timeout?: number | "never";
   resume: boolean;
   prompt?: string;
+  /** Per-call --channels overrides; each value forwards to claude
+   * as `--channels <value>`. Empty array means no override (uses
+   * persona.channels). */
+  channels?: string[];
+  /** Per-call --remote-control / --rc override. `true` uses
+   * persona.project as the RC name; a string is the explicit name. */
+  remote_control?: boolean | string;
 }
 
 export async function runSummon(options: RunSummonOptions): Promise<number> {
@@ -72,6 +79,8 @@ export async function runSummon(options: RunSummonOptions): Promise<number> {
   if (parsed.rest_timeout !== undefined) handlerArgs.rest_timeout = parsed.rest_timeout;
   if (parsed.resume) handlerArgs.resume = parsed.resume;
   if (parsed.prompt !== undefined) handlerArgs.prompt = parsed.prompt;
+  if (parsed.channels !== undefined) handlerArgs.channels = parsed.channels;
+  if (parsed.remote_control !== undefined) handlerArgs.remote_control = parsed.remote_control;
 
   try {
     const result = await spawnPersona(handlerArgs, ctx, persona);
@@ -108,6 +117,8 @@ function parseArgs(argv: string[], stderr: NodeJS.WritableStream): ParsedArgs | 
   let rest_timeout: number | "never" | undefined;
   let resume = false;
   let prompt: string | undefined;
+  const channels: string[] = [];
+  let remote_control: boolean | string | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -188,6 +199,27 @@ function parseArgs(argv: string[], stderr: NodeJS.WritableStream): ParsedArgs | 
           return "error";
         }
         break;
+      case "--channels": {
+        const v = argv[++i];
+        if (v === undefined || v === "" || v.startsWith("--")) {
+          stderr.write("pantheon-summon: --channels requires a value (e.g. plugin:name@marketplace)\n");
+          return "error";
+        }
+        channels.push(v);
+        break;
+      }
+      case "--remote-control":
+      case "--rc": {
+        // Optional value: consume next arg only if it isn't a flag.
+        const next = argv[i + 1];
+        if (next !== undefined && !next.startsWith("--")) {
+          remote_control = next;
+          i++;
+        } else {
+          remote_control = true;
+        }
+        break;
+      }
       default:
         if (a.startsWith("--")) {
           stderr.write(`pantheon-summon: unknown flag '${a}'\n`);
@@ -209,6 +241,8 @@ function parseArgs(argv: string[], stderr: NodeJS.WritableStream): ParsedArgs | 
   const result: ParsedArgs = { username, target, resume };
   if (rest_timeout !== undefined) result.rest_timeout = rest_timeout;
   if (prompt !== undefined) result.prompt = prompt;
+  if (channels.length > 0) result.channels = channels;
+  if (remote_control !== undefined) result.remote_control = remote_control;
   return result;
 }
 
@@ -230,6 +264,8 @@ Flags:
   --rest-timeout <secs|never>   Per-summon auto-rest deadline (≥60s; default 3600)
   --resume                      Use the persona's saved resume_session_id (if any)
   --prompt <text>               Runtime prompt forwarded to the spawned agent
+  --channels <plugin:name@mkt>  Forward as --channels to claude (repeatable; overrides persona.channels)
+  --remote-control [name], --rc Forward as --remote-control to claude. Default name = persona.project.
   --help                        This message
 
 Exit codes:

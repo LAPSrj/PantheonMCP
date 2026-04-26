@@ -215,3 +215,122 @@ test("--target-strict on unsupported mode → exit 1", async () => {
   expect(code).toBe(1);
   expect(stderr.buf).toContain("unsupported_capability");
 });
+
+// --- channels passthrough ---
+
+test("--channels (repeatable) forwards each value as a --channels flag to claude", async () => {
+  seedPersona();
+  await runSummon({
+    args: [
+      "swoopfinch",
+      "--channels",
+      "plugin:foo@core",
+      "--channels",
+      "plugin:bar@extra",
+    ],
+    stdout: new StringSink(),
+    stderr: new StringSink(),
+    paths,
+    spawn_executor: makeMockExecutor(),
+    spawn_env: {} as NodeJS.ProcessEnv,
+  });
+  const argv = recorder[0]!.args;
+  const idxs: number[] = [];
+  for (let i = 0; i < argv.length; i++) if (argv[i] === "--channels") idxs.push(i);
+  expect(idxs).toHaveLength(2);
+  expect(argv[idxs[0]! + 1]).toBe("plugin:foo@core");
+  expect(argv[idxs[1]! + 1]).toBe("plugin:bar@extra");
+});
+
+test("--channels with no value → exit 1", async () => {
+  seedPersona();
+  const stderr = new StringSink();
+  const code = await runSummon({
+    args: ["swoopfinch", "--channels"],
+    stdout: new StringSink(),
+    stderr,
+    paths,
+    spawn_executor: makeMockExecutor(),
+    spawn_env: {} as NodeJS.ProcessEnv,
+  });
+  expect(code).toBe(1);
+  expect(stderr.buf).toContain("--channels requires a value");
+});
+
+// --- remote-control / -rc passthrough ---
+
+test("--rc alone forwards --remote-control with the persona's project as default name", async () => {
+  seedPersona();
+  await runSummon({
+    args: ["swoopfinch", "--rc"],
+    stdout: new StringSink(),
+    stderr: new StringSink(),
+    paths,
+    spawn_executor: makeMockExecutor(),
+    spawn_env: {} as NodeJS.ProcessEnv,
+  });
+  const argv = recorder[0]!.args;
+  const idx = argv.indexOf("--remote-control");
+  expect(idx).toBeGreaterThanOrEqual(0);
+  expect(argv[idx + 1]).toBe("test-block"); // persona.project from seedPersona
+});
+
+test("--remote-control <name> forwards the explicit name", async () => {
+  seedPersona();
+  await runSummon({
+    args: ["swoopfinch", "--remote-control", "my-rc"],
+    stdout: new StringSink(),
+    stderr: new StringSink(),
+    paths,
+    spawn_executor: makeMockExecutor(),
+    spawn_env: {} as NodeJS.ProcessEnv,
+  });
+  const argv = recorder[0]!.args;
+  const idx = argv.indexOf("--remote-control");
+  expect(argv[idx + 1]).toBe("my-rc");
+});
+
+test("--rc followed by another flag treats --rc as boolean (no name eaten)", async () => {
+  seedPersona();
+  await runSummon({
+    args: ["swoopfinch", "--rc", "--prompt", "hi"],
+    stdout: new StringSink(),
+    stderr: new StringSink(),
+    paths,
+    spawn_executor: makeMockExecutor(),
+    spawn_env: {} as NodeJS.ProcessEnv,
+  });
+  const argv = recorder[0]!.args;
+  const idx = argv.indexOf("--remote-control");
+  expect(argv[idx + 1]).toBe("test-block");
+  // --prompt was preserved.
+  expect(argv).toContain("hi");
+});
+
+test("--rc honors persisted persona.remote_control via just running --help on a persona that has it", async () => {
+  // No persona-level set test in CLI suite; covered fully in src/mcp/__tests__/spawn.test.ts.
+  // This one just guarantees CLI flag and persona-default coexist without crashing.
+  createPersona(paths, {
+    username: "rcuser",
+    project: "rc-project",
+    cwd: "/work/rc",
+    platform: "linux",
+    description: "rc default user",
+    expertise: ["x"],
+    owns: ["/repos/rc"],
+    launch_command: "claude",
+    launch_args: [],
+    remote_control: true,
+  });
+  await runSummon({
+    args: ["rcuser"],
+    stdout: new StringSink(),
+    stderr: new StringSink(),
+    paths,
+    spawn_executor: makeMockExecutor(),
+    spawn_env: {} as NodeJS.ProcessEnv,
+  });
+  const argv = recorder[0]!.args;
+  const idx = argv.indexOf("--remote-control");
+  expect(argv[idx + 1]).toBe("rc-project");
+});
