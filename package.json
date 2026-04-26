@@ -6,7 +6,8 @@
   "type": "module",
   "module": "src/index.ts",
   "bin": {
-    "pantheon": "bin/pantheon.js"
+    "pantheon": "bin/pantheon.ts",
+    "pantheon-fetch": "bin/pantheon-fetch.ts"
   },
   "scripts": {
     "test": "bun test",
