@@ -107,6 +107,65 @@ The legacy summon-mcp environment variable is honored:
 
 Per-call `target.mode` always wins over both env vars.
 
+## WSL launch scripts (wt adapter)
+
+When the `wt` adapter spawns into a WSL target (`SpawnArgs.wsl_distro`
+set), it does NOT pass an inline bash payload via `bash -lc '...'`.
+Instead it writes a self-deleting `.sh` script to `os.tmpdir()` and
+invokes:
+
+```
+wsl.exe -d <distro> -- bash -l <script_path>
+```
+
+The script body, in order:
+
+1. `#!/usr/bin/env bash` shebang.
+2. `rm -f -- "$0"` — self-delete on the first executable line. bash
+   keeps the file descriptor open across `unlink`, so the script
+   keeps running normally and `/tmp` doesn't accumulate.
+3. **`export PATH=<summoner's PATH>`** — see the gotcha below.
+4. `export <K>=<V>` for each entry in `args.exec_env`.
+5. `cd <args.cwd> || { error message; sleep 5; exit 1; }` — the
+   `sleep 5` keeps the tab open long enough for the human to read
+   the error before WT closes it.
+6. `exec <args.exec_command> <args.exec_args...>`.
+
+Why a script file (not `bash -lc '<inline>'`):
+
+- **wt.exe parses literal `;` in argv as its own subcommand
+  separator.** A payload like `export A=1; export B=2; cd /work && exec
+  claude` gets split into multiple wt subcommands and emits
+  `0x80070002 file not found` for each fragment. With a script file,
+  argv is just `bash -l <path>` — no shell metacharacters for wt.exe
+  to mis-parse.
+- Same pattern summon-mcp uses across many production summons.
+
+### PATH propagation gotcha (critical, do not remove)
+
+The `export PATH=<summoner's PATH>` line in the script body is
+**load-bearing**. Ubuntu's default `.bashrc` early-bails on
+non-interactive shells (the `case $- in *i*) ...` guard), so `bash -l`
+does NOT initialize `nvm`/`pnpm`/`asdf` shims even though it's a login
+shell. Without the explicit PATH export, the spawned tab opens
+successfully — wt.exe is happy, the user sees a fresh window — and
+then immediately fails with `claude: command not found` once the
+script's `exec` line runs.
+
+This bug class is silent: there's no error during `child_process.spawn`,
+no stderr probe trip, the tab simply dies seconds after appearing. We
+hit it once during initial validation; quibblethorn (summon-mcp owner)
+flagged it from his own production debugging history.
+
+The PATH export precedes the user-supplied `exec_env` exports so
+callers who set `PATH` explicitly in `exec_env` still win.
+
+### Test seam
+
+Set `PANTHEON_WT_SCRIPT_DIR=<dir>` in env to redirect script writes
+out of `os.tmpdir()`. Used by `src/launcher/__tests__/dispatch.test.ts`
+so the suite can inspect produced script content without crawling /tmp.
+
 ## Window registry
 
 Per §11a / §15: `~/.local/state/pantheon/windows.json` tracks named
