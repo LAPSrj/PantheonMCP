@@ -143,6 +143,36 @@ after spawn before calling `unref` on the child, so silent failures
 ("pane too small to split", etc.) surface as a warning in the summon
 response.
 
+## Failure modes (caller-visible)
+
+The summon handler composes several layers; each can fail
+independently. The response shape surfaces failures cleanly so the
+caller knows which step tripped:
+
+| Failure                              | Surfaced as                                    |
+|--------------------------------------|-------------------------------------------------|
+| Target persona not registered        | `IdentityError("not_registered")`               |
+| Cross-project summon without `_any`  | `ToolError("cross_project_blocked")`            |
+| Spawn captures stderr in 200ms probe | `ToolError("spawn_failed")` with stderr text    |
+| `child_process.spawn` itself throws  | `internal_error` (uncaught — extremely rare)    |
+| `recordSpawn` write failure          | Best-effort: appears in `stamp_warnings` array; spawn succeeds |
+| `stampSummoned` write failure        | Same — best-effort warning                      |
+| `recordExit` write failure on `exit` | Best-effort: `registry_decremented: false` in response |
+
+The best-effort failures (registry / stamps) are deliberate: the tab
+is already open by the time these run. Aborting the spawn would mean
+killing a tab the user can already see, which is worse than leaving
+the registry slightly out of sync. The `stamp_warnings` array makes
+the drift visible to the caller; `pantheon doctor` (TODO) will
+surface accumulated drift across runs.
+
+The `recordExit` decrement is the counterbalancing pressure: every
+session that exits via the `exit` tool decrements the registry,
+keeping `tabCount` in sync with the actual open tab count over time.
+Sessions killed externally (closed via the X button, terminal
+crash, etc.) leave drift; the next spawn into the same window
+appends to history without reconciling against external state.
+
 ## TODO
 
 - Implement wezterm / iterm2 / gnome / terminal_app adapters as

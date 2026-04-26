@@ -23,12 +23,14 @@ export interface ServerOptions {
  * any MCP client) over stdio. */
 export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
   const summoner = process.env.PANTHEON_SUMMONER ?? null;
+  const spawnMetadata = readSpawnMetadataFromEnv();
 
   const ctx =
     options.context ??
     createContext({
       summoner_username: summoner,
       scheduleExit: makeRealExitScheduler(process.ppid),
+      spawn_metadata: spawnMetadata,
     });
 
   // Arm the watchdog with the per-summon rest_timeout if our spawner
@@ -108,6 +110,17 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
     cleanup();
     process.exit(0);
   });
+}
+
+function readSpawnMetadataFromEnv() {
+  const windowName = process.env.PANTHEON_WINDOW_NAME;
+  if (!windowName) return null;
+  const tabIndexRaw = process.env.PANTHEON_TAB_INDEX;
+  const tabIndex = tabIndexRaw ? Number(tabIndexRaw) : NaN;
+  return {
+    window_name: windowName,
+    ...(Number.isFinite(tabIndex) ? { tab_index: tabIndex } : {}),
+  };
 }
 
 function readRestTimeoutFromEnv(): number | "never" {

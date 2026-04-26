@@ -6,17 +6,13 @@ import {
 } from "../../identity/index.ts";
 import {
   executeSpawnPlan,
+  predictNextTabIndex,
   recordSpawn,
   resolveSpawnPlan,
   type SpawnArgs,
   type SpawnTarget,
 } from "../../launcher/index.ts";
-import {
-  DEFAULT_REST_TIMEOUT_SECONDS,
-  defaultOnDeadline,
-} from "../../watchdog/index.ts";
-import { stampRested } from "../../identity/index.ts";
-import { Session } from "../../identity/index.ts";
+import { DEFAULT_REST_TIMEOUT_SECONDS } from "../../watchdog/index.ts";
 import {
   asBoolean,
   asNumber,
@@ -93,17 +89,28 @@ async function spawnPersona(
   }
 
   const summonerHandle = ctx.session.claimedUsername ?? ctx.summoner_username;
+  const tabTitle = `${persona.username}${persona.session_name ? ` (${persona.summon_count + 1})` : ""}`;
+  const windowName = target?.window ?? `summon-${persona.username}`;
+  // Predict the tab_index the new spawn will land on so the spawned
+  // MCP server can record it for `exit`-time decrement. Best-effort —
+  // the user can close tabs manually and shift the actual layout.
+  const predictedTabIndex = target?.tab_index ?? predictNextTabIndex(ctx.paths, windowName);
+
   const execEnv: Record<string, string> = {
     PANTHEON_SUMMONED: "1",
     PANTHEON_USERNAME: persona.username,
     ...(summonerHandle ? { PANTHEON_SUMMONER: summonerHandle } : {}),
+    // Informational only per the §14 single-timer rule. The spawned
+    // MCP server reads this to display "rest in Xmin" in its startup
+    // banner; it does NOT arm its own watchdog timer from this value.
+    // Authoritative timer lives in the daemon (this process today;
+    // future dedicated daemon).
     PANTHEON_REST_TIMEOUT: String(restTimeout),
+    PANTHEON_WINDOW_NAME: windowName,
+    PANTHEON_TAB_INDEX: String(predictedTabIndex),
   };
   // Color export so the spawned MCP can echo it via session_info.
   if (persona.color) execEnv.PANTHEON_COLOR = persona.color;
-
-  const tabTitle = `${persona.username}${persona.session_name ? ` (${persona.summon_count + 1})` : ""}`;
-  const windowName = target?.window ?? `summon-${persona.username}`;
 
   const spawnArgs: SpawnArgs = {
     exec_command: launchCommand,
@@ -156,35 +163,12 @@ async function spawnPersona(
     stampWarnings.push(`stamp_summoned: ${(err as Error).message}`);
   }
 
-  // Watchdog: the summon caller asks the daemon to arm a timer for the
-  // *spawned* session. Today (single-process MCP), the spawned MCP
-  // server arms its own watchdog from PANTHEON_REST_TIMEOUT on boot;
-  // we register a tracking entry under the persona handle so peers
-  // can introspect via getWindowState.
-  // (Cross-process watchdog wiring lands when the daemon model lands.)
-  try {
-    const summonedSession = new Session(`spawn:${persona.username}:${exec.pid ?? "unknown"}`, {
-      kind: "claimed_persona",
-      username: persona.username,
-      resting: false,
-    });
-    ctx.watchdog.register({
-      session: summonedSession,
-      rest_timeout: restTimeout,
-      onDeadline: (s) => {
-        defaultOnDeadline(s);
-        if (s.claimedUsername) {
-          try {
-            stampRested(ctx.paths, s.claimedUsername, "auto_rest_timeout", null);
-          } catch {
-            // best-effort
-          }
-        }
-      },
-    });
-  } catch (err) {
-    stampWarnings.push(`watchdog_register: ${(err as Error).message}`);
-  }
+  // §14 single-timer: the summoner does NOT arm a tracking watchdog
+  // here. Two timers in two processes for one logical session is
+  // divergence territory. The spawned MCP server's daemon owns its
+  // own session watchdog; activity flows in via that process's MCP
+  // requests. When the dedicated-daemon model lands, the daemon
+  // takes over both halves and the spawned process drops its timer.
 
   return {
     ok: true,

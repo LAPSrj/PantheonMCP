@@ -44,6 +44,16 @@ export interface HandlerContext {
    * detection is deterministic regardless of the test runner's
    * inherited terminal. */
   spawn_env: NodeJS.ProcessEnv;
+  /** Set when this MCP process was spawned by another agent's
+   * `summon`. The MCP server reads `PANTHEON_WINDOW_NAME` /
+   * `PANTHEON_TAB_INDEX` from env at boot and stores them here so
+   * the `exit` handler can decrement the window registry. */
+  spawn_metadata: SpawnMetadata | null;
+}
+
+export interface SpawnMetadata {
+  window_name: string;
+  tab_index?: number;
 }
 
 export type HandlerResult = unknown;

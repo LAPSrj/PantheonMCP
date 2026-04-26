@@ -81,3 +81,29 @@ export function predictNextTabIndex(
   const state = getWindowState(paths, windowName);
   return state?.tabCount ?? 0;
 }
+
+/** Mark a spawn as ended. Decrements `tabCount` (clamped to 0) so the
+ * registry reflects the current tab count after the user (or `exit`)
+ * closed a tab. The spawn history entry stays in place — it's the
+ * audit trail, not a live count. No-op when no record exists for
+ * this window. */
+export function recordExit(
+  paths: Paths,
+  windowName: string,
+): WindowRecord | null {
+  let updated: WindowRecord | null = null;
+  mutateJsonAtomic<WindowRegistry>(paths.windowsRegistryPath, (current) => {
+    const reg = current ?? emptyRegistry();
+    const prev = reg.windows[windowName];
+    if (!prev) return undefined;
+    updated = {
+      tabCount: Math.max(0, prev.tabCount - 1),
+      tabSpawnHistory: prev.tabSpawnHistory,
+    };
+    return {
+      ...reg,
+      windows: { ...reg.windows, [windowName]: updated },
+    };
+  });
+  return updated;
+}

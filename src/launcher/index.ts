@@ -29,6 +29,7 @@ export {
 export {
   loadRegistry,
   recordSpawn,
+  recordExit,
   getWindowState,
   predictNextTabIndex,
   type WindowRegistry,

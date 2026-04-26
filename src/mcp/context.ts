@@ -3,7 +3,7 @@ import { Session } from "../identity/index.ts";
 import { resolvePaths, type Paths } from "../storage/index.ts";
 import { Watchdog, realScheduler } from "../watchdog/index.ts";
 import { realSpawnExecutor, type SpawnExecutor } from "../launcher/index.ts";
-import type { HandlerContext } from "./types.ts";
+import type { HandlerContext, SpawnMetadata } from "./types.ts";
 
 export interface CreateContextOptions {
   /** Override for tests / sandboxed runs. Defaults to env-resolved paths. */
@@ -23,6 +23,7 @@ export interface CreateContextOptions {
   spawn_executor?: SpawnExecutor;
   stderr_probe_ms?: number;
   spawn_env?: NodeJS.ProcessEnv;
+  spawn_metadata?: SpawnMetadata | null;
 }
 
 /** Build a runtime context around the four foundation layers. The MCP
@@ -53,6 +54,7 @@ export function createContext(options: CreateContextOptions = {}): HandlerContex
     spawn_executor: options.spawn_executor ?? realSpawnExecutor,
     stderr_probe_ms: options.stderr_probe_ms ?? 200,
     spawn_env: options.spawn_env ?? process.env,
+    spawn_metadata: options.spawn_metadata ?? null,
     get allow_rest_authorized(): boolean {
       return allowRestAuthorized;
     },

@@ -1,4 +1,5 @@
 import { stampRested, transitionRestEnter } from "../../identity/index.ts";
+import { recordExit } from "../../launcher/index.ts";
 import {
   DEFAULT_REST_TIMEOUT_SECONDS,
   MIN_REST_TIMEOUT_SECONDS,
@@ -77,10 +78,23 @@ export const exit: Handler = async (args, ctx) => {
   } catch {
     // best-effort
   }
+  // Window registry decrement: when this MCP server was spawned by a
+  // `summon`, drop the tabCount so the registry reflects reality. No-op
+  // for non-summoned sessions (spawn_metadata is null).
+  let registry_decremented = false;
+  if (ctx.spawn_metadata) {
+    try {
+      recordExit(ctx.paths, ctx.spawn_metadata.window_name);
+      registry_decremented = true;
+    } catch {
+      // best-effort
+    }
+  }
   ctx.scheduleExit(Math.max(0, delay), "explicit_exit");
   return {
     ok: true,
     delay_seconds: delay,
+    registry_decremented,
     note: "SIGTERM scheduled. Watchdog cleared. Goodbye.",
   };
 };

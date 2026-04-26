@@ -115,6 +115,34 @@ on `not_registered` the session simply stays at its previous identity
 for confirmation; if §13 grows a different rollback rule, only
 `transitionBecome` changes.
 
+### `provisional`: conjure vs promote
+
+The `provisional` flag fires for `conjure` only — never for `login_promote`.
+The two paths look superficially similar (both create a fresh
+persona) but their semantics diverge:
+
+| Path             | Profile fields at create time | `provisional` |
+|------------------|-------------------------------|---------------|
+| `conjure`        | NOT supplied — the spawned agent calls `update_profile` later. | `true` |
+| `login_promote`  | REQUIRED upfront (`description`, `expertise`, `owns`). | `false` |
+
+Conjure is the "spin up a new helper" path: the summoner provides
+location + project + a runtime prompt, and the new agent fills in
+its own identity. Until the first `update_profile` supplies all three
+of `description` / `expertise` / `owns`, the persona is provisional
+and the daemon's tool gate refuses everything outside the
+identity-completion path. Cleared automatically by `update_profile`.
+
+Promote is the "guest decides to stick around" path: the guest
+already chose their handle and lived in the chat for some time;
+they're now upgrading to a full persona. They provide complete
+profile fields in the `promote` payload so there's no bootstrap gap
+to gate. Q10c was specifically about promote — `provisional: true`
+is NOT applied there.
+
+Don't conflate the two. Conjure → provisional. Promote → not
+provisional.
+
 ### Promote race-loss
 
 `transitionPromote` calls `createPersona` with `force: false`. If a

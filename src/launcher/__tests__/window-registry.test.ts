@@ -7,6 +7,7 @@ import {
   getWindowState,
   loadRegistry,
   predictNextTabIndex,
+  recordExit,
   recordSpawn,
 } from "../window-registry.ts";
 
@@ -61,4 +62,25 @@ test("registry survives a re-load (atomic-rename persistence)", () => {
   recordSpawn(paths, "win", { summoner: null, persona: "v" });
   const reloaded = loadRegistry(paths);
   expect(reloaded.windows.win?.tabCount).toBe(1);
+});
+
+test("recordExit decrements tabCount but preserves history", () => {
+  recordSpawn(paths, "win", { summoner: null, persona: "a" });
+  recordSpawn(paths, "win", { summoner: null, persona: "b" });
+  expect(getWindowState(paths, "win")?.tabCount).toBe(2);
+
+  recordExit(paths, "win");
+  const after = getWindowState(paths, "win");
+  expect(after?.tabCount).toBe(1);
+  // Audit history retained.
+  expect(after?.tabSpawnHistory).toHaveLength(2);
+});
+
+test("recordExit clamps tabCount at 0 and is a no-op for unknown windows", () => {
+  recordSpawn(paths, "win", { summoner: null, persona: "a" });
+  recordExit(paths, "win");
+  recordExit(paths, "win"); // already 0, should not go negative
+  expect(getWindowState(paths, "win")?.tabCount).toBe(0);
+
+  expect(recordExit(paths, "ghost-window")).toBeNull();
 });

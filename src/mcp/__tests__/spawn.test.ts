@@ -275,3 +275,42 @@ test("exit unregisters the watchdog timer", async () => {
   await call("exit", { delay_seconds: 0 });
   expect(ctx.watchdog.inspect("test-session")).toBeNull();
 });
+
+test("exit decrements the window registry when this session was summoned", async () => {
+  // Seed the registry as if this session was just spawned.
+  const { recordSpawn, getWindowState } = await import("../../launcher/index.ts");
+  recordSpawn(ctx.paths, "summon-vellumpike", {
+    summoner: "leandro",
+    persona: "vellumpike",
+    tab_index: 0,
+  });
+  expect(getWindowState(ctx.paths, "summon-vellumpike")?.tabCount).toBe(1);
+
+  // Re-create the context with spawn metadata.
+  ctx = createContext({
+    paths: ctx.paths,
+    session: ctx.session,
+    watchdog: ctx.watchdog,
+    parent_pid: ctx.parent_pid,
+    platform: ctx.platform,
+    spawn_executor: makeMockExecutor(() => mockStderr),
+    stderr_probe_ms: 5,
+    spawn_env: {} as NodeJS.ProcessEnv,
+    spawn_metadata: { window_name: "summon-vellumpike", tab_index: 0 },
+  });
+  const r = await call("exit", { delay_seconds: 0 });
+  expect(r.payload.registry_decremented).toBe(true);
+  expect(getWindowState(ctx.paths, "summon-vellumpike")?.tabCount).toBe(0);
+});
+
+test("exit is a no-op on the registry when this session was not summoned", async () => {
+  const r = await call("exit", { delay_seconds: 0 });
+  expect(r.payload.registry_decremented).toBe(false);
+});
+
+test("summon sets PANTHEON_WINDOW_NAME + PANTHEON_TAB_INDEX in spawned env", async () => {
+  fixturePersona();
+  await call("summon", { username: "moth-whistle" });
+  expect(recorder[0]!.env?.PANTHEON_WINDOW_NAME).toBe("summon-moth-whistle");
+  expect(recorder[0]!.env?.PANTHEON_TAB_INDEX).toBe("0");
+});
