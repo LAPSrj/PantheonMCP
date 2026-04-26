@@ -118,6 +118,30 @@ The test suite covers one example of each class
 (`watchdog.test.ts`'s "isResetTrigger" test). Mirror that pattern
 when adding tools.
 
+## Double-touch (deliberate)
+
+The MCP server's request handler calls `Watchdog.touch(sessionId)` on
+every `CallTool` request — the §14 "every request counts in vanilla
+MCP" rule. The dispatcher ALSO calls `Watchdog.touch(sessionId)` after
+a successful handler call when the tool name is in
+`RESET_TRIGGER_TOOLS`. Both fire on the same successful-tool path; in
+testing this looks like a duplicate touch.
+
+**It's intentional, leave both in place.** The two paths cover
+distinct failure modes:
+
+- The per-request touch handles the raw activity signal — every MCP
+  request counts, even ones that errored.
+- The per-tool-success touch is the explicit-list survival signal:
+  if a future transport (HTTP, gRPC, IPC) wires its own request
+  handler and forgets the per-request touch, the dispatcher's
+  per-tool gate still keeps the watchdog correct.
+
+There's no risk of double-deduction (touch is idempotent on a
+running counter — second call just bumps `last_activity_at` again).
+The only cost is one extra `Date.now()` per successful trigger
+tool, which is irrelevant.
+
 ## Concurrency / leak safety
 
 `touch` always cancels the previous timer before arming a new one
