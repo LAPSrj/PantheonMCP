@@ -98,7 +98,8 @@ test("two processes: register → claim → DM → ask/answer → rest → resum
   const argv = fix.procB.spawned[0]!.args;
   expect(argv).toContain("--resume");
   expect(argv).toContain("session-xyz");
-  expect(argv).toContain("back at it");
+  // Prompt is now bootstrap-wrapped — assert via substring.
+  expect(argv.some((a: string) => a.includes("back at it"))).toBe(true);
   expect(fix.procB.spawned[0]!.env.PANTHEON_USERNAME).toBe("alpha");
 
   // --- Both exit ---

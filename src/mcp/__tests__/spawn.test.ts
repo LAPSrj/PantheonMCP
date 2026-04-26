@@ -108,9 +108,15 @@ test("summon: composes registry → plan → spawn → recordSpawn → stamps", 
   // The mock executor recorded the spawn argv.
   expect(recorder).toHaveLength(1);
   const call0 = recorder[0]!;
-  // generic adapter (no host terminal env): claude --print "do the thing"
+  // generic adapter (no host terminal env): claude --print "<bootstrap + prompt>"
   expect(call0.command).toBe("claude");
-  expect(call0.args).toEqual(["--print", "do the thing"]);
+  expect(call0.args.slice(0, 1)).toEqual(["--print"]);
+  // Last arg is the bootstrap-wrapped prompt; assert both bootstrap markers
+  // and the runtime prompt are embedded.
+  const finalArg = call0.args[call0.args.length - 1] as string;
+  expect(finalArg).toContain("mcp__pantheon__login");
+  expect(finalArg).toContain("moth-whistle");
+  expect(finalArg).toContain("do the thing");
   expect(call0.env?.PANTHEON_SUMMONED).toBe("1");
   expect(call0.env?.PANTHEON_USERNAME).toBe("moth-whistle");
   expect(call0.env?.PANTHEON_REST_TIMEOUT).toBe("3600");
@@ -223,9 +229,14 @@ test("conjure registers a provisional persona then spawns", async () => {
   expect(persona?.project).toBe("pantheon");
   expect(persona?.cwd).toBe("/work/fresh");
 
-  // Spawn argv recorded.
+  // Spawn argv recorded; the prompt is now wrapped in the
+  // provisional-bootstrap, so verify by substring.
   expect(recorder).toHaveLength(1);
-  expect(recorder[0]!.args).toContain("you are a new helper; please update_profile first");
+  const finalArg = recorder[0]!.args[recorder[0]!.args.length - 1] as string;
+  expect(finalArg).toContain("you are a new helper; please update_profile first");
+  // Provisional bootstrap markers.
+  expect(finalArg).toContain("PROVISIONAL");
+  expect(finalArg).toContain("mcp__pantheon__update_profile");
 });
 
 test("conjure rejects with cross_project_blocked when caller is in another project", async () => {
@@ -380,6 +391,21 @@ test("summon: per-call remote_control: true on a persona without rc adds the fla
   const argv = recorder[0]!.args;
   const idx = argv.indexOf("--remote-control");
   expect(argv[idx + 1]).toBe("pantheon");
+});
+
+test("summon: bare summon (no --prompt) STILL embeds the bootstrap so the agent logs into chat", async () => {
+  fixturePersona();
+  await call("summon", { username: "moth-whistle" });
+  const finalArg = recorder[0]!.args[recorder[0]!.args.length - 1] as string;
+  expect(finalArg).toContain("mcp__pantheon__login");
+  expect(finalArg).toContain("moth-whistle");
+  // Watcher instruction (the bug semaphoremole reported was that
+  // spawned agents had no instruction to start the watcher).
+  expect(finalArg).toContain("Monitor(...)");
+  // Memory read instruction.
+  expect(finalArg).toContain("mcp__pantheon__get_memory");
+  // No runtime prompt — placeholder appears so the section stays.
+  expect(finalArg).toContain("(no runtime prompt");
 });
 
 test("summon: no remote_control anywhere → flag absent", async () => {

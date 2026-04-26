@@ -303,8 +303,8 @@ test("--rc followed by another flag treats --rc as boolean (no name eaten)", asy
   const argv = recorder[0]!.args;
   const idx = argv.indexOf("--remote-control");
   expect(argv[idx + 1]).toBe("test-block");
-  // --prompt was preserved.
-  expect(argv).toContain("hi");
+  // --prompt 'hi' is now bootstrap-wrapped — assert via substring.
+  expect(argv.some((a) => a.includes("hi"))).toBe(true);
 });
 
 test("--rc honors persisted persona.remote_control via just running --help on a persona that has it", async () => {

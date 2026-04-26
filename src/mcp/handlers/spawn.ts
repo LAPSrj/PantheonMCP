@@ -14,6 +14,7 @@ import {
   type SpawnArgs,
   type SpawnTarget,
 } from "../../launcher/index.ts";
+import { buildSummonBootstrap } from "../../responses/bootstrap.ts";
 import { DEFAULT_REST_TIMEOUT_SECONDS } from "../../watchdog/index.ts";
 import {
   asBoolean,
@@ -109,11 +110,22 @@ export async function spawnPersona(
   if (resume && persona.resume_session_id) {
     launchArgs.push("--resume", persona.resume_session_id);
   }
-  if (prompt) {
-    launchArgs.push(prompt);
-  }
 
   const summonerHandle = ctx.session.claimedUsername ?? ctx.summoner_username;
+
+  // Bootstrap prompt: identity + chat-login + watcher + memory + status.
+  // Without this, spawned agents have no instruction to log into chat or
+  // start the watcher, so they appear in their tab but stay invisible to
+  // peers — broke feature parity with summon-mcp's startup-prompt.
+  // The runtime prompt (if any) appears under a separator after the
+  // bootstrap; an empty runtime prompt yields a placeholder line so the
+  // template's structure stays consistent.
+  const bootstrap = buildSummonBootstrap(persona, {
+    runtime_prompt: prompt,
+    summoner_username: summonerHandle ?? null,
+    rest_timeout: restTimeout,
+  });
+  launchArgs.push(bootstrap);
   const tabTitle = `${persona.username}${persona.session_name ? ` (${persona.summon_count + 1})` : ""}`;
   const windowName = target?.window ?? `summon-${persona.username}`;
   // Predict the tab_index the new spawn will land on so the spawned
