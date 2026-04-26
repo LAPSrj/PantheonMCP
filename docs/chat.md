@@ -356,6 +356,41 @@ in-memory map first (fast), then SQLite presence table
 a target in procB. Falls back to throwing `ask_target_unknown` if
 neither finds a row.
 
+### Poll cadence: 250ms ask vs 500ms watcher (deliberate)
+
+The `ask` poll cadence (250ms inside `pollForAnswer`) is
+deliberately tighter than the `--wait` default of the watcher loop
+(500ms). The two surfaces have different latency budgets:
+
+- **Ask is synchronous**: the asker is blocked waiting for the
+  answer. 250ms vs 500ms latency materially affects ask UX —
+  the difference between "feels snappy" and "feels laggy."
+- **Watcher is streaming**: the receiver isn't blocked; events
+  flow as they happen. The 500ms tail interval is the right
+  trade-off vs SQLite read pressure (chat-mcp's operational
+  sweet spot).
+
+Don't unify them. The `ask` cadence is internal and not exposed
+as a CLI flag (the asker chose `timeout_ms`, not the poll
+granularity). The watcher's `--wait` is exposed because
+operators may want to tune it for their environment.
+
+### Watcher cursor: in-memory only
+
+The watcher loop's cursor (`lastSeq`) lives in-memory in the
+`bin/pantheon-fetch.ts` process. Restart the watcher and it
+re-reads `MAX(seq)` from messages, picking up from "now" onward
+with no replay. This is **separate from the `chat_cursor` column
+on subscribers** (which `check_messages` uses).
+
+A `preserve_cursor` opt-out flag for watcher reconnect (resume
+from prior cursor instead of jumping to MAX) is a watcher-internal
+concept and is **not surfaced as a tool API** — the watcher
+process owns its lifecycle, and reconnect-from-blip cases that
+want resume semantics use the `chat_cursor` path via
+`check_messages`. Two different surfaces, two different cursor
+strategies — by design.
+
 ## Watcher loop (`bin/pantheon-fetch.ts`)
 
 The watcher is pantheon's analogue to chat-mcp's
