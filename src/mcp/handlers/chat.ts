@@ -179,6 +179,13 @@ export const logout: Handler = async (_args, ctx) => {
   return { ok: true, removed: removed?.username ?? null };
 };
 
+/** Bumped from 15→60min per Yapsmith's revamp: the staleness nudge
+ * was the engine of the over-broadcast pattern (52 status updates
+ * from one agent in ~31h, ~5min cadence). Lengthening the threshold
+ * + softening the copy is the lever — peers see current status via
+ * `list_agents` so the nudge isn't load-bearing for visibility. */
+export const STATUS_STALE_MS = 60 * 60 * 1000;
+
 export const send_message: Handler = async (args, ctx) => {
   const router = requireRouter(ctx);
   const agentId = requireAgentId(ctx);
@@ -196,11 +203,30 @@ export const send_message: Handler = async (args, ctx) => {
     ...(target !== undefined ? { target } : {}),
     ...(replyTo !== undefined ? { reply_to: replyTo } : {}),
   });
+  // Optional staleness nudge — surfaces in the response `hints` field
+  // when the sender's status hasn't changed in STATUS_STALE_MS. Copy
+  // is intentionally TOPIC-vs-sub-task framing so it doesn't pull
+  // agents into the per-step changelog anti-pattern the original
+  // 15-min nudge produced.
+  const hints: string[] = [];
+  const me = router.getByAgentId(agentId);
+  if (me) {
+    const elapsed = Date.now() - me.status_updated_at;
+    if (elapsed >= STATUS_STALE_MS) {
+      const minutes = Math.round(elapsed / 60_000);
+      hints.push(
+        `Status unchanged for ${minutes}m. Update only if your TOPIC has shifted ` +
+          `('Building auth' → 'Reviewing infra'), not for sub-tasks within the same topic. ` +
+          `Otherwise leave it; peers see it via list_agents.`,
+      );
+    }
+  }
   return {
     ok: true,
     message_id: msg.id,
     seq: msg.seq,
     mentions: msg.mentions,
+    ...(hints.length > 0 ? { hints } : {}),
   };
 };
 
@@ -246,6 +272,12 @@ export const set_mode: Handler = async (args, ctx) => {
   return { mode };
 };
 
+/** 10-minute topic cooldown — per Yapsmith's chat-mcp revamp,
+ * back-to-back status changes are rejected unless `confirmed: true`.
+ * The rejection is the prompt to re-evaluate ("topic shift or
+ * sub-task?") rather than a hard ban. */
+export const STATUS_TOPIC_COOLDOWN_MS = 10 * 60 * 1000;
+
 export const update_status: Handler = async (args, ctx) => {
   const router = requireRouter(ctx);
   const agentId = requireAgentId(ctx);
@@ -253,20 +285,49 @@ export const update_status: Handler = async (args, ctx) => {
   const status = asString(args.status);
   const project = asString(args.project);
   const username = asString(args.username);
+  const confirmed = asBoolean(args.confirmed) ?? false;
   if (status !== undefined) patch.status = status;
   if (project !== undefined) patch.project = project;
   if (username !== undefined) patch.username = username;
+
+  // Topic-cooldown gate: when the caller is changing status (not just
+  // renaming/switching project, not idempotent, and there was a prior
+  // user-set status to begin with), reject if the prior status was
+  // set within the cooldown window. `confirmed: true` bypasses
+  // ("I read the rejection and this really IS a topic shift").
+  // Empty prev.status (login-default) skips — the first real status
+  // is never a "rapid re-update."
+  if (status !== undefined && !confirmed) {
+    const prev = router.getByAgentId(agentId);
+    if (prev && prev.status !== "" && prev.status !== status) {
+      const elapsed = Date.now() - prev.status_updated_at;
+      if (elapsed < STATUS_TOPIC_COOLDOWN_MS) {
+        const remaining = STATUS_TOPIC_COOLDOWN_MS - elapsed;
+        const elapsedMin = Math.round(elapsed / 60_000);
+        const remainingSec = Math.round(remaining / 1000);
+        throw new ToolError(
+          "topic_cooldown_active",
+          `topic_cooldown_active: status was last updated ${elapsedMin}m ago. ` +
+            `update_status is for TOPIC shifts (e.g., "Building auth" → "Reviewing infra"), ` +
+            `not for sub-tasks within the same topic. If this really is a new topic, ` +
+            `re-call with confirmed:true. Otherwise leave the previous status — peers see it ` +
+            `via list_agents. Cooldown ends in ~${remainingSec}s.`,
+          {
+            previous_status: prev.status,
+            previous_status_updated_at: prev.status_updated_at,
+            cooldown_remaining_ms: remaining,
+          },
+        );
+      }
+    }
+  }
+
   const sub = router.update(agentId, patch);
+  // Per Yapsmith's revamp: do NOT addMessage(system_kind: "status_update")
+  // here. Status changes accumulate via markStatusChanged and get
+  // batched into the periodic status_digest sweep (daemon-tick).
   if (patch.status !== undefined) {
-    router.addMessage({
-      from_agent_id: "system",
-      scope: "project",
-      project: sub.project,
-      text: `${sub.username}: ${sub.status}`,
-      system: true,
-      system_kind: "status_update",
-      system_actor: sub.username,
-    });
+    router.markStatusChanged(agentId);
   }
   return {
     username: sub.username,

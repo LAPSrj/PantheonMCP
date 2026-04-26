@@ -8,6 +8,7 @@ export type SystemKind =
   | "rename"
   | "project_change"
   | "status_update"
+  | "status_digest"
   | "keepalive"
   | "promotion"
   | "handle_recycled"

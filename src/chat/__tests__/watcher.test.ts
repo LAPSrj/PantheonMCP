@@ -180,6 +180,32 @@ test("formatBatch: silent events flushed before a directed message", () => {
   expect(events[2]!.line).toContain("<silent-event");
 });
 
+test("formatBatch: status_digest gets [no reply] tag and `· status_digest` label, NOT silent-event wrapped", () => {
+  // Per Yapsmith's revamp: status_digest is itself a digest, so it
+  // does NOT get the silent-event wrapping (would be double-batching)
+  // and the priority tag is forced to [no reply] (ambient).
+  persistMessage(db, msg({
+    id: "sd",
+    seq: 1,
+    from_agent_id: "system",
+    scope: "dm",
+    target: "vellumpike",
+    text: "status_digest — 1 agent changed status\n[pantheon]\n  alpha — deep work",
+    system: true,
+    system_kind: "status_digest" as SystemKind,
+  }));
+  const events = tailOnce({ db, receiver: me, since_seq: 0 });
+  expect(events).toHaveLength(1);
+  const line = events[0]!.line;
+  expect(line).toContain("[no reply]");
+  expect(line).toContain("· status_digest");
+  expect(line).toContain("alpha — deep work");
+  expect(line).not.toContain("<silent-event");
+  // Despite being scope=dm to me, the tag is NOT [likely reply]
+  // (which is what a regular DM would get) — status_digest overrides.
+  expect(line).not.toContain("[likely reply]");
+});
+
 // --- readMaxSeq ---
 
 test("readMaxSeq returns the largest seq, or 0 when empty", () => {

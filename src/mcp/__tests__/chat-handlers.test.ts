@@ -273,10 +273,126 @@ test("set_mode flips delivery mode", async () => {
   expect(ctx.chat?.getByAgentId(ctx.chat_agent_id!)?.mode).toBe("quiet");
 });
 
-test("update_status updates status + emits status_update system event", async () => {
+test("update_status updates status BUT does NOT broadcast per-event (status_digest takes over)", async () => {
+  // Per Yapsmith's revamp: per-event status_update messages are
+  // dropped in favor of periodic batched status_digest sweeps.
   await call("login", { username: "alpha", project: "X", transient: false });
   const peer = ctx.chat!.add({ username: "beta", project: "X", transient: false });
+  const peerCursorBefore = ctx.chat!.takeMessages(peer.agent_id).messages.length;
   await call("update_status", { status: "deep work" });
   const taken = ctx.chat!.takeMessages(peer.agent_id);
-  expect(taken.messages.find((m) => m.system_kind === "status_update")?.text).toContain("deep work");
+  // No status_update system message in the peer's stream — the change
+  // accumulated into the digest queue instead.
+  expect(taken.messages.some((m) => m.system_kind === "status_update")).toBe(false);
+  void peerCursorBefore;
+  // Subscriber state DID update.
+  expect(ctx.chat!.getByUsername("alpha")?.status).toBe("deep work");
+});
+
+test("update_status: 10-min topic cooldown rejects rapid re-updates without confirmed:true", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  // First status set OK.
+  const r1 = await call("update_status", { status: "Building auth" });
+  expect(r1.ok).toBe(true);
+  // Second change immediately after — should reject.
+  const r2 = await call("update_status", { status: "Wrote login form" });
+  expect(r2.ok).toBe(false);
+  expect(r2.payload.error).toBe("topic_cooldown_active");
+  expect(r2.payload.message).toContain("topic_cooldown_active");
+  expect(r2.payload.previous_status).toBe("Building auth");
+  expect(typeof r2.payload.cooldown_remaining_ms).toBe("number");
+  // Subscriber state didn't change.
+  expect(ctx.chat!.getByUsername("alpha")?.status).toBe("Building auth");
+});
+
+test("update_status: confirmed:true bypasses the cooldown for genuine topic shifts", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  await call("update_status", { status: "Building auth" });
+  const r = await call("update_status", { status: "Reviewing infra", confirmed: true });
+  expect(r.ok).toBe(true);
+  expect(ctx.chat!.getByUsername("alpha")?.status).toBe("Reviewing infra");
+});
+
+test("update_status: idempotent calls (same status) bypass the cooldown", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  await call("update_status", { status: "Building auth" });
+  const r = await call("update_status", { status: "Building auth" });
+  expect(r.ok).toBe(true);
+});
+
+test("update_status: project/username-only changes (no status field) bypass the cooldown", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  await call("update_status", { status: "Building auth" });
+  const r = await call("update_status", { project: "Y" });
+  expect(r.ok).toBe(true);
+  expect(ctx.chat!.getByUsername("alpha")?.project).toBe("Y");
+});
+
+test("status digest: sweepStatusDigest emits a per-recipient DM to non-dm/non-quiet peers", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  // Peers: one in `all` mode, one in `project` mode, one in `dm`
+  // mode (excluded), one in `quiet` mode (excluded).
+  const allPeer = ctx.chat!.add({ username: "betauser", project: "X", transient: false, mode: "all" });
+  const projectPeer = ctx.chat!.add({ username: "gammaer", project: "X", transient: false, mode: "project" });
+  const dmPeer = ctx.chat!.add({ username: "deltauser", project: "X", transient: false, mode: "dm" });
+  const quietPeer = ctx.chat!.add({ username: "epsiloner", project: "X", transient: false, mode: "quiet" });
+  // Snapshot cursors so we only count digest messages.
+  for (const p of [allPeer, projectPeer, dmPeer, quietPeer]) {
+    ctx.chat!.takeMessages(p.agent_id);
+  }
+  // Trigger a status change.
+  await call("update_status", { status: "deep work" });
+  // Sweep.
+  const dispatched = ctx.chat!.sweepStatusDigest();
+  // 2 recipients (all + project); dm + quiet excluded.
+  expect(dispatched).toBe(2);
+  for (const p of [allPeer, projectPeer]) {
+    const taken = ctx.chat!.takeMessages(p.agent_id);
+    const digest = taken.messages.find((m) => m.system_kind === "status_digest");
+    expect(digest).toBeDefined();
+    expect(digest!.text).toContain("status_digest — 1 agent changed status");
+    expect(digest!.text).toContain("alpha");
+    expect(digest!.text).toContain("deep work");
+    expect(digest!.scope).toBe("dm");
+    expect(digest!.target).toBe(p.username);
+  }
+  // dm-mode + quiet-mode peers DID NOT get the digest in their stream.
+  for (const p of [dmPeer, quietPeer]) {
+    const taken = ctx.chat!.takeMessages(p.agent_id);
+    expect(taken.messages.some((m) => m.system_kind === "status_digest")).toBe(false);
+  }
+});
+
+test("status digest: empty changed-set is a no-op", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  ctx.chat!.add({ username: "betauser", project: "X", transient: false });
+  expect(ctx.chat!.sweepStatusDigest()).toBe(0);
+});
+
+test("status digest: clears the changed-agent set so the next sweep doesn't re-emit", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  ctx.chat!.add({ username: "betauser", project: "X", transient: false });
+  await call("update_status", { status: "deep work" });
+  expect(ctx.chat!.sweepStatusDigest()).toBeGreaterThan(0);
+  expect(ctx.chat!.sweepStatusDigest()).toBe(0); // already drained
+});
+
+test("send_message: 60-min staleness nudge surfaces in hints when status hasn't changed", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  // Force the subscriber's status_updated_at older than the threshold.
+  const me = ctx.chat!.getByUsername("alpha")!;
+  me.status_updated_at = Date.now() - (61 * 60 * 1000);
+  const r = await call("send_message", { text: "hello", scope: "global" });
+  expect(r.ok).toBe(true);
+  const hints = (r.payload.hints as string[] | undefined) ?? [];
+  expect(hints.length).toBe(1);
+  expect(hints[0]).toContain("Status unchanged for");
+  expect(hints[0]).toContain("TOPIC has shifted");
+  expect(hints[0]).toContain("not for sub-tasks");
+});
+
+test("send_message: no staleness nudge when status is fresh", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const r = await call("send_message", { text: "hello", scope: "global" });
+  expect(r.payload.hints).toBeUndefined();
 });

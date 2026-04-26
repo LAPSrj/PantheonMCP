@@ -183,3 +183,57 @@ test("consumeTombstoneAndBroadcast emits a project message + clears tombstone", 
   // No subscriber other than `fresh` exists, so no one receives the
   // broadcast — but the message is recorded and was emitted.
 });
+
+// --- status digest ---
+
+test("renderStatusDigest groups by project, sorts by username, marks mode tags", async () => {
+  const { renderStatusDigest } = await import("../router.ts");
+  const subs = [
+    { username: "zeta", project: "X", mode: "all", status: "deep work" },
+    { username: "alpha", project: "X", mode: "quiet", status: "Reviewing infra" },
+    { username: "beta", project: "Y", mode: "dm", status: "" },
+  ].map((s) => ({
+    agent_id: `id-${s.username}`,
+    transient: false,
+    connected_at: 0,
+    last_seen: 0,
+    status_updated_at: 0,
+    promoted_at: null,
+    ...s,
+  })) as never as Parameters<typeof renderStatusDigest>[0];
+  const out = renderStatusDigest(subs);
+  expect(out).toContain("status_digest — 3 agents changed status");
+  // Project headers present + sorted lexically.
+  const xIdx = out.indexOf("[X]");
+  const yIdx = out.indexOf("[Y]");
+  expect(xIdx).toBeGreaterThanOrEqual(0);
+  expect(yIdx).toBeGreaterThan(xIdx);
+  // Within X: alpha sorted before zeta. Mode tags applied.
+  expect(out).toContain("alpha[Q] — Reviewing infra");
+  expect(out).toContain("zeta — deep work");
+  // Empty status renders as "(empty)" so digests don't look broken.
+  expect(out).toContain("beta[D] — (empty)");
+  // alpha appears before zeta in the X section (alphabetical).
+  expect(out.indexOf("alpha[Q]")).toBeLessThan(out.indexOf("zeta —"));
+});
+
+test("renderStatusDigest singular agent count uses 'agent', not 'agents'", async () => {
+  const { renderStatusDigest } = await import("../router.ts");
+  const subs = [
+    {
+      agent_id: "id-1",
+      username: "alpha",
+      project: "X",
+      mode: "all" as const,
+      status: "deep work",
+      transient: false,
+      connected_at: 0,
+      last_seen: 0,
+      status_updated_at: 0,
+      promoted_at: null,
+    },
+  ];
+  const out = renderStatusDigest(subs);
+  expect(out).toContain("1 agent changed status");
+  expect(out).not.toContain("1 agents");
+});

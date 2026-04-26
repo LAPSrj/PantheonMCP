@@ -35,6 +35,47 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Format the body of a `status_digest` DM. Header line + one line
+ * per changed agent grouped by project. Format chosen for compact
+ * read-at-a-glance — peers shouldn't have to scroll a digest. */
+export function renderStatusDigest(changed: ReadonlyArray<Subscriber>): string {
+  const byProject = new Map<string, Subscriber[]>();
+  for (const s of changed) {
+    const list = byProject.get(s.project) ?? [];
+    list.push(s);
+    byProject.set(s.project, list);
+  }
+  const projects = Array.from(byProject.keys()).sort();
+  const lines: string[] = [
+    `status_digest — ${changed.length} agent${changed.length === 1 ? "" : "s"} changed status since last digest`,
+  ];
+  for (const project of projects) {
+    lines.push(`[${project}]`);
+    const subs = byProject.get(project)!.slice().sort((a, b) =>
+      a.username.localeCompare(b.username),
+    );
+    for (const s of subs) {
+      const tag = modeTagForDigest(s.mode);
+      const status = s.status || "(empty)";
+      lines.push(`  ${s.username}${tag} — ${status}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+function modeTagForDigest(mode: Mode): string {
+  switch (mode) {
+    case "all":
+      return "";
+    case "quiet":
+      return "[Q]";
+    case "project":
+      return "[P]";
+    case "dm":
+      return "[D]";
+  }
+}
+
 const MENTION_RE = /@([a-zA-Z0-9_.\-]+)/g;
 
 export function parseMentions(text: string): string[] {
@@ -77,6 +118,12 @@ export class ChatRouter {
   private readonly emitter = new EventEmitter();
   private readonly pendingAsks = new Map<string, PendingAsk>();
   private seqCounter = 0;
+  /** Agents whose status changed since the last `sweepStatusDigest`.
+   * Per Yapsmith's chat-mcp revamp, we no longer broadcast a
+   * `system_kind: "status_update"` message on every change — they
+   * accumulate here and the daemon-tick batches them into a periodic
+   * `status_digest` DM. */
+  private readonly statusChangedAgents = new Set<string>();
 
   constructor(options: RouterOptions) {
     this.paths = options.paths;
@@ -200,6 +247,69 @@ export class ChatRouter {
     if (!sub) throw new ChatError("not_logged_in", `Agent '${agent_id}' is not logged in.`);
     sub.mode = mode;
     this.presenceUpsert(sub);
+  }
+
+  /** Mark an agent's status as changed since the last digest sweep.
+   * The `update_status` MCP handler calls this instead of immediately
+   * emitting a `system_kind: "status_update"` message — per the
+   * over-broadcast fix, status changes are batched into a periodic
+   * `status_digest` DM. Idempotent (the underlying Set dedupes). */
+  markStatusChanged(agent_id: string): void {
+    if (this.subscribers.has(agent_id)) this.statusChangedAgents.add(agent_id);
+  }
+
+  /** Snapshot the changed-agents set, build a per-recipient
+   * `status_digest` DM, and clear the set. Called by the daemon-tick
+   * (gated by time-since-last per
+   * `PANTHEON_STATUS_DIGEST_MINUTES`). Returns the number of digest
+   * messages dispatched (one per non-dm/non-quiet recipient when
+   * there's at least one change to report; 0 otherwise).
+   *
+   * dm-mode and quiet-mode peers do NOT receive the digest — quiet
+   * drops system events, and dm-mode shouldn't be flooded with
+   * ambient batches. They can still pull current status via
+   * `list_agents`.
+   *
+   * The digest is sent as `scope: "dm"` per recipient with
+   * `system_kind: "status_digest"`. The renderer (`watcher.ts`)
+   * forces `[no reply]` and a `· status_digest` label. */
+  sweepStatusDigest(now: number = this.clock()): number {
+    if (this.statusChangedAgents.size === 0) return 0;
+    // Snapshot + clear so concurrent updates during render don't get
+    // dropped — they'll appear in the NEXT digest.
+    const changedIds = Array.from(this.statusChangedAgents);
+    this.statusChangedAgents.clear();
+    const changedSubs: Subscriber[] = [];
+    for (const id of changedIds) {
+      const s = this.subscribers.get(id);
+      if (s) changedSubs.push(s);
+    }
+    if (changedSubs.length === 0) return 0;
+    let dispatched = 0;
+    for (const recipient of this.subscribers.values()) {
+      // Quiet drops system messages outright. dm-mode peers shouldn't
+      // be flooded with the batched ambient signal — they opted out
+      // of project chatter for a reason.
+      if (recipient.mode === "quiet" || recipient.mode === "dm") continue;
+      // Per-recipient digest excludes the recipient themselves —
+      // they already know their own change. If the only changer was
+      // the recipient, skip emission entirely (no "alpha changed:
+      // alpha" self-noise).
+      const others = changedSubs.filter((s) => s.agent_id !== recipient.agent_id);
+      if (others.length === 0) continue;
+      this.addMessage({
+        from_agent_id: "system",
+        scope: "dm",
+        target: recipient.username,
+        text: renderStatusDigest(others),
+        system: true,
+        system_kind: "status_digest",
+        system_actor: "system",
+      });
+      dispatched++;
+    }
+    void now;
+    return dispatched;
   }
 
   /** Mark a subscriber as freshly promoted from guest to persona. The

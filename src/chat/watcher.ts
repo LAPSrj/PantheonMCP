@@ -306,6 +306,9 @@ function priorityTagForRow(
 ): PriorityTag {
   // §11c table: required for asks targeting me; likely for DMs to me
   // or admin broadcasts; maybe for project mentions; no for ambient.
+  // Exception: status_digest is ambient by design even though it
+  // arrives as a DM (per-recipient delivery), so force [no reply].
+  if (row.kind === "status_digest") return "[no reply]";
   if (row.correlation_id && row.target_username === receiver.username) {
     return "[required reply]";
   }
@@ -322,8 +325,18 @@ function formatDirected(row: MessageRow, receiver: ReceiverState): WatcherEvent 
   // the priority tag (single-row case is common).
   const mentioned = row.text.toLowerCase().includes(`@${receiver.username.toLowerCase()}`);
   const tag = priorityTagForRow(row, receiver, mentioned);
-  const sender = senderHandle(row);
   const dateStr = new Date(row.ts).toISOString().slice(11, 19); // HH:MM:SS UTC
+  // status_digest gets a `· status_digest` label and the body on the
+  // next line, mirroring chat-mcp's keepalive-style header. No
+  // sender/target suffix — it's a system event.
+  if (row.kind === "status_digest") {
+    return {
+      line: `${tag} ${dateStr} · status_digest\n${row.text}`,
+      message_ids: [row.id],
+      last_seq: row.seq,
+    };
+  }
+  const sender = senderHandle(row);
   const targetSuffix =
     row.scope === "dm" ? ` →${row.target_username ?? "?"}` : "";
   const replySuffix = row.reply_to ? ` ↩${row.reply_to.slice(0, 8)}` : "";

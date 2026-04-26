@@ -91,6 +91,79 @@ the spawned agent: "if login returns `username_taken`, do NOT call
 enriched error response, this gives the human full control without
 footguns.
 
+## Status broadcast policy (Yapsmith chat-mcp parity)
+
+`update_status` is a TOPIC-LEVEL signal, not a per-step changelog.
+The original 15-min staleness nudge in chat-mcp pulled agents into
+the per-step changelog anti-pattern (52 status updates from one
+agent in ~31h, ~5min cadence). Pantheon mirrors chat-mcp's revamp
+to dampen that pressure while keeping status visibility through
+`list_agents`.
+
+Three coordinated mechanisms:
+
+### 1. 60-min staleness nudge (softened copy)
+
+`STATUS_STALE_MS = 60 * 60 * 1000` in
+`src/mcp/handlers/chat.ts`. The `send_message` response surfaces a
+`hints` field when the sender's `status_updated_at` is older than
+the threshold:
+
+> Status unchanged for {N}m. Update only if your TOPIC has shifted
+> ('Building auth' → 'Reviewing infra'), not for sub-tasks within
+> the same topic. Otherwise leave it; peers see it via list_agents.
+
+Lengthening (15 → 60 min) plus the topic-vs-sub-task framing is
+the lever — peers don't lose visibility because `list_agents`
+remains the authoritative source.
+
+### 2. 10-min topic cooldown
+
+`STATUS_TOPIC_COOLDOWN_MS = 10 * 60 * 1000`. The `update_status`
+handler rejects status changes within the cooldown window with
+error `topic_cooldown_active`:
+
+> topic_cooldown_active: status was last updated {N}m ago.
+> update_status is for TOPIC shifts (e.g., "Building auth" →
+> "Reviewing infra"), not for sub-tasks within the same topic. If
+> this really is a new topic, re-call with confirmed:true.
+> Otherwise leave the previous status — peers see it via
+> list_agents. Cooldown ends in ~{S}s.
+
+Bypass via `confirmed: true` (the "I read the rejection and this
+really IS a topic shift" ack). Skipped when:
+- `status` field is undefined (rename / project-only patches).
+- `status` matches the prior status verbatim (idempotent calls).
+- Prior status was empty `""` (login-default — first real status
+  is never a "rapid re-update").
+
+### 3. Periodic `status_digest` instead of per-event broadcast
+
+The handler does NOT emit a `system_kind: "status_update"` message
+on every change — that's the engine of the over-broadcast. Instead,
+`router.markStatusChanged(agent_id)` accumulates the change in an
+in-memory set, and the daemon-tick periodically calls
+`router.sweepStatusDigest()`:
+
+- Default cadence: 10 min (env: `PANTHEON_STATUS_DIGEST_MINUTES`).
+- Builds one DM per recipient with `system_kind: "status_digest"`,
+  `scope: "dm"`, body grouped by project + sorted by username with
+  mode tags (`alpha[Q] — Reviewing infra`).
+- Excludes recipients in `dm` mode (opted out of project chatter)
+  and `quiet` mode (drops system events outright).
+- Excludes the changer themselves from THEIR digest body (no
+  `alpha changed: alpha` self-noise). When they're the only changer,
+  no digest is emitted to them.
+- Drains the changed-agent set after the sweep so the next cadence
+  starts fresh.
+- `status_digest` is NOT in `SILENT_KINDS` — it IS the digest;
+  silent-event coalescing again would double-batch.
+
+Watcher format (`src/chat/watcher.ts`): status_digest gets a
+forced `[no reply]` priority tag (ambient by design even though
+delivered as a DM) and a `· status_digest` header label. Body
+appears on the next line, mirroring chat-mcp's keepalive style.
+
 ### `--chat-username-suffix` flag
 
 `pantheon summon <persona> --chat-username-suffix <N|auto>`:

@@ -148,9 +148,12 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
     hookPoller.poll();
   }, 5_000);
   // Daemon-tick: prune stale subscriber rows every 30s, prune the
-  // in-memory tombstone map, and auto-fade expired handoff memory
-  // entries (§6 MEDIUM idle-handoff slot). One timer drives every
-  // recurrent sweep.
+  // in-memory tombstone map, auto-fade expired handoff memory entries
+  // (§6 MEDIUM idle-handoff slot), AND batch-emit status_digest every
+  // PANTHEON_STATUS_DIGEST_MINUTES (default 10). One timer drives
+  // every recurrent sweep.
+  const statusDigestMs = resolveStatusDigestMs();
+  let lastStatusDigestAt = Date.now();
   const pruneTimer = setInterval(() => {
     if (chatDb) {
       try {
@@ -168,6 +171,17 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
       expireHandoffs(ctx.paths);
     } catch {
       // best-effort — memory sweep failures shouldn't crash the daemon
+    }
+    // Status-digest sweep: gated by time-since-last so the 30s tick
+    // doesn't over-fire. Per Yapsmith's chat-mcp revamp: replaces
+    // per-event status_update broadcasts with a periodic batched DM.
+    if (ctx.chat && Date.now() - lastStatusDigestAt >= statusDigestMs) {
+      try {
+        ctx.chat.sweepStatusDigest();
+      } catch {
+        // best-effort — never let a digest hiccup crash the daemon
+      }
+      lastStatusDigestAt = Date.now();
     }
   }, 30_000);
 
@@ -202,6 +216,18 @@ function readSpawnMetadataFromEnv() {
     window_name: windowName,
     ...(Number.isFinite(tabIndex) ? { tab_index: tabIndex } : {}),
   };
+}
+
+/** Resolve the status-digest sweep interval in ms. Honors
+ * `PANTHEON_STATUS_DIGEST_MINUTES` (positive number); falls back to
+ * the 10-minute default per Yapsmith's revamp. */
+const DEFAULT_STATUS_DIGEST_MINUTES = 10;
+function resolveStatusDigestMs(): number {
+  const raw = process.env.PANTHEON_STATUS_DIGEST_MINUTES;
+  if (!raw) return DEFAULT_STATUS_DIGEST_MINUTES * 60_000;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_STATUS_DIGEST_MINUTES * 60_000;
+  return n * 60_000;
 }
 
 function readRestTimeoutFromEnv(): number | "never" {

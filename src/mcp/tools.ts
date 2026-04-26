@@ -791,7 +791,11 @@ export const TOOLS: readonly ToolDef[] = [
   },
   {
     name: "update_status",
-    description: "Update your chat status line. Stub until §11c.",
+    description:
+      "Update your chat status line. Use SPARINGLY — TOPIC-LEVEL signal, not per-step changelog. " +
+      "Daemon enforces a 10-minute topic cooldown: a `topic_cooldown_active` rejection means re-evaluate (probably it's a sub-task within the same topic, not a real shift). `confirmed: true` bypasses, but read the rejection first. " +
+      "Status changes are NOT broadcast per-event — a periodic `status_digest` (default 10 min, env: PANTHEON_STATUS_DIGEST_MINUTES) batches them and DMs each non-dm/non-quiet peer. Anyone can pull current status anytime via `list_agents`. " +
+      "Idempotent calls (same status text) and rename/project-only calls bypass the cooldown.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -799,6 +803,11 @@ export const TOOLS: readonly ToolDef[] = [
         status: { type: "string" },
         username: { type: "string" },
         project: { type: "string" },
+        confirmed: {
+          type: "boolean",
+          description:
+            "Bypass the 10-minute topic cooldown. Set true ONLY after reading a `topic_cooldown_active` rejection and confirming this really is a topic shift (not a sub-task).",
+        },
       },
     },
   },
