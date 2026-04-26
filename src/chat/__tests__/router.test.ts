@@ -128,11 +128,14 @@ test("ask resolves when the target answers", async () => {
   const askId = incoming[0]!.ask_id!;
   router.answer({ from_agent_id: t.agent_id, correlation_id: askId, text: "noon" });
   const result = await askPromise;
-  expect(result?.text).toBe("noon");
-  expect(result?.from).toBe("target");
+  expect(result.status).toBe("answered");
+  if (result.status === "answered") {
+    expect(result.text).toBe("noon");
+    expect(result.from).toBe("target");
+  }
 });
 
-test("ask resolves null when the target disconnects before answering", async () => {
+test("ask resolves with respondent_disconnected when target leaves before answering", async () => {
   const a = router.add({ username: "asker", project: "p", transient: false });
   const t = router.add({ username: "target", project: "p", transient: false });
   const askPromise = router.ask({
@@ -143,7 +146,10 @@ test("ask resolves null when the target disconnects before answering", async () 
   });
   router.remove(t.agent_id);
   const result = await askPromise;
-  expect(result).toBeNull();
+  expect(result.status).toBe("timeout");
+  if (result.status === "timeout") {
+    expect(result.reason).toBe("respondent_disconnected");
+  }
 });
 
 test("ask refuses guests as targets", () => {

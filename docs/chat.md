@@ -288,6 +288,74 @@ Approved by semaphoremole 2026-04-25 against §12-H ("don't make the
 asker wait forever") — the spirit is satisfied either way; the
 disconnect shape is cleaner.
 
+## Cross-process ask/answer (SQLite poll, no in-memory state)
+
+Pantheon's `ask` and `answer` work cross-process — chat-mcp parity.
+The asker doesn't hold a per-router `pendingAsks` map (which would
+silo asks within one process). Instead:
+
+1. `ask` writes the question as a normal `messages` row with
+   `correlation_id = ask_id` and `target_username = <responder>`.
+2. The asker polls SQLite at the same `--wait` cadence as the
+   watcher (250ms inside the router) for the answer row:
+   `SELECT * FROM messages WHERE correlation_id = ? AND target_username = ?`
+   where the second `?` is the asker's own username.
+3. The poll terminates on:
+   - **Answer arrival** → `{ status: "answered", text, from }` where
+     `from` is resolved from the answer's `from_agent_id` via the
+     subscribers table.
+   - **Timeout** → `{ status: "timeout", reason: "no_response" }`
+     after `timeout_ms` elapses.
+   - **Respondent disconnect** → `{ status: "timeout",
+     reason: "respondent_disconnected" }` when the target's
+     subscribers row vanishes OR `last_heartbeat < now - prune_grace`
+     (60s default — longer than the stale threshold so a late beat
+     doesn't false-positive).
+
+`answer` looks up the original ask row via SQLite (`SELECT
+target_username, from_agent_id FROM messages WHERE
+correlation_id = ? AND target_username = me ORDER BY ts ASC
+LIMIT 1`); validates the answerer is the original target; resolves
+the asker's username from `subscribers`; writes the answer row.
+
+### Why SQLite instead of pendingAsks
+
+- **Cross-process by construction**: the asker's poll reads the
+  same SQLite the answerer's MCP process writes to. No shared
+  memory needed.
+- **Durable through restarts**: the ask + answer are persistent
+  rows. A daemon restart (or asker MCP restart) doesn't lose the
+  ask — though the asker's poll loop is gone, the next caller
+  to `ask` with the same correlation_id (or a watcher) sees the
+  state.
+- **No cleanup required**: there's no in-memory state to leak.
+  The ask + answer rows stay in chat history (per Leandro's
+  "never compacted" rule).
+
+The in-memory `pendingAsks` map is retained only for routers
+without a `db` (test harnesses) — purely a fast-path fallback,
+not the canonical implementation.
+
+### AskResult shape
+
+```ts
+type AskResult =
+  | { status: "answered"; text: string; from: string }
+  | { status: "timeout"; reason: "no_response" | "respondent_disconnected" };
+```
+
+The MCP `ask` handler surfaces this verbatim with an extra
+`target` field on the timeout case so the caller knows who they
+were waiting on.
+
+### Cross-process target lookup
+
+`router.ask` resolves the target via `lookupSubscriberAcross`:
+in-memory map first (fast), then SQLite presence table
+(cross-process). Without this, an asker in procA couldn't find
+a target in procB. Falls back to throwing `ask_target_unknown` if
+neither finds a row.
+
 ## Watcher loop (`bin/pantheon-fetch.ts`)
 
 The watcher is pantheon's analogue to chat-mcp's

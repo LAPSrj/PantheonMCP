@@ -4,6 +4,7 @@ import type { Database } from "bun:sqlite";
 import type { Paths } from "../storage/index.ts";
 import {
   ChatError,
+  type AskResult,
   type Message,
   type MessageInput,
   type Mode,
@@ -18,6 +19,7 @@ import {
 import { TombstoneMap } from "./tombstones.ts";
 import { persistMessage } from "./persistence.ts";
 import {
+  DEFAULT_PRUNE_GRACE_MS,
   DEFAULT_STALE_THRESHOLD_MS,
   advanceChatCursor,
   heartbeat as presenceHeartbeat,
@@ -28,6 +30,10 @@ import {
 } from "./presence.ts";
 import { selectReceivableRows } from "./watcher.ts";
 import type { MessageRow } from "./persistence.ts";
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 const MENTION_RE = /@([a-zA-Z0-9_.\-]+)/g;
 
@@ -473,17 +479,21 @@ export class ChatRouter {
   // Ask / answer
   // -------------------------------------------------------------------- //
 
-  ask(args: {
+  async ask(args: {
     from_agent_id: string;
     target_username: string;
     text: string;
     timeout_ms?: number;
-  }): Promise<{ text: string; from: string; status: "answered" } | null> {
+  }): Promise<AskResult> {
     const sender = this.subscribers.get(args.from_agent_id);
     if (!sender) {
       throw new ChatError("not_logged_in", `Agent '${args.from_agent_id}' is not logged in.`);
     }
-    const target = this.getByUsername(args.target_username);
+    // Cross-process target lookup: a target may live in another
+    // process and be invisible to this router's in-memory map. Look
+    // up via the SQLite presence table when a db is wired so
+    // cross-process asks resolve.
+    const target = this.lookupSubscriberAcross(args.target_username);
     if (!target) {
       throw new ChatError(
         "ask_target_unknown",
@@ -497,7 +507,7 @@ export class ChatRouter {
       );
     }
     const ask_id = randomUUID();
-    const question = this.addMessage({
+    this.addMessage({
       from_agent_id: args.from_agent_id,
       scope: "dm",
       target: args.target_username,
@@ -505,22 +515,106 @@ export class ChatRouter {
       ask_id,
     });
     const timeoutMs = args.timeout_ms ?? 30_000;
-    return new Promise((resolve) => {
+
+    if (this.db) {
+      // Cross-process path: poll the SQLite messages table for the
+      // answer row. The answer message has correlation_id = ask_id
+      // AND target_username = asker_username (since `answer` DMs
+      // the original asker). Returns "no_response" on timeout OR
+      // "respondent_disconnected" when the target's presence row
+      // disappears past the prune grace.
+      return this.pollForAnswer(sender.username, args.target_username, ask_id, timeoutMs);
+    }
+
+    // In-memory fallback (test routers without db) — keep the
+    // pendingAsks map for fast in-process resolution.
+    return new Promise<AskResult>((resolve) => {
       const timeout_handle = setTimeout(() => {
         if (this.pendingAsks.delete(ask_id)) {
-          resolve(null);
+          resolve({ status: "timeout", reason: "no_response" });
         }
       }, timeoutMs);
       this.pendingAsks.set(ask_id, {
         ask_id,
-        question_message_id: question.id,
+        question_message_id: ask_id,
         from_agent_id: args.from_agent_id,
         from_username: sender.username,
         target_username: args.target_username,
-        resolver: resolve,
+        resolver: (answer) =>
+          answer === null
+            ? resolve({ status: "timeout", reason: "respondent_disconnected" })
+            : resolve({ status: "answered", text: answer.text, from: answer.from }),
         timeout_handle,
       });
     });
+  }
+
+  /** Look up a subscriber across processes via the SQLite presence
+   * table when a db is wired; falls back to the in-memory map for
+   * test routers. */
+  private lookupSubscriberAcross(
+    username: string,
+  ): { username: string; transient: boolean } | null {
+    const local = this.getByUsername(username);
+    if (local) return local;
+    if (!this.db) return null;
+    const rows = listActive(this.db, { now: this.clock() });
+    const row = rows.find((r) => r.username === username);
+    return row ? { username: row.username, transient: row.transient } : null;
+  }
+
+  /** §11c cross-process ask/answer poll. Stops on answer arrival,
+   * timeout, or respondent-disconnect (presence row vanished or
+   * stale past the prune grace). */
+  private async pollForAnswer(
+    asker_username: string,
+    target_username: string,
+    ask_id: string,
+    timeout_ms: number,
+  ): Promise<AskResult> {
+    if (!this.db) return { status: "timeout", reason: "no_response" };
+    const startedAt = this.clock();
+    const pollMs = 250;
+    while (this.clock() - startedAt < timeout_ms) {
+      const answer = this.db
+        .query(
+          "SELECT from_agent_id, from_username_inline, text FROM messages " +
+            "WHERE correlation_id = ? AND target_username = ? ORDER BY ts ASC LIMIT 1",
+        )
+        .get(ask_id, asker_username) as
+        | {
+            from_agent_id: string;
+            from_username_inline: string | null;
+            text: string;
+          }
+        | undefined;
+      if (answer) {
+        let fromName = answer.from_username_inline;
+        if (!fromName) {
+          const senderRow = this.db
+            .query("SELECT username FROM subscribers WHERE agent_id = ?")
+            .get(answer.from_agent_id) as { username: string } | undefined;
+          fromName = senderRow?.username ?? `agent:${answer.from_agent_id.slice(0, 8)}`;
+        }
+        return { status: "answered", text: answer.text, from: fromName };
+      }
+      // Check target presence — disappeared past the prune grace
+      // means respondent-disconnected. Use the prune grace (60s) not
+      // the stale threshold (30s) so a late heartbeat doesn't false-
+      // positive disconnect.
+      const targetRow = this.db
+        .query(
+          "SELECT 1 AS x FROM subscribers WHERE username = ? AND last_heartbeat > ?",
+        )
+        .get(target_username, this.clock() - DEFAULT_PRUNE_GRACE_MS) as
+        | { x: number }
+        | undefined;
+      if (!targetRow) {
+        return { status: "timeout", reason: "respondent_disconnected" };
+      }
+      await sleep(pollMs);
+    }
+    return { status: "timeout", reason: "no_response" };
   }
 
   answer(args: {
@@ -532,23 +626,63 @@ export class ChatRouter {
     if (!sub) {
       throw new ChatError("not_logged_in", `Agent '${args.from_agent_id}' is not logged in.`);
     }
-    const ask = this.pendingAsks.get(args.correlation_id);
-    if (!ask) {
+
+    // Cross-process: query SQLite for the original ask row. The ask
+    // has correlation_id = ask_id AND target_username = our handle.
+    let askMeta: { target_username: string; from_agent_id: string } | null = null;
+    if (this.db) {
+      const row = this.db
+        .query(
+          "SELECT target_username, from_agent_id FROM messages " +
+            "WHERE correlation_id = ? AND target_username = ? ORDER BY ts ASC LIMIT 1",
+        )
+        .get(args.correlation_id, sub.username) as
+        | { target_username: string; from_agent_id: string }
+        | undefined;
+      if (row) askMeta = row;
+    }
+    if (!askMeta) {
+      const pending = this.pendingAsks.get(args.correlation_id);
+      if (pending) {
+        askMeta = {
+          target_username: pending.target_username,
+          from_agent_id: pending.from_agent_id,
+        };
+      }
+    }
+    if (!askMeta) {
       throw new ChatError(
         "answer_unknown",
         `No pending ask with correlation_id '${args.correlation_id}'.`,
       );
     }
-    if (ask.target_username !== sub.username) {
+    if (askMeta.target_username !== sub.username) {
       throw new ChatError(
         "answer_unknown",
-        `Ask '${args.correlation_id}' targets '${ask.target_username}', not you ('${sub.username}').`,
+        `Ask '${args.correlation_id}' targets '${askMeta.target_username}', not you ('${sub.username}').`,
+      );
+    }
+
+    // Resolve the asker's username so the answer DM targets them.
+    let askerUsername: string | null = null;
+    const askerLocal = this.subscribers.get(askMeta.from_agent_id);
+    if (askerLocal) askerUsername = askerLocal.username;
+    if (!askerUsername && this.db) {
+      const row = this.db
+        .query("SELECT username FROM subscribers WHERE agent_id = ?")
+        .get(askMeta.from_agent_id) as { username: string } | undefined;
+      askerUsername = row?.username ?? null;
+    }
+    if (!askerUsername) {
+      throw new ChatError(
+        "answer_unknown",
+        `Asker for correlation_id '${args.correlation_id}' is no longer connected.`,
       );
     }
     return this.addMessage({
       from_agent_id: args.from_agent_id,
       scope: "dm",
-      target: ask.from_username,
+      target: askerUsername,
       text: args.text,
       in_reply_to_ask: args.correlation_id,
     });

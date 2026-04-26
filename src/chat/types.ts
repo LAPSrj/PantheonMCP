@@ -147,3 +147,11 @@ export type ChatErrorCode =
   | "respondent_disconnected"
   | "missing_target"
   | "promote_validation_failed";
+
+/** Discriminated outcome of an `ask`. The router used to return
+ * `{text, from} | null`; the new shape distinguishes timeout vs
+ * respondent-disconnect explicitly so the MCP handler doesn't have
+ * to guess. */
+export type AskResult =
+  | { status: "answered"; text: string; from: string }
+  | { status: "timeout"; reason: "no_response" | "respondent_disconnected" };

@@ -154,8 +154,11 @@ test("ask/answer round trip within a single process (router correlation map)", a
   });
 
   const result = await askPromise;
-  expect(result?.text).toBe("pong");
-  expect(result?.from).toBe("betagoblin");
+  expect(result.status).toBe("answered");
+  if (result.status === "answered") {
+    expect(result.text).toBe("pong");
+    expect(result.from).toBe("betagoblin");
+  }
 });
 
 test("watcher loop sees DMs + system events across processes", async () => {

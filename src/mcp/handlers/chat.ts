@@ -169,12 +169,11 @@ export const ask: Handler = async (args, ctx) => {
     text,
     timeout_ms: timeoutMs,
   });
-  if (result === null) {
-    return {
-      status: "timeout",
-      reason: "respondent_disconnected_or_no_response",
-      target,
-    };
+  // AskResult is already a discriminated union — answered vs timeout
+  // (with reason). Surface the shape directly so callers can branch
+  // on `status` + `reason`.
+  if (result.status === "timeout") {
+    return { status: "timeout", reason: result.reason, target };
   }
   return result;
 };
