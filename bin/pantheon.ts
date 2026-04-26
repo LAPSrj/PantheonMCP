@@ -21,6 +21,7 @@ import { runMcpServer } from "../src/mcp/server.ts";
 import { runDoctor, formatDoctorReport } from "../src/cli/doctor.ts";
 import { dumpChat, rowsToJsonl } from "../src/cli/dump-chat.ts";
 import { loadChat } from "../src/cli/load-chat.ts";
+import { runFetch } from "../src/cli/fetch.ts";
 import { validateFile, type ValidateType } from "../src/cli/validate.ts";
 import { EXIT_CODES } from "../src/cli/exit-codes.ts";
 
@@ -78,12 +79,11 @@ async function main(): Promise<void> {
     case "fetch": {
       // Forward to the standalone watcher entry — keeps the existing
       // bin/pantheon-fetch.ts contract while letting `pantheon fetch`
-      // be a discoverable subcommand.
-      const child = Bun.spawn({
-        cmd: ["bun", "run", new URL("./pantheon-fetch.ts", import.meta.url).pathname, ...rest],
-        stdio: ["inherit", "inherit", "inherit"],
-      });
-      const code = await child.exited;
+      // be a discoverable subcommand. Direct in-process call —
+      // no subprocess re-exec; standalone bin/pantheon-fetch.ts
+      // calls into the same `runFetch` so both invocations share
+      // one code path.
+      const code = await runFetch({ args: rest });
       process.exit(code);
     }
 
