@@ -17,6 +17,7 @@ export const HANDLERS: Record<string, Handler> = {
   update_profile: identity.update_profile,
   unregister: identity.unregister,
   list: identity.list,
+  fork: identity.fork,
   session_info: identity.session_info,
 
   // Memory

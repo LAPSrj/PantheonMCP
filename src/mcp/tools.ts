@@ -187,6 +187,36 @@ export const TOOLS: readonly ToolDef[] = [
     },
   },
   {
+    name: "fork",
+    description:
+      "Clone a registered persona into a fresh handle. The new persona " +
+      "inherits the source's profile (description / expertise / owns / " +
+      "launch_command / launch_args / mode / color / platform / project / " +
+      "wsl_distro) but uses the caller-supplied `cwd`. Memory is deep-" +
+      "copied with REGENERATED entry IDs by default (`copy_memory: true`); " +
+      "set `false` for a clean-slate persona with the source's profile " +
+      "only. Forks are snapshots, NOT live mirrors — original and fork " +
+      "mutate independently. Chat history references the original " +
+      "agent_id, so the fork starts with empty chat participation. " +
+      "Errors `not_registered` if `from` doesn't exist; " +
+      "`username_taken_other_cwd` / `username_prefix_collision` if `to` " +
+      "collides; `username_taken` if `to` is currently online in chat.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["from", "to", "cwd"],
+      properties: {
+        from: { type: "string", description: "Source persona handle." },
+        to: { type: "string", description: "New persona handle (must not collide)." },
+        cwd: { type: "string", description: "Working directory for the fork. Required." },
+        copy_memory: {
+          type: "boolean",
+          description: "Default true. Set false for a clean-slate persona with profile only.",
+        },
+      },
+    },
+  },
+  {
     name: "session_info",
     description:
       "Inspect the current session: id, parent pid, platform, claim/guest state, resting flag, summoner, and whether `allow_rest` has been authorized.",

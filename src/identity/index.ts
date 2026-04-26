@@ -41,3 +41,9 @@ export {
   type RegisterOptions,
   type RegisterResult,
 } from "./transitions.ts";
+
+export {
+  forkPersona,
+  type ForkOptions,
+  type ForkResult,
+} from "./fork.ts";

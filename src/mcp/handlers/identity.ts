@@ -1,5 +1,6 @@
 import {
   IdentityError,
+  forkPersona,
   listPersonas,
   patchPersona,
   personasForCwd,
@@ -223,6 +224,37 @@ export const list: Handler = async (args, ctx) => {
       last_rested_at: p.last_rested_at,
     })),
   };
+};
+
+export const fork: Handler = async (args, ctx) => {
+  const from = asStringRequired(args.from, "from");
+  const to = asStringRequired(args.to, "to");
+  const cwd = asStringRequired(args.cwd, "cwd");
+  const copyMemory = asBoolean(args.copy_memory) ?? true;
+
+  // Per §11c: chat-side collision check belongs here in the handler
+  // (ctx.chat exposes the subscribers + tombstones). The pure
+  // forkPersona() runs the registry-side check via createPersona →
+  // prefixCollision; here we cross-check the chat router so we don't
+  // create a registry entry that immediately collides with an
+  // online subscriber under that name.
+  if (ctx.chat) {
+    const live = ctx.chat.getByUsername(to);
+    if (live) {
+      throw new ToolError(
+        "username_taken",
+        `Handle '${to}' is currently held by an online chat agent — choose a different name for the fork.`,
+      );
+    }
+  }
+
+  return forkPersona({
+    paths: ctx.paths,
+    from,
+    to,
+    cwd,
+    copy_memory: copyMemory,
+  });
 };
 
 export const session_info: Handler = async (_args, ctx) => {

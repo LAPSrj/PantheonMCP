@@ -143,6 +143,42 @@ is NOT applied there.
 Don't conflate the two. Conjure → provisional. Promote → not
 provisional.
 
+## Persona forking (§6 MEDIUM)
+
+`forkPersona({ from, to, cwd, copy_memory? })` clones a registered
+persona into a fresh handle. The fork is a **snapshot, not a live
+mirror** — original and fork mutate independently after the call
+returns.
+
+| Inherited from source                                  | Fresh on fork |
+|--------------------------------------------------------|---------------|
+| `project`, `platform`, `wsl_distro`                    | `cwd` (caller-supplied) |
+| `description`, `expertise`, `owns`                     | `registered_at`, `registered_by_pid` |
+| `launch_command`, `launch_args`, `mode`, `color`       | `last_summoned_at` (null), `summon_count` (0) |
+| `provisional` flag                                     | `last_rested_at` (null), `rest_reason` (null), `resume_session_id` (null) |
+
+`copy_memory` defaults `true`. When set, every entry from the
+source's memory store is deep-copied with **regenerated IDs** —
+`appendEntry` is called for each entry in turn, so the slugify
+pass + collision suffix loop ensure independent ID space. Setting
+`false` produces a clean-slate persona with the source's profile
+only.
+
+**Chat history is NOT cloned.** Existing `messages` rows reference
+the original `agent_id`; the fork's chat participation starts
+empty and requires an explicit `login` call. Per §12-H confirmation.
+
+### Collision check
+
+The pure identity-layer `forkPersona` runs the registry-side
+prefix-collision check (via `createPersona`). The MCP `fork`
+handler additionally cross-checks the chat router's subscriber
+map (via `ctx.chat.getByUsername`) so we don't create a registry
+entry that immediately collides with an online subscriber under
+that name. The chat-side check throws `username_taken`; the
+registry-side throws `username_taken_other_cwd` /
+`username_prefix_collision`.
+
 ### Promote race-loss
 
 `transitionPromote` calls `createPersona` with `force: false`. If a
