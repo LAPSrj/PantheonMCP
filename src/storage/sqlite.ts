@@ -5,7 +5,7 @@ import fs from "node:fs";
 /** Bumped when the schema changes. Each `vN` migration runs once and is
  * recorded in `schema_version`. Migrations are idempotent: re-opening an
  * up-to-date DB applies nothing. */
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 /** Migrations indexed by the version they bring the schema to. So
  * `MIGRATIONS[1]` brings a fresh DB from version 0 to version 1. */
@@ -76,6 +76,16 @@ const MIGRATIONS: Record<number, (db: Database) => void> = {
     // The existing idx_messages_ts is per-timestamp; seq is the
     // cursor the watcher tracks across polls.
     db.exec(`CREATE INDEX idx_messages_seq ON messages(seq);`);
+  },
+  4: (db) => {
+    // §11c cross-process check_messages: each subscriber gets a
+    // persistent chat_cursor (last seq consumed). check_messages
+    // pulls rows past the cursor + advances after returning.
+    // Preserves chat-mcp's manual-catch-up semantics in vanilla
+    // MCP cross-process configurations.
+    db.exec(
+      `ALTER TABLE subscribers ADD COLUMN chat_cursor INTEGER NOT NULL DEFAULT 0;`,
+    );
   },
 };
 

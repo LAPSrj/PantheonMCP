@@ -19,11 +19,15 @@ import { TombstoneMap } from "./tombstones.ts";
 import { persistMessage } from "./persistence.ts";
 import {
   DEFAULT_STALE_THRESHOLD_MS,
+  advanceChatCursor,
   heartbeat as presenceHeartbeat,
   listActive,
+  readChatCursor,
   removeSubscriber as presenceRemove,
   upsertSubscriber,
 } from "./presence.ts";
+import { selectReceivableRows } from "./watcher.ts";
+import type { MessageRow } from "./persistence.ts";
 
 const MENTION_RE = /@([a-zA-Z0-9_.\-]+)/g;
 
@@ -327,6 +331,89 @@ export class ChatRouter {
       }
     }
     return msg;
+  }
+
+  /** §11c cross-process catch-up. Reads from SQLite using the
+   * subscriber's persisted `chat_cursor` (preserved across
+   * heartbeats), applies the watcher's same visibility/deliverability
+   * pipeline, and advances the cursor past every row examined (not
+   * just the rows returned, so unfiltered rows aren't re-considered
+   * next call).
+   *
+   * Falls back to the in-memory `takeMessages` path when no db is
+   * wired (test routers). The cross-process consistency only
+   * matters when the db is wired. */
+  checkMessages(agent_id: string, limit = 50): { messages: Message[]; more: boolean } {
+    if (!this.db) return this.takeMessages(agent_id, limit);
+    const sub = this.subscribers.get(agent_id);
+    if (!sub) return { messages: [], more: false };
+
+    const cursor = readChatCursor(this.db, agent_id);
+    // Pull `limit + 1` to detect more-pages without an extra round-trip.
+    // The query already orders by seq ASC so the last row is the
+    // latest examined.
+    const rows = this.db
+      .query("SELECT * FROM messages WHERE seq > ? ORDER BY seq ASC LIMIT ?")
+      .all(cursor, limit + 1) as MessageRow[];
+    if (rows.length === 0) return { messages: [], more: false };
+
+    // Apply the watcher's filter pipeline — same data path so the
+    // streaming watcher and the polling check_messages stay in sync.
+    const filtered = selectReceivableRows({
+      db: this.db,
+      receiver: {
+        agent_id,
+        username: sub.username,
+        project: sub.project,
+        mode: sub.mode,
+      },
+      since_seq: cursor,
+      limit: limit + 1,
+    });
+
+    let returned = filtered;
+    let more = false;
+    if (returned.length > limit) {
+      more = true;
+      returned = returned.slice(0, limit);
+    }
+
+    // Advance cursor past every row examined — including filtered-out
+    // ones — so they're not re-checked next call. The cap is the
+    // largest seq in the raw query, NOT the largest seq returned.
+    const lastExamined = rows[rows.length - 1]!.seq;
+    advanceChatCursor(this.db, agent_id, lastExamined);
+    if (returned.length > 0) sub.last_seen = this.clock();
+
+    const messages = returned.map((r) => this.rowToMessage(r));
+    return { messages, more };
+  }
+
+  /** Convert a SQLite row into a Message. Mentions are reconstructed
+   * by re-parsing the text via the same regex that `addMessage` uses
+   * — cheaper than a per-row mentions JOIN at this point in the call
+   * (the watcher does the JOIN once per batch for delivery filter). */
+  private rowToMessage(row: MessageRow): Message {
+    return {
+      id: row.id,
+      seq: row.seq,
+      ts: row.ts,
+      from_agent_id: row.from_agent_id,
+      from_project: row.project ?? "system",
+      scope: row.scope,
+      ...(row.target_username !== null ? { target: row.target_username } : {}),
+      ...(row.project !== null ? { project: row.project } : {}),
+      text: row.text,
+      mentions: parseMentions(row.text),
+      ...(row.reply_to !== null ? { reply_to: row.reply_to } : {}),
+      ...(row.kind !== null ? { system_kind: row.kind as never, system: true } : {}),
+      ...(row.correlation_id !== null
+        ? row.kind !== null
+          ? {}
+          : { ask_id: row.correlation_id }
+        : {}),
+      from_username_inline: row.from_username_inline,
+    };
   }
 
   takeMessages(agent_id: string, limit = 50): { messages: Message[]; more: boolean } {

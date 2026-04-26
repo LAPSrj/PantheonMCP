@@ -233,7 +233,10 @@ export const check_messages: Handler = async (args, ctx) => {
   const router = requireRouter(ctx);
   const agentId = requireAgentId(ctx);
   const limit = asNumber(args.limit) ?? 50;
-  const result = router.takeMessages(agentId, limit);
+  // §11c cross-process: checkMessages reads SQLite via the persisted
+  // chat_cursor when a db is wired; falls back to the in-memory
+  // recent buffer for in-process-only test routers.
+  const result = router.checkMessages(agentId, limit);
   return {
     count: result.messages.length,
     more: result.more,

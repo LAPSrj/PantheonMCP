@@ -45,6 +45,8 @@ export {
   listActive,
   pruneStale,
   totalSubscribers,
+  readChatCursor,
+  advanceChatCursor,
   DEFAULT_STALE_THRESHOLD_MS,
   DEFAULT_PRUNE_GRACE_MS,
   type PresenceRow,

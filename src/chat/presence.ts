@@ -26,18 +26,36 @@ export interface PresenceRow {
   promoted_at: number | null;
 }
 
-/** Insert-or-replace a subscriber row. Used on `login` and on every
- * heartbeat. `last_heartbeat` is bumped to the current clock. */
+/** Insert-or-update a subscriber row. Used on `login` and on every
+ * heartbeat. `last_heartbeat` is bumped to the current clock.
+ *
+ * `chat_cursor` is **deliberately preserved** across upserts via the
+ * ON CONFLICT clause (it's NOT in the DO UPDATE SET list). Without
+ * this, every heartbeat / setMode / status change would reset the
+ * cursor to 0 and a session would re-receive every message it had
+ * already consumed. New rows start at chat_cursor = 0 (default
+ * column value) so a reconnect under the same handle starts at the
+ * full backlog — matching today's chat-mcp catch-up semantics. */
 export function upsertSubscriber(
   db: Database,
   sub: Subscriber,
   now: number = Date.now(),
 ): void {
   db.run(
-    `INSERT OR REPLACE INTO subscribers (
+    `INSERT INTO subscribers (
        agent_id, username, project, transient, mode, status,
        connected_at, status_updated_at, last_heartbeat, promoted_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(agent_id) DO UPDATE SET
+       username = excluded.username,
+       project = excluded.project,
+       transient = excluded.transient,
+       mode = excluded.mode,
+       status = excluded.status,
+       connected_at = excluded.connected_at,
+       status_updated_at = excluded.status_updated_at,
+       last_heartbeat = excluded.last_heartbeat,
+       promoted_at = excluded.promoted_at`,
     [
       sub.agent_id,
       sub.username,
@@ -62,6 +80,29 @@ export function heartbeat(db: Database, agent_id: string, now: number = Date.now
 /** Remove a subscriber row. Used on `logout`. */
 export function removeSubscriber(db: Database, agent_id: string): void {
   db.run("DELETE FROM subscribers WHERE agent_id = ?", [agent_id]);
+}
+
+/** Read this subscriber's persisted chat_cursor (last seq consumed
+ * by `check_messages`). Returns 0 when no row exists — caller gets
+ * the full backlog on first call after reconnect. */
+export function readChatCursor(db: Database, agent_id: string): number {
+  const row = db
+    .query("SELECT chat_cursor FROM subscribers WHERE agent_id = ?")
+    .get(agent_id) as { chat_cursor: number } | undefined;
+  return row?.chat_cursor ?? 0;
+}
+
+/** Advance the persisted chat_cursor to `seq`. Monotonic — won't
+ * walk backward (the WHERE clause guards against it). */
+export function advanceChatCursor(
+  db: Database,
+  agent_id: string,
+  seq: number,
+): void {
+  db.run(
+    "UPDATE subscribers SET chat_cursor = ? WHERE agent_id = ? AND chat_cursor < ?",
+    [seq, agent_id, seq],
+  );
 }
 
 /** Read all rows whose `last_heartbeat` is fresher than the stale
