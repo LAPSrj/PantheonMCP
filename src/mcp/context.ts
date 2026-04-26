@@ -1,0 +1,72 @@
+import os from "node:os";
+import { Session } from "../identity/index.ts";
+import { resolvePaths, type Paths } from "../storage/index.ts";
+import { Watchdog, realScheduler } from "../watchdog/index.ts";
+import type { HandlerContext } from "./types.ts";
+
+export interface CreateContextOptions {
+  /** Override for tests / sandboxed runs. Defaults to env-resolved paths. */
+  paths?: Paths;
+  /** Pre-existing session (e.g. summoned, identity already known). */
+  session?: Session;
+  /** Pre-existing watchdog. The MCP server constructs one when none is
+   * provided; tests inject a `Watchdog(fakeScheduler)` for determinism. */
+  watchdog?: Watchdog;
+  /** Set when SUMMON_USERNAME (or pantheon equivalent) is in env. */
+  summoner_username?: string | null;
+  parent_pid?: number;
+  platform?: "wsl" | "windows" | "mac" | "linux";
+  /** Default no-op; the stdio server wires the real SIGTERM-based exit. */
+  scheduleExit?: (delaySeconds: number, reason: string) => void;
+  pushNotification?: (text: string) => Promise<void>;
+}
+
+/** Build a runtime context around the four foundation layers. The MCP
+ * server calls this at boot; tests call it with overrides for paths,
+ * watchdog, and exit handlers. */
+export function createContext(options: CreateContextOptions = {}): HandlerContext {
+  const paths = options.paths ?? resolvePaths();
+  const session = options.session ?? new Session(`session-${process.ppid}`);
+  const watchdog = options.watchdog ?? new Watchdog(realScheduler);
+  let allowRestAuthorized = false;
+  return {
+    paths,
+    session,
+    watchdog,
+    summoner_username: options.summoner_username ?? null,
+    parent_pid: options.parent_pid ?? process.ppid,
+    platform: options.platform ?? detectPlatform(),
+    scheduleExit:
+      options.scheduleExit ??
+      ((_delay, _reason) => {
+        // No-op default; MCP server wires the real exit at boot.
+      }),
+    pushNotification:
+      options.pushNotification ??
+      (async (_text) => {
+        // No-op default for non-MCP-attached contexts (tests, scripts).
+      }),
+    get allow_rest_authorized(): boolean {
+      return allowRestAuthorized;
+    },
+    setAllowRest(next: boolean): void {
+      allowRestAuthorized = next;
+    },
+  } as HandlerContext;
+}
+
+function detectPlatform(): "wsl" | "windows" | "mac" | "linux" {
+  if (process.platform === "win32") return "windows";
+  if (process.platform === "darwin") return "mac";
+  if (process.platform === "linux") {
+    // WSL detection: kernel release contains "microsoft".
+    try {
+      const release = os.release().toLowerCase();
+      if (release.includes("microsoft")) return "wsl";
+    } catch {
+      // fall through
+    }
+    return "linux";
+  }
+  return "linux";
+}

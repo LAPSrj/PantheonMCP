@@ -1,0 +1,141 @@
+import {
+  appendEntry,
+  fadeEntry,
+  forgetEntry,
+  getDetails,
+  getEntry,
+  listIndex,
+  recallEntry,
+  renderForPrompt,
+  setMemory,
+  updateEntry,
+  type ListIndexFilter,
+} from "../../memory/index.ts";
+import {
+  asBoolean,
+  asString,
+  asStringRequired,
+  type Handler,
+  ToolError,
+} from "../types.ts";
+
+function targetUsername(args: Record<string, unknown>, claimed: string | null): string {
+  const explicit = asString(args.username);
+  if (explicit) return explicit;
+  if (!claimed) {
+    throw new ToolError("no_persona", "No claimed persona; pass `username` or call `claim` first.");
+  }
+  return claimed;
+}
+
+export const get_memory: Handler = async (args, ctx) => {
+  const username = targetUsername(args, ctx.session.claimedUsername);
+  const includeForgotten = asBoolean(args.include_forgotten) ?? false;
+  const rendered = renderForPrompt(ctx.paths, username, { include_forgotten: includeForgotten });
+  return {
+    username,
+    text: rendered.text,
+    ...(rendered.warning ? { warning: rendered.warning } : {}),
+  };
+};
+
+export const append_memory: Handler = async (args, ctx) => {
+  const claimed = ctx.session.claimedUsername;
+  if (!claimed) {
+    throw new ToolError(
+      "no_persona",
+      "Memory writes require a claimed persona — call `claim` or `manifest` first.",
+    );
+  }
+  const text = asStringRequired(args.text, "text");
+  const summary = asString(args.summary);
+  const details = asString(args.details);
+  const kind = asString(args.kind);
+  const core = asBoolean(args.core);
+  const summonerOverride = asString(args.summoner_username);
+  const summoner = summonerOverride ?? ctx.summoner_username ?? undefined;
+  return appendEntry(ctx.paths, claimed, {
+    text,
+    ...(summary !== undefined ? { summary } : {}),
+    ...(details !== undefined ? { details } : {}),
+    ...(kind !== undefined ? { kind } : {}),
+    ...(core !== undefined ? { core } : {}),
+    ...(summoner !== undefined ? { summoner_username: summoner } : {}),
+  });
+};
+
+export const update_memory: Handler = async (args, ctx) => {
+  const claimed = ctx.session.claimedUsername;
+  if (!claimed) {
+    throw new ToolError("no_persona", "update_memory requires a claimed persona.");
+  }
+  const id = asStringRequired(args.id, "id");
+  const patch: Record<string, unknown> = {};
+  if (asString(args.summary) !== undefined) patch.summary = asString(args.summary);
+  if (asString(args.text) !== undefined) patch.text = asString(args.text);
+  if ("details" in args) patch.details = args.details === null ? null : asString(args.details);
+  if (asString(args.kind) !== undefined) patch.kind = asString(args.kind);
+  if (asString(args.status) !== undefined) patch.status = asString(args.status);
+  if (asBoolean(args.core) !== undefined) patch.core = asBoolean(args.core);
+  return updateEntry(ctx.paths, claimed, id, patch);
+};
+
+export const set_memory: Handler = async (args, ctx) => {
+  const claimed = ctx.session.claimedUsername;
+  if (!claimed) {
+    throw new ToolError("no_persona", "set_memory requires a claimed persona.");
+  }
+  const text = asStringRequired(args.text, "text");
+  const summary = asString(args.summary);
+  return setMemory(ctx.paths, claimed, {
+    text,
+    ...(summary !== undefined ? { summary } : {}),
+  });
+};
+
+export const recall_memory: Handler = async (args, ctx) => {
+  const username = targetUsername(args, ctx.session.claimedUsername);
+  const id = asStringRequired(args.id, "id");
+  return recallEntry(ctx.paths, username, id);
+};
+
+export const fade_memory: Handler = async (args, ctx) => {
+  const claimed = ctx.session.claimedUsername;
+  if (!claimed) {
+    throw new ToolError("no_persona", "fade_memory requires a claimed persona.");
+  }
+  const id = asStringRequired(args.id, "id");
+  return fadeEntry(ctx.paths, claimed, id);
+};
+
+export const forget_memory: Handler = async (args, ctx) => {
+  const claimed = ctx.session.claimedUsername;
+  if (!claimed) {
+    throw new ToolError("no_persona", "forget_memory requires a claimed persona.");
+  }
+  const id = asStringRequired(args.id, "id");
+  return forgetEntry(ctx.paths, claimed, id);
+};
+
+export const list_memory: Handler = async (args, ctx) => {
+  const username = targetUsername(args, ctx.session.claimedUsername);
+  const filter: ListIndexFilter = {};
+  if (asString(args.status) !== undefined) filter.status = asString(args.status) as never;
+  if (asBoolean(args.core) !== undefined) filter.core = asBoolean(args.core)!;
+  if (asString(args.kind) !== undefined) filter.kind = asString(args.kind)!;
+  if (asString(args.since) !== undefined) filter.since = asString(args.since)!;
+  if (asString(args.filter) !== undefined) filter.filter = asString(args.filter)!;
+  const entries = listIndex(ctx.paths, username, filter);
+  return { username, count: entries.length, entries };
+};
+
+export const get_memory_details: Handler = async (args, ctx) => {
+  const username = targetUsername(args, ctx.session.claimedUsername);
+  const id = asStringRequired(args.id, "id");
+  // Verify the entry exists so we surface a friendlier error than "null".
+  const entry = getEntry(ctx.paths, username, id);
+  if (!entry) {
+    throw new ToolError("entry_not_found", `No memory entry '${id}' for '${username}'.`);
+  }
+  return { id, username, details: getDetails(ctx.paths, username, id) };
+};

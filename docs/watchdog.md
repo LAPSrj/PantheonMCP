@@ -95,6 +95,29 @@ wd.register({
 });
 ```
 
+## Adding a new tool
+
+When you add a new MCP tool, you must consciously decide which class
+it belongs to:
+
+1. **Active work signal** → add the name to `RESET_TRIGGER_TOOLS` in
+   `src/watchdog/triggers.ts`. Things like `send_message`,
+   `update_status`, memory writes, identity transitions.
+2. **Pure observation** → add the name to `NON_RESET_TOOLS`. Things
+   like `check_messages`, `list_agents`, `whoami`, registry browses
+   — calls where the agent is being observed (peers / clients
+   querying it) rather than observing.
+3. **Unlisted** → defaults to reset (`isResetTrigger` returns `true`).
+   This is the **fail-open** policy: a forgotten tool over-resets
+   (benign — the agent stays awake longer than strictly needed)
+   instead of under-resetting (the bug §14 was written to fix —
+   actively-working agents getting auto-rested). The default is
+   deliberate; do not change it without a §14 amendment.
+
+The test suite covers one example of each class
+(`watchdog.test.ts`'s "isResetTrigger" test). Mirror that pattern
+when adding tools.
+
 ## Concurrency / leak safety
 
 `touch` always cancels the previous timer before arming a new one
