@@ -215,12 +215,29 @@ auto-mutates" rule. The exception is fine because:
    their content). TTL-driven fades are explicit + opt-in via
    the `expires_at` field.
 
-### Atomicity
+### Atomicity (best-effort, not transactional)
 
-The DM step is best-effort: if the chat router DM fails (target
-offline, no chat session bound), the memory entry is still
-persisted (it's the durable record the future agent will recall).
-Failures surface as a `handoff_warnings` array in the response.
+The DM step is **best-effort**, NOT strict transactional. The
+brainstorm's "atomic with the rest call" wording was overspec
+relative to what's achievable across two storage backends —
+JSON memory file + SQLite chat.db can't be 2PC-coordinated
+without a heavier transaction layer that isn't justified for a
+courtesy notification.
+
+The trade: the **memory entry IS the load-bearing durable
+record** (what the future agent recall_memory's). The chat DM
+is a courtesy notification of "I left you a handoff." If the
+DM fails (target offline, no chat session bound, chat router
+write error), the memory entry still persists and the failure
+surfaces in `handoff_warnings: ["handoff_dm: …"]` in the
+response. The user can re-DM manually if they care, OR the
+target can read the handoff via memory inspection.
+
+If a future requirement actually needs strict atomicity,
+options are: (a) re-implement memory in SQLite to share the
+chat.db transaction, OR (b) introduce a write-ahead log that
+fronts both stores. Both are heavier than the current trade-
+off rewards. Confirmed by semaphoremole 2026-04-25.
 
 ## Memory annotations (§6 MEDIUM)
 
