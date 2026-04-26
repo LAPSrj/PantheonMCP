@@ -1,0 +1,23 @@
+{
+  "_template_meta": {
+    "name": "role-liaison",
+    "description": "Permissions scaffold for a 'liaison' role agent — full chat coordination, memory writes, persona summon/become. No file edits outside its own scratch dirs.",
+    "merge_into": "permissions.allow"
+  },
+  "permissions": {
+    "allow": [
+      "Read(**)",
+      "Edit(/tmp/**)",
+      "Write(/tmp/**)",
+
+      "Bash(bun run /home/leandro/repos/pantheon/bin/pantheon.ts:*)",
+      "Bash(bun run /home/leandro/repos/pantheon/bin/pantheon-fetch.ts:*)",
+
+      "mcp__pantheon__*"
+    ],
+    "deny": [
+      "mcp__pantheon__unregister",
+      "mcp__pantheon__delete_snapshot"
+    ]
+  }
+}

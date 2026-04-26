@@ -1,0 +1,34 @@
+{
+  "_template_meta": {
+    "name": "role-monitor",
+    "description": "Permissions scaffold for a 'monitor' role agent — read-only inspection + chat coordination. No file edits, no shell execution beyond pantheon-fetch.",
+    "merge_into": "permissions.allow"
+  },
+  "permissions": {
+    "allow": [
+      "Read(**)",
+      "Bash(bun run /home/leandro/repos/pantheon/bin/pantheon-fetch.ts:*)",
+      "Bash(bun run /home/leandro/repos/pantheon/bin/pantheon.ts statusline:*)",
+      "Bash(bun run /home/leandro/repos/pantheon/bin/pantheon.ts doctor:*)",
+
+      "mcp__pantheon__whoami",
+      "mcp__pantheon__claim",
+      "mcp__pantheon__session_info",
+      "mcp__pantheon__list",
+      "mcp__pantheon__login",
+      "mcp__pantheon__logout",
+      "mcp__pantheon__send_message",
+      "mcp__pantheon__check_messages",
+      "mcp__pantheon__list_agents",
+      "mcp__pantheon__set_mode",
+      "mcp__pantheon__update_status",
+      "mcp__pantheon__find_role",
+      "mcp__pantheon__get_memory",
+      "mcp__pantheon__list_memory",
+      "mcp__pantheon__recall_memory",
+      "mcp__pantheon__get_memory_details",
+      "mcp__pantheon__rest",
+      "mcp__pantheon__exit"
+    ]
+  }
+}

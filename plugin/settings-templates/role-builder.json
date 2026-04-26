@@ -1,0 +1,26 @@
+{
+  "_template_meta": {
+    "name": "role-builder",
+    "description": "Permissions scaffold for a 'builder' role agent — code-edit + Bash + pantheon MCP. Copy the contents below into your ~/.claude/settings.json under .permissions, merging with existing entries.",
+    "merge_into": "permissions.allow"
+  },
+  "permissions": {
+    "allow": [
+      "Read(**)",
+      "Edit(**)",
+      "Write(**)",
+      "MultiEdit(**)",
+
+      "Bash(bun:*)",
+      "Bash(bun run:*)",
+      "Bash(bun test:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+
+      "mcp__pantheon__*"
+    ]
+  }
+}

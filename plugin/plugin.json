@@ -1,0 +1,57 @@
+{
+  "name": "pantheon",
+  "version": "0.0.1",
+  "description": "Pantheon — coordination layer for AI personas. Persona identity, memory, real-time chat, and session lifecycle in one daemon. CC-side UX layer over the vanilla MCP server.",
+  "homepage": "https://github.com/leandro/pantheon",
+
+  "mcp_servers": {
+    "pantheon": {
+      "command": "bun",
+      "args": ["run", "${PANTHEON_BIN}/pantheon.ts", "serve"],
+      "description": "Vanilla MCP server. Serves the full pantheon tool surface (persona / memory / chat / spawn / lifecycle) over stdio."
+    }
+  },
+
+  "commands_dir": "./commands",
+
+  "statusline": {
+    "command": "bun",
+    "args": ["run", "${PANTHEON_BIN}/pantheon.ts", "statusline"],
+    "description": "One-line summary of connected agents (per-project, asterisks for guests)."
+  },
+
+  "hooks": {
+    "PreToolUse": {
+      "matcher": "*",
+      "command": "bash",
+      "args": ["${PANTHEON_PLUGIN}/hooks/watchdog-reset.sh"],
+      "description": "Per §14: reset the watchdog on every CC tool-use event so plugin-mode gets the richer activity signal vanilla MCP can't see."
+    },
+    "PostToolUse": {
+      "matcher": "color",
+      "command": "bash",
+      "args": ["${PANTHEON_PLUGIN}/hooks/color-binding.sh"],
+      "description": "After /color: persist the new color to the claimed persona via update_profile."
+    },
+    "UserPromptSubmit": {
+      "matcher": "",
+      "command": "bash",
+      "args": ["${PANTHEON_PLUGIN}/hooks/context-pct-nudge.sh"],
+      "description": "Auto-context-percent nudge per §6 HIGH. Emits a chat DM at 70% / 85% / 95% with the recommended action."
+    }
+  },
+
+  "settings_templates_dir": "./settings-templates",
+
+  "env": {
+    "PANTHEON_BIN": "${PANTHEON_HOME}/bin",
+    "PANTHEON_PLUGIN": "${plugin_dir}"
+  },
+
+  "notes": [
+    "Variables: ${PANTHEON_HOME} = pantheon repo root; ${plugin_dir} = this plugin's install dir; ${PANTHEON_BIN} = ${PANTHEON_HOME}/bin.",
+    "Hooks ship as best-effort stubs today — they declare the intent + script entry point. Full daemon-side wiring lands when the §15 singleton daemon ships.",
+    "Settings-templates are install-time scaffolds: copy snippet contents into your ~/.claude/settings.json under the relevant role folder. The plugin does NOT auto-overwrite your existing settings.",
+    "Tab-title-from-status hook is Windows-only (WT/kitty/wezterm adapters); see plugin/hooks/tab-title.sh."
+  ]
+}

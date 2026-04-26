@@ -22,6 +22,7 @@ import { runDoctor, formatDoctorReport } from "../src/cli/doctor.ts";
 import { dumpChat, rowsToJsonl } from "../src/cli/dump-chat.ts";
 import { loadChat } from "../src/cli/load-chat.ts";
 import { runFetch } from "../src/cli/fetch.ts";
+import { runStatusline } from "../src/cli/statusline.ts";
 import { validateFile, type ValidateType } from "../src/cli/validate.ts";
 import { EXIT_CODES } from "../src/cli/exit-codes.ts";
 
@@ -43,6 +44,8 @@ Subcommands:
                          Flags: --dry-run
   validate <file>        Lint a hand-edited persona / memory JSON.
                          Flags: --type persona|memory
+  statusline             Print a one-liner of connected agents.
+                         Used by the CC plugin's statusline hook.
 
   --version              Print version.
   --help, -h             This message.
@@ -130,6 +133,11 @@ async function main(): Promise<void> {
       const code = result.errors.length > 0
         ? EXIT_CODES.SCHEMA_ERROR
         : EXIT_CODES.SUCCESS;
+      process.exit(code);
+    }
+
+    case "statusline": {
+      const code = await runStatusline({ stdin: process.stdin });
       process.exit(code);
     }
 
