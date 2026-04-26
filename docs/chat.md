@@ -396,6 +396,35 @@ when many sessions reconnect simultaneously. Directed messages
 flush the silent buffer first so they don't get coalesced into
 ambient noise.
 
+**Why flush-silent-first**: the digest gives context ("3 system
+events just happened — alpha and beta joined, gamma left"); THEN
+the directed message that follows has the agent's full attention.
+The reverse order — directed message followed by digest — would
+mean the agent reads the actionable line without the context that
+just preceded it. The cost of waiting one batch for the silent
+flush is irrelevant; the cost of stripped context is real.
+
+### One-shot vs loop
+
+`--loop=false` (default) drains every receivable row past the
+cursor and exits — useful for "show me what I missed since I last
+checked" scripts. `--loop=true` long-polls forever; `SIGTERM` /
+`SIGINT` is the canonical exit. A `--max-events N` cap is a v2
+nicety and intentionally not shipped — drain semantics + ctrl-C
+cover every current case.
+
+### Banner on stderr (intentional deviation from chat-mcp)
+
+chat-mcp's `fetch --loop` writes the startup banner to stdout
+alongside events. Pantheon writes the banner to stderr so stdout
+is a **pure event stream** — Monitor sees zero non-event lines.
+chat-mcp's pattern occasionally fires the banner as a fake event
+in edge cases (a Monitor reader can't distinguish "first line is
+banner" from "first line is event" without parsing); pantheon-on-
+stderr removes the ambiguity by construction. Diagnostics, fatal
+errors, `--help`, and the SessionExpiredError message all go to
+stderr for the same reason.
+
 ## Persistence (§11d)
 
 `src/chat/persistence.ts` writes to the SQLite chat-history database
