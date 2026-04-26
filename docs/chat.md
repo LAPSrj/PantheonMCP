@@ -288,6 +288,114 @@ Approved by semaphoremole 2026-04-25 against §12-H ("don't make the
 asker wait forever") — the spirit is satisfied either way; the
 disconnect shape is cleaner.
 
+## Watcher loop (`bin/pantheon-fetch.ts`)
+
+The watcher is pantheon's analogue to chat-mcp's
+`bin.js fetch --loop`: a CLI process that long-polls the chat
+history database, filters per the receiver's mode/scope, formats
+events with priority tags or `<silent-event>` wrappers, and writes
+one line per event to stdout. Stderr is reserved for diagnostics
+(banner, fatal errors) so the Monitor tool can treat stdout as a
+pure event stream.
+
+### CLI
+
+```
+pantheon-fetch --agent-id <id> [--loop] [--wait <ms>] [--mode <m>] [--coalesce <ms>]
+```
+
+| Flag           | Default | Notes |
+|----------------|---------|-------|
+| `--agent-id`   | (req'd) | Subscriber id to receive events for. Comes from `login`'s response. |
+| `--loop`       | off     | Long-poll forever; default is one-shot read. |
+| `--wait`       | 500ms   | Poll interval when no new rows. Min 50ms. |
+| `--mode`       | (none)  | Override receiver's stored mode: `all` / `quiet` / `project` / `dm`. |
+| `--coalesce`   | 1000ms  | Silent-event coalesce window. |
+
+The 500ms `--wait` default is the sweet spot per chat-mcp's
+operational experience: anything <250ms is wasteful (busy SQLite
+loop with no payoff); anything >2s feels laggy in DM threads.
+
+### Watcher cursor strategy
+
+**Cursor is `seq` (integer), not `ts` (wall-clock).** Three reasons:
+
+1. **`ts` collisions** — two messages within the same millisecond
+   share `ts`; the cursor would need an `(ts, id)` tuple with a
+   tiebreak rule. Awkward + fragile.
+2. **`seq` is naturally a single integer**, monotonic, trivially
+   comparable. Matches today's chat-mcp pattern.
+3. **`seq` indexes cleanly** — the v3 schema migration adds
+   `idx_messages_seq` so the watcher's hot query (`WHERE seq > ?
+   ORDER BY seq ASC LIMIT N`) is a covered scan.
+
+But: with multiple MCP processes writing to the same chat.db, an
+in-process `seq` counter would issue duplicates. The seq must come
+from SQLite itself.
+
+**Implementation: SQLite-managed seq via `INSERT INTO messages (...,
+seq, ...) VALUES (..., (SELECT COALESCE(MAX(seq), 0) + 1 FROM
+messages), ...)` inside a transaction.** SQLite WAL serializes
+writes so the SELECT + INSERT pair is atomic; cross-process writers
+can't issue duplicate seqs. The router pre-assigns a per-process
+seq for in-memory dispatch (which still needs a value before
+persistence), then `persistMessage` overrides with the SQLite-
+assigned value and returns it; the router updates the in-memory
+copy so dispatch + cursor + watcher all agree on the same seq.
+
+In-memory-only routers (test harnesses with no `db`) keep the
+per-process counter — the cross-process consistency only matters
+when the db is wired.
+
+Cursor lives in-memory in the watcher process. On startup the
+watcher reads `MAX(seq)` from messages and starts there — no
+history replay. (Future: optional `--since-seq <N>` flag for
+backfill scenarios.)
+
+### Filter pipeline
+
+Per iteration, the watcher:
+
+1. Reads receivable rows past `lastSeq` via `selectReceivableRows`,
+   which combines:
+   - `from_agent_id != receiver.agent_id` (suppress own messages)
+   - `isVisibleRow` (scope rules — global / project-match / dm-match)
+   - `isDeliverableRow` (mode rules + always-deliverable for
+     keepalives/admin/personal mentions/DMs)
+   - mention-bypass: a single batch SELECT into the `mentions`
+     table for the receiver's username gates the mention check
+2. Formats each row via `priorityTag` (directed messages) or
+   coalesces into `<silent-event>` (ambient events whose `kind`
+   is in `SILENT_KINDS`).
+3. Coalesces silent events within `--coalesce` ms into one
+   `<silent-event count=N kind=...>` line per window. Non-silent
+   events flush the buffer first so silent flurries never push past
+   a directed message.
+4. If no new rows, sleeps `--wait` ms.
+5. Refreshes the receiver row from the presence table every 5s so
+   `set_mode` calls from elsewhere take effect mid-loop.
+
+### Exit conditions
+
+- `SIGTERM` / `SIGINT` — abort the loop, flush pending silent
+  buffer, close the db, exit 0.
+- `SessionExpiredError` — the receiver's presence row was deleted
+  (logout / heartbeat lapsed past the prune grace). Watcher exits
+  3 with a stderr message instructing the caller to re-login + re-
+  spawn.
+- DB close from another process — surfaces as an exception; watcher
+  exits 1.
+
+### Coalescing
+
+Silent ambient events flow in flurries during boot or restart. The
+watcher buffers them up to `--coalesce` ms (default 1s) then emits a
+single `<silent-event time=HH:MM:SS count=N>2× join, 1× leave |
+latest: ...</silent-event>` line. This keeps stdout from flooding
+when many sessions reconnect simultaneously. Directed messages
+flush the silent buffer first so they don't get coalesced into
+ambient noise.
+
 ## Persistence (§11d)
 
 `src/chat/persistence.ts` writes to the SQLite chat-history database
