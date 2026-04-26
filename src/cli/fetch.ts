@@ -179,7 +179,7 @@ Options:
   --coalesce <ms>     Silent-event coalesce window (default 1000).
   --help              This message.
 
-Reads ~/.local/share/pantheon/chat.db (XDG / PANTHEON_HOME aware).
+Reads ~/.pantheon/chat.db (PANTHEON_HOME-aware for test sandboxes).
 `,
   );
 }

@@ -95,9 +95,9 @@ each check. No flags today.
 
 | Check               | Result example                                                           |
 |---------------------|--------------------------------------------------------------------------|
-| `data_dir`          | `present at /home/x/.local/share/pantheon` / missing → warning           |
+| `data_dir`          | `present at /home/x/.pantheon` / missing → warning                       |
 | `personas_dir`      | `present at <…>/personas` / missing                                      |
-| `state_dir`         | `present at /home/x/.local/state/pantheon` / missing                     |
+| `state_dir`         | `present at /home/x/.pantheon` / missing                                 |
 | `chat_db`           | missing → warning. (When present, `chat_db_schema` runs.)                |
 | `chat_db_schema`    | `version N (expected M)` — error if mismatch (forgot to re-open daemon) |
 | `personas`          | `N registered`                                                           |

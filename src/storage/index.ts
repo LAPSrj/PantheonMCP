@@ -6,7 +6,12 @@ export {
   ensureDataDirs,
   ensureStateDirs,
   ensurePersonaDir,
+  legacyPaths,
+  findStrandedLegacy,
+  assertNoLegacyLayout,
+  LegacyLayoutError,
   type Paths,
+  type LegacyLayout,
 } from "./paths.ts";
 
 export {

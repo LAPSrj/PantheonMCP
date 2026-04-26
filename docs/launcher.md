@@ -170,7 +170,7 @@ documented for end users).
 
 ### Persistence
 
-Per-tab geometry persists in `~/.local/state/pantheon/windows.json`
+Per-tab geometry persists in `~/.pantheon/windows.json`
 under each window's `geometryByTab[tab_index]` field as a
 column-major `PaneId[][]` plus `next_pane_id`. Survives across CLI
 invocations (`pantheon summon` / `mcp__pantheon__summon` share the
@@ -254,7 +254,7 @@ so the suite can inspect produced script content without crawling /tmp.
 
 ## Window registry
 
-Per §11a / §15: `~/.local/state/pantheon/windows.json` tracks named
+Per §11a / §15: `~/.pantheon/windows.json` tracks named
 windows that pantheon has spawned into. Shape:
 
 ```ts

@@ -320,7 +320,7 @@ Labeled snapshots of the persona's memory store live as parallel
 JSON files at:
 
 ```
-~/.local/share/pantheon/personas/<handle>/memory.snapshots/<label>.json
+~/.pantheon/personas/<handle>/memory.snapshots/<label>.json
 ```
 
 `snapshot_memory({ label })` writes the current store via

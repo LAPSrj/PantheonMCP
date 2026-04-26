@@ -27,6 +27,7 @@ import { runStatusline } from "../src/cli/statusline.ts";
 import { runSummon } from "../src/cli/summon.ts";
 import { validateFile, type ValidateType } from "../src/cli/validate.ts";
 import { EXIT_CODES } from "../src/cli/exit-codes.ts";
+import { assertNoLegacyLayout, LegacyLayoutError } from "../src/storage/index.ts";
 
 const VERSION = "0.0.1";
 
@@ -76,6 +77,19 @@ async function main(): Promise<void> {
   if (sub === "--version") {
     process.stdout.write(`${VERSION}\n`);
     process.exit(EXIT_CODES.SUCCESS);
+  }
+
+  // Pre-flight: bail with the migration recipe if the user still has
+  // data at the pre-04-26 XDG-split locations. The check is a no-op
+  // under PANTHEON_HOME (test sandbox).
+  try {
+    assertNoLegacyLayout();
+  } catch (err) {
+    if (err instanceof LegacyLayoutError) {
+      process.stderr.write(err.message + "\n");
+      process.exit(EXIT_CODES.USER_ERROR);
+    }
+    throw err;
   }
 
   const rest = argv.slice(1);

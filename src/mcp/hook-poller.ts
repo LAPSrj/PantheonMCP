@@ -6,8 +6,8 @@ import type { Watchdog } from "../watchdog/index.ts";
 /** §14 plugin-mode watchdog reset wiring.
  *
  * The PreToolUse hook (`plugin/hooks/watchdog-reset.sh`) `touch`es
- * `~/.local/state/pantheon/sessions/<ppid>/last_tool_use_at` on
- * every CC tool-use. This module is the daemon-tick consumer: it
+ * `~/.pantheon/sessions/<ppid>/last_tool_use_at` on every CC
+ * tool-use. This module is the daemon-tick consumer: it
  * stats the marker; if the mtime advanced since the last check, it
  * calls `watchdog.touch(session_id)`.
  *

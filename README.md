@@ -178,24 +178,25 @@ exit()
 
 Everything stays on your machine. No telemetry, no remote sync, single-user assumption.
 
+Pantheon uses a single user-dir folder — no XDG split. Convention pattern is `~/.ssh/`, `~/.gitconfig`, `~/.cargo/`.
+
 ```
-${XDG_DATA_HOME:-~/.local/share}/pantheon/
+~/.pantheon/
 ├── chat.db                           # SQLite WAL, never compacted
 ├── chat.db-wal
 ├── chat.db-shm
+├── windows.json                      # named-window registry
+├── sessions/<ppid>/last_tool_use_at  # plugin-mode watchdog hook markers
+├── runtime/                          # ephemeral runtime state
+├── pre-launch.sh                     # optional user hook (sourced before exec)
 └── personas/
     ├── <handle>.json                 # persona registration (hand-editable)
     └── <handle>/
         ├── memory.json               # memory entries (hand-editable)
         └── memory.snapshots/<label>.json   # snapshots
-
-${XDG_STATE_HOME:-~/.local/state}/pantheon/
-├── sessions/<ppid>/last_tool_use_at  # plugin-mode watchdog hook markers
-├── windows.json                      # named-window registry
-└── runtime/                          # ephemeral runtime state
 ```
 
-Override roots via env vars: `PANTHEON_HOME` (sets both data + state to one dir, useful for tests), `PANTHEON_DATA_HOME` / `PANTHEON_STATE_HOME` for split control.
+Override the root via `PANTHEON_HOME` (test sandbox). The earlier XDG-split env vars (`XDG_DATA_HOME` / `XDG_STATE_HOME` / `PANTHEON_DATA_HOME` / `PANTHEON_STATE_HOME`) are NOT honored as of 04-26. If pantheon detects data still living at `~/.local/{share,state}/pantheon/`, it emits a `mv` recipe and refuses to start until you consolidate.
 
 **Persona profiles + memory** are JSON. Open them in any editor. `pantheon validate <file>` lints the schema.
 

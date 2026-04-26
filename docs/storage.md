@@ -12,39 +12,43 @@ Pantheon uses a hybrid persistence model per the §15 design (see
 
 ## Filesystem layout
 
-Defaults follow the XDG Base Directory spec.
+Pantheon uses a single root: `~/.pantheon/`. This is intentionally
+NOT XDG-compliant — Leandro's call (04-26 spec): keep all pantheon
+state in one folder so it's easy to back up, migrate, sync, or
+hand-edit. Convention pattern matches `~/.ssh/`, `~/.gitconfig`,
+`~/.cargo/`.
 
 ```
-${XDG_DATA_HOME:-~/.local/share}/pantheon/
+~/.pantheon/
 ├── chat.db                              # SQLite (WAL)
 ├── chat.db-wal
 ├── chat.db-shm
+├── windows.json                         # named-window registry
+├── daemon.sock                          # daemon Unix socket
+├── daemon.pid                           # daemon pid file
+├── runtime/                             # 0700-mode ephemeral state
+│   └── <session>.json
+├── sessions/                            # plugin-hook marker dirs
+│   └── <ppid>/last_tool_use_at
+├── pre-launch.sh                        # optional user hook (§14)
 └── personas/
     ├── <handle>.json                    # persona registration
     └── <handle>/
         └── memory.json                  # persona memory entries
-
-${XDG_STATE_HOME:-~/.local/state}/pantheon/
-├── windows.json                         # named-window registry
-├── daemon.sock                          # daemon Unix socket
-├── daemon.pid                           # daemon pid file
-└── runtime/                             # 0700-mode ephemeral state
-    └── <session>.json
 ```
 
 ### Override env vars
 
 | Variable               | Effect                                               |
 |------------------------|------------------------------------------------------|
-| `PANTHEON_HOME`        | Overrides BOTH data and state roots to the same dir. |
-| `PANTHEON_DATA_HOME`   | Overrides data root only (wins over `PANTHEON_HOME`).|
-| `PANTHEON_STATE_HOME`  | Overrides state root only (wins over `PANTHEON_HOME`).|
-| `XDG_DATA_HOME`        | Standard XDG. Used when no Pantheon override is set. |
-| `XDG_STATE_HOME`       | Standard XDG. Used when no Pantheon override is set. |
+| `PANTHEON_HOME`        | Redirects the entire root to the given path. Used by test sandboxes so suites don't clobber the user's real data. |
 
-`PANTHEON_HOME` is the convenience knob for tests and sandboxed runs;
-the split overrides exist for environments that want data on a
-durable volume but state on tmpfs.
+The earlier XDG-split env vars (`PANTHEON_DATA_HOME`,
+`PANTHEON_STATE_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`) are NOT
+honored as of 04-26. Migration from the old layout: see
+`assertNoLegacyLayout` in `src/storage/paths.ts` — pantheon detects
+data still living at `~/.local/{share,state}/pantheon/` and emits a
+`mv` recipe rather than auto-migrating.
 
 ## JSON files
 

@@ -88,12 +88,11 @@ exact bug class that hurt the 2026-04-25 session.
 
 1. **Hook**: `plugin/hooks/watchdog-reset.sh` is registered for
    PreToolUse with empty matcher (fires on every tool-use). It
-   resolves the sessions root from `PANTHEON_HOME` /
-   `PANTHEON_STATE_HOME` / `XDG_STATE_HOME` / `$HOME/.local/state`
-   then `mkdir -p` + `touch`es:
+   resolves the storage root (`PANTHEON_HOME` or `$HOME/.pantheon`
+   per the 04-26 single-folder spec), then `mkdir -p` + `touch`es:
 
    ```
-   <stateDir>/sessions/$PPID/last_tool_use_at
+   ~/.pantheon/sessions/$PPID/last_tool_use_at
    ```
 
    `$PPID` is the CC parent process pid — guaranteed equal between
