@@ -67,7 +67,11 @@ function enforceSameProject(ctx: HandlerContext, target: Persona): void {
   }
 }
 
-async function spawnPersona(
+/** Exported so the CLI (`pantheon summon`) can call the same code
+ * path the MCP `summon` handler uses. The args shape mirrors the
+ * MCP tool's input — Record<string, unknown> with `prompt`,
+ * `resume`, `target`, `rest_timeout` keys. */
+export async function spawnPersona(
   args: Record<string, unknown>,
   ctx: HandlerContext,
   persona: Persona,

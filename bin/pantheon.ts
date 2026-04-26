@@ -23,6 +23,7 @@ import { dumpChat, rowsToJsonl } from "../src/cli/dump-chat.ts";
 import { loadChat } from "../src/cli/load-chat.ts";
 import { runFetch } from "../src/cli/fetch.ts";
 import { runStatusline } from "../src/cli/statusline.ts";
+import { runSummon } from "../src/cli/summon.ts";
 import { validateFile, type ValidateType } from "../src/cli/validate.ts";
 import { EXIT_CODES } from "../src/cli/exit-codes.ts";
 
@@ -34,6 +35,7 @@ Usage: pantheon <subcommand> [options]
 
 Subcommands:
   serve                  Run the MCP server (stdio transport).
+  summon <user> [flags]  Spawn a registered persona. See \`pantheon summon --help\`.
   fetch [...flags]       Watcher loop. See \`pantheon-fetch --help\`.
   doctor                 Health check on paths, schema, presence.
   dump-chat [...flags]   Export chat history to JSONL.
@@ -138,6 +140,11 @@ async function main(): Promise<void> {
 
     case "statusline": {
       const code = await runStatusline({ stdin: process.stdin });
+      process.exit(code);
+    }
+
+    case "summon": {
+      const code = await runSummon({ args: rest });
       process.exit(code);
     }
 
