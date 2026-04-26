@@ -146,6 +146,26 @@ every status), `core`, `kind`, `since` (ISO date lower bound),
 `filter` (case-insensitive substring across summary + text). Sorted
 date-descending.
 
+## Edge cases
+
+Two tier behaviors aren't spelled out in §4 but are the right read,
+both confirmed with semaphoremole:
+
+- **Active tier — newest entry is always rendered full.** When a
+  single entry exceeds the 8 KB byte budget, it still renders in
+  full. Collapse only applies to *additional* entries past the
+  budget. Otherwise the agent has zero body content to work from,
+  which fails the "useful at startup" goal harder than the byte cap
+  fails it.
+- **Core tier — head + tail with no middle never collapses.** When
+  the core list has `entries.length ≤ CORE_HEAD_KEEP + CORE_TAIL_KEEP`
+  (six or fewer entries), there is no middle region; nothing is
+  collapsed. If the head + tail alone exceed 10 KB the warning
+  shape becomes `⚠ Core total (X.X KB) exceeds 10 KB cap` so the
+  agent knows trimming is needed but their core entries themselves
+  weren't touched. Auto-fading user-pinned core content is
+  explicitly forbidden (§4 / §11b).
+
 ## Concurrency
 
 All store writes route through `mutateStore` → `mutateJsonAtomic`,
