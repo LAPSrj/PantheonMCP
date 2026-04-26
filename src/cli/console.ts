@@ -482,7 +482,19 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
         stderr.write("Usage: /dm <user> <text>\n");
         return true;
       }
-      broadcast("dm", rest.slice(sp + 1).trim(), { target: rest.slice(0, sp) });
+      const target = rest.slice(0, sp);
+      // Soft-warn: chat router has no offline-DM queue. If the target
+      // isn't currently connected, the message persists in chat.db
+      // but the recipient won't see it on next login (their cursor
+      // advances past it via heartbeat / refreshReceiver). Surface
+      // the gap to the admin without blocking — legitimate use case
+      // is sending to a known persona that's about to connect.
+      if (!listActive(db).some((a) => a.username === target)) {
+        printMessage(
+          paint(parsed.color, "yellow", `warning: ${target} not currently connected — message stored but not delivered`),
+        );
+      }
+      broadcast("dm", rest.slice(sp + 1).trim(), { target });
       return true;
     }
     if (line.startsWith("/proj ") || line.startsWith("/p ")) {
@@ -492,7 +504,16 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
         stderr.write("Usage: /proj <project> <text>\n");
         return true;
       }
-      broadcast("project", rest.slice(sp + 1).trim(), { project: rest.slice(0, sp) });
+      const proj = rest.slice(0, sp);
+      // Soft-warn: cheaper than DM validation — single roster scan
+      // for any agent in the project. If no one's listening, message
+      // still writes (deferred audience).
+      if (!listActive(db).some((a) => a.project === proj)) {
+        printMessage(
+          paint(parsed.color, "yellow", `warning: no agents currently in project '${proj}' — message stored but not delivered`),
+        );
+      }
+      broadcast("project", rest.slice(sp + 1).trim(), { project: proj });
       return true;
     }
     if (line.startsWith("/g ") || line.startsWith("/global ")) {
