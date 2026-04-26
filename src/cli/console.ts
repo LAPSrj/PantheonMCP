@@ -1,8 +1,15 @@
 import readline from "node:readline";
 import { openChatDb, resolvePaths, type Paths } from "../storage/index.ts";
 import { randomUUID } from "node:crypto";
-import { ChatRouter, listActive } from "../chat/index.ts";
+import {
+  ChatRouter,
+  formatBatch,
+  listActive,
+  type PresenceRow,
+  type ReceiverState,
+} from "../chat/index.ts";
 import { tailLoop } from "../chat/watcher.ts";
+import type { MessageRow } from "../chat/persistence.ts";
 import { heartbeat, upsertSubscriber, removeSubscriber } from "../chat/presence.ts";
 import type { Subscriber } from "../chat/types.ts";
 import { EXIT_CODES } from "./exit-codes.ts";
@@ -17,15 +24,20 @@ import { EXIT_CODES } from "./exit-codes.ts";
  * (one MCP process per CC session, per §15). The console writes
  * straight to `chat.db` via a transient `ChatRouter` and reads via
  * the same `tailLoop` the per-agent watcher uses. SQLite WAL handles
- * concurrent writes from running MCP processes; the console doesn't
- * register as a subscriber (no presence row, no heartbeat) so it
- * never appears in `list_agents`.
+ * concurrent writes from running MCP processes.
  *
- * The "admin" identity is synthetic. Outbound messages set
- * `from_agent_id: "system"` + `system_actor: "admin"` so the watcher
- * gives them the `[likely reply]` priority tag (per
- * `priorityTagForRow`) and the body is prefixed with `[ADMIN]` for
- * visual clarity in the tail. */
+ * The console DOES register a synthetic presence row so peers see it
+ * in `list_agents` while connected — `username:"console"`,
+ * `project:"admin"`, `transient:true`. The transient flag drives the
+ * asterisk render (`console*`); pairing with project="admin" gives
+ * the `console* (admin)` form yapsmith specced. Row is upserted
+ * silently (no `router.add` → no `join` event) and removed silently
+ * on shutdown (no `router.remove` → no `leave` event).
+ *
+ * Outbound messages set `from_agent_id: "system"` + `system_actor:
+ * "admin"` so the watcher gives them the `[likely reply]` priority
+ * tag (per `priorityTagForRow`) and the body is prefixed with
+ * `[ADMIN]` for visual clarity in the tail. */
 
 export interface RunConsoleOptions {
   args: string[];
@@ -54,13 +66,13 @@ Options:
 
 Prompt commands (type at the [admin] > prompt):
   <text>                   Broadcast as admin to scope=global (default).
-  /g <text>                Same as above.
+  /g <text>                Same as above.  Alias: /global
   /dm <user> <text>        DM to <user> as admin.
-  /proj <project> <text>   Broadcast to project <project>. Short: /p
-  /who                     Print currently connected agents (names only).
+  /proj <project> <text>   Broadcast to project <project>.  Alias: /p
+  /who                     Refresh the pinned roster.
   /status                  Print connected agents with their status lines.
-  /help                    Show this.
-  /quit                    Exit (Ctrl-C also works).
+  /help                    Show this.  Alias: /?
+  /quit                    Exit.  Aliases: /exit, /q  (Ctrl-C also works.)
 `;
 
 function parseArgs(
@@ -128,6 +140,31 @@ function stripAnsi(s: string): string {
   return s.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
+function modeMarkerForRow(mode: PresenceRow["mode"]): string {
+  switch (mode) {
+    case "quiet":
+      return "[Q]";
+    case "project":
+      return "[P]";
+    case "dm":
+      return "[D]";
+    default:
+      return "";
+  }
+}
+
+function rosterKey(rows: PresenceRow[]): string {
+  // Stable signature for diff-detection. Only the fields the roster
+  // actually renders: agent_id, username, project, mode, transient,
+  // status. Heartbeat changes don't affect the rendered roster, so
+  // they don't trigger a redraw.
+  return rows
+    .map((r) =>
+      [r.agent_id, r.username, r.project, r.mode, r.transient ? "1" : "0", r.status].join("␟"),
+    )
+    .join("␞");
+}
+
 export async function runConsole(options: RunConsoleOptions): Promise<number> {
   const stdin = options.stdin ?? process.stdin;
   const stdout = options.stdout ?? process.stdout;
@@ -140,7 +177,6 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
   const paths = options.paths ?? resolvePaths();
   const db = openChatDb(paths.chatDbPath);
   // Transient router — re-exposes the same SQLite handle for writes.
-  // No presence row registered (the console doesn't `add` itself).
   const router = new ChatRouter({ paths, db });
 
   const interactive = Boolean((stdin as NodeJS.ReadStream).isTTY);
@@ -152,13 +188,18 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
     terminal: interactive,
   });
 
+  const widthOf = (): number => (stdout as NodeJS.WriteStream).columns ?? 80;
+
+  const separator = (): string =>
+    paint(parsed.color, "grey", "─".repeat(Math.min(widthOf(), 80)));
+
   // ---- Pinned roster + status area --------------------------------
   let statusLines: string[] = [];
   const rosterEnabled = parsed.roster && interactive;
 
   const statusHeight = (): number => {
     if (!rosterEnabled) return 0;
-    const cols = (stdout as NodeJS.WriteStream).columns ?? 80;
+    const cols = widthOf();
     let rows = 0;
     for (const l of statusLines) {
       const visLen = stripAnsi(l).length;
@@ -185,63 +226,103 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
     if (interactive) rl.prompt(true);
   };
 
-  const refreshRoster = (): void => {
-    if (!rosterEnabled) return;
-    const rows = listActive(db);
-    if (rows.length === 0) {
-      statusLines = [paint(parsed.color, "grey", "(no connected agents)")];
-      return;
-    }
-    const lines: string[] = [
-      paint(parsed.color, "grey", "─".repeat(Math.min((stdout as NodeJS.WriteStream).columns ?? 80, 80))),
-      paint(parsed.color, "bold", `${rows.length} connected:`),
-    ];
+  // ---- Roster rendering ------------------------------------------
+  // Group by project, sort projects alphabetically, sort users
+  // case-insensitive within each project. Transient subscribers
+  // render with an asterisk suffix (`console*`) — matches §10's
+  // guest marker. Mode tag ([Q]/[P]/[D]) appended after the name.
+  const renderRoster = (rows: PresenceRow[]): string[] => {
+    if (rows.length === 0) return [paint(parsed.color, "grey", "(no connected agents)")];
+    const byProject = new Map<string, PresenceRow[]>();
     for (const r of rows) {
-      const tag =
-        r.mode === "quiet" ? "[Q]" : r.mode === "project" ? "[P]" : r.mode === "dm" ? "[D]" : "";
-      const status = r.status ? paint(parsed.color, "dim", ` — ${r.status}`) : "";
-      lines.push(`  ${paint(parsed.color, "cyan", r.username)}${tag} (${r.project})${status}`);
+      const list = byProject.get(r.project);
+      if (list) list.push(r);
+      else byProject.set(r.project, [r]);
     }
-    statusLines = lines;
+    const projects = Array.from(byProject.keys()).sort();
+    const lines: string[] = [
+      paint(parsed.color, "grey", "─".repeat(Math.min(widthOf(), 80))),
+      paint(parsed.color, "grey", `${rows.length} agent(s) connected:`),
+    ];
+    const sep = paint(parsed.color, "grey", ", ");
+    for (const proj of projects) {
+      const users = byProject
+        .get(proj)!
+        .slice()
+        .sort((a, b) => a.username.localeCompare(b.username, undefined, { sensitivity: "base" }))
+        .map((r) => {
+          const name = paint(parsed.color, "cyan", r.transient ? `${r.username}*` : r.username);
+          const tag = modeMarkerForRow(r.mode);
+          return tag ? `${name} ${paint(parsed.color, "yellow", tag)}` : name;
+        })
+        .join(sep);
+      lines.push(`  ${paint(parsed.color, "grey", `[${proj}]`)} ${users}`);
+    }
+    return lines;
   };
 
-  const printLine = (line: string): void => {
+  const renderStatusList = (rows: PresenceRow[]): string[] => {
+    if (rows.length === 0) return [paint(parsed.color, "grey", "(no connected agents)")];
+    const byProject = new Map<string, PresenceRow[]>();
+    for (const r of rows) {
+      const list = byProject.get(r.project);
+      if (list) list.push(r);
+      else byProject.set(r.project, [r]);
+    }
+    const projects = Array.from(byProject.keys()).sort();
+    const lines: string[] = [
+      paint(parsed.color, "grey", `${rows.length} agent(s) connected:`),
+    ];
+    for (const proj of projects) {
+      lines.push(paint(parsed.color, "grey", `  [${proj}]`));
+      const users = byProject
+        .get(proj)!
+        .slice()
+        .sort((a, b) => a.username.localeCompare(b.username, undefined, { sensitivity: "base" }));
+      for (const r of users) {
+        const name = paint(
+          parsed.color,
+          "cyan",
+          r.transient ? `${r.username}*` : r.username,
+        );
+        const tag = modeMarkerForRow(r.mode);
+        const head = tag ? `${name} ${paint(parsed.color, "yellow", tag)}` : name;
+        const status = r.status ? paint(parsed.color, "dim", ` — ${r.status}`) : "";
+        lines.push(`    ${head}${status}`);
+      }
+    }
+    return lines;
+  };
+
+  let lastRosterKey = "";
+
+  const refreshRoster = (force: boolean = false): void => {
+    if (!rosterEnabled) return;
+    const rows = listActive(db);
+    const key = rosterKey(rows);
+    if (!force && key === lastRosterKey) return;
+    lastRosterKey = key;
+    statusLines = renderRoster(rows);
     clearStatusArea();
-    stdout.write(line + "\n");
     drawStatusArea();
   };
 
-  // ---- Tail-on-start ---------------------------------------------
-  if (parsed.tail > 0) {
-    const rows = db
-      .query(
-        "SELECT * FROM messages ORDER BY seq DESC LIMIT ?",
-      )
-      .all(parsed.tail) as Array<{ id: string; seq: number; ts: number; text: string; scope: string; from_agent_id: string; target_username: string | null; project: string | null; kind: string | null; from_username_inline: string | null }>;
-    for (const r of rows.reverse()) {
-      const sender = r.from_username_inline ?? (r.from_agent_id === "system" ? "system" : `agent:${r.from_agent_id.slice(0, 8)}`);
-      const time = new Date(r.ts).toISOString().slice(11, 19);
-      const targetSuffix = r.scope === "dm" && r.target_username ? ` →${r.target_username}` : "";
-      stdout.write(`${paint(parsed.color, "grey", time)} ${paint(parsed.color, "cyan", sender)}${targetSuffix}: ${r.text}\n`);
-    }
-  }
+  const printMessage = (line: string): void => {
+    // Same as printLine but with a per-message separator (UX parity
+    // with chat-mcp). The separator visually delimits each message
+    // so multi-line bodies (status_digest, pasted text) don't blur.
+    clearStatusArea();
+    stdout.write(line + "\n" + separator() + "\n");
+    drawStatusArea();
+  };
 
-  // ---- Live tail --------------------------------------------------
-  const controller = new AbortController();
-  options.signal?.addEventListener("abort", () => controller.abort(), { once: true });
-  const onSig = () => controller.abort();
-  if (interactive) {
-    process.on("SIGTERM", onSig);
-    process.on("SIGINT", onSig);
-  }
-  // Synthesize a presence row so tailLoop's loadReceiver can find us.
-  // We bypass `router.add` (which would validate the username and
-  // emit a `join` system event into the chat — both wrong for an
-  // admin console). Instead, write directly to the presence table
-  // via upsertSubscriber. The synthetic handle is reserved-looking
-  // so it can't collide with real agents, and the row is removed on
-  // shutdown. Status appears in `list_agents` while the console is
-  // up — labeled so peers know it's not a real participant.
+  // ---- Synthetic console subscriber ------------------------------
+  // Bypass `router.add` (would validate the username + emit a `join`
+  // system event into the chat — both wrong for an admin console).
+  // Instead, write directly to the presence table via
+  // upsertSubscriber. The reserved-looking handle can't collide with
+  // real agents; the row is removed on shutdown via removeSubscriber
+  // (NOT router.remove — same reason: no `leave` event).
   const consoleSubscriber: Subscriber = {
     agent_id: `console-${randomUUID()}`,
     username: "console",
@@ -256,6 +337,38 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
   };
   upsertSubscriber(db, consoleSubscriber);
 
+  // ---- Tail-on-start ---------------------------------------------
+  // Read the last N raw rows directly and run them through
+  // `formatBatch` with the synthetic admin receiver — same renderer
+  // the live stream uses, so cold backfill and live tail share one
+  // grammar. We deliberately skip the visibility/deliverability
+  // filter for backfill so admin can browse the full history.
+  if (parsed.tail > 0) {
+    const rows = db
+      .query("SELECT * FROM messages ORDER BY seq DESC LIMIT ?")
+      .all(parsed.tail) as MessageRow[];
+    const ascending = rows.reverse();
+    const receiver: ReceiverState = {
+      agent_id: consoleSubscriber.agent_id,
+      username: consoleSubscriber.username,
+      project: consoleSubscriber.project,
+      mode: "all",
+    };
+    const events = formatBatch(ascending, receiver);
+    for (const e of events) {
+      stdout.write(e.line + "\n" + separator() + "\n");
+    }
+  }
+
+  // ---- Live tail --------------------------------------------------
+  const controller = new AbortController();
+  options.signal?.addEventListener("abort", () => controller.abort(), { once: true });
+  const onSig = () => controller.abort();
+  if (interactive) {
+    process.on("SIGTERM", onSig);
+    process.on("SIGINT", onSig);
+  }
+
   const tailPromise = (async () => {
     try {
       for await (const event of tailLoop({
@@ -267,31 +380,61 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
         signal: controller.signal,
         mode_override: "all",
       })) {
-        printLine(event.line);
+        printMessage(event.line);
+        // Event-driven roster refresh: any presence change (join,
+        // leave, rename, project_change, status_update, profile_update,
+        // handle_recycled) updates the subscribers table. Diff against
+        // the last rendered key — if the visible roster changed,
+        // refresh. Avoids parsing the silent-event body. Status-only
+        // updates DO show in /status output, so we refresh on those
+        // too — yapsmith's verdict said skip status, but pantheon's
+        // /status output is the same data the pinned roster could
+        // surface and admins need it live.
+        refreshRoster();
       }
     } catch (err) {
       stderr.write(`pantheon-console: tail error: ${(err as Error).message}\n`);
     }
   })();
 
-  // Roster refresh + heartbeat every 5s. Heartbeat keeps the
-  // synthetic presence row alive so pruneStale (30s threshold)
-  // doesn't evict it mid-session.
-  const rosterTimer = setInterval(() => {
+  // Heartbeat the synthetic presence row every 5s so pruneStale
+  // (30s threshold) doesn't evict the console mid-session. Roster
+  // refresh is event-driven now, not timer-driven.
+  const heartbeatTimer = setInterval(() => {
     try {
       heartbeat(db, consoleSubscriber.agent_id);
     } catch {
       // best-effort
     }
-    refreshRoster();
-    if (interactive) {
-      clearStatusArea();
-      drawStatusArea();
-    }
   }, 5_000);
 
-  refreshRoster();
-  if (interactive) drawStatusArea();
+  refreshRoster(true);
+  if (interactive) {
+    stdout.write(
+      paint(parsed.color, "grey", "pantheon console — type /help for commands, /quit to exit.") +
+        "\n",
+    );
+  }
+
+  // ---- Resize handler --------------------------------------------
+  // Without this, the pinned roster corrupts on terminal resize until
+  // the next refresh. Re-prompt forces readline to redraw the input
+  // buffer at the current width.
+  const onResize = () => {
+    if (interactive && rosterEnabled) {
+      // Re-render at the new width.
+      const rows = listActive(db);
+      statusLines = renderRoster(rows);
+      lastRosterKey = rosterKey(rows);
+      clearStatusArea();
+      drawStatusArea();
+    } else if (interactive) {
+      rl.prompt(true);
+    }
+  };
+  if (interactive) {
+    (stdout as NodeJS.WriteStream).on("resize", onResize);
+  }
 
   // ---- Slash-command dispatcher ----------------------------------
   const broadcast = (
@@ -315,21 +458,21 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
   const handleLine = (raw: string): boolean => {
     const line = raw.trim();
     if (line.length === 0) return true;
-    if (line === "/quit" || line === "/q") return false;
-    if (line === "/help") {
+    if (line === "/quit" || line === "/q" || line === "/exit") return false;
+    if (line === "/help" || line === "/?") {
       stdout.write(HELP);
       return true;
     }
     if (line === "/who") {
-      const rows = listActive(db);
-      stdout.write(`${rows.length} connected:\n`);
-      for (const r of rows) stdout.write(`  ${r.username} (${r.project})\n`);
+      // Refresh the pinned roster (don't print into the message
+      // stream — that's double-rendering with a pinned roster).
+      refreshRoster(true);
       return true;
     }
     if (line === "/status") {
       const rows = listActive(db);
-      stdout.write(`${rows.length} connected:\n`);
-      for (const r of rows) stdout.write(`  ${r.username} — ${r.status || "(no status)"}\n`);
+      const block = renderStatusList(rows).join("\n");
+      printMessage(block);
       return true;
     }
     if (line.startsWith("/dm ")) {
@@ -352,8 +495,9 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
       broadcast("project", rest.slice(sp + 1).trim(), { project: rest.slice(0, sp) });
       return true;
     }
-    if (line.startsWith("/g ")) {
-      broadcast("global", line.slice(3).trim());
+    if (line.startsWith("/g ") || line.startsWith("/global ")) {
+      const text = line.startsWith("/g ") ? line.slice(3).trim() : line.slice(8).trim();
+      broadcast("global", text);
       return true;
     }
     if (line.startsWith("/")) {
@@ -366,9 +510,6 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
   };
 
   if (interactive) {
-    stdout.write(
-      paint(parsed.color, "grey", "pantheon console — type /help for commands, /quit to exit.") + "\n",
-    );
     rl.prompt();
     rl.on("line", (line) => {
       const cont = handleLine(line);
@@ -376,13 +517,11 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
         controller.abort();
         rl.close();
       } else {
-        if (rosterEnabled) {
-          // Caller already typed at the prompt; redraw status + reprompt.
-          clearStatusArea();
-          drawStatusArea();
-        } else {
-          rl.prompt();
-        }
+        // rl.prompt(true) preserves any mid-typed buffer; covers the
+        // race where a system event lands between line completion and
+        // the next render pass.
+        clearStatusArea();
+        drawStatusArea();
       }
     });
   } else {
@@ -394,7 +533,10 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
     rl.once("close", () => resolve());
   });
   controller.abort();
-  clearInterval(rosterTimer);
+  clearInterval(heartbeatTimer);
+  if (interactive) {
+    (stdout as NodeJS.WriteStream).off("resize", onResize);
+  }
   await tailPromise;
   // Best-effort: remove the synthetic console subscriber row so it
   // doesn't sit in the presence table forever.

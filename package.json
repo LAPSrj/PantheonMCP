@@ -11,7 +11,8 @@
   },
   "scripts": {
     "test": "bun test",
-    "typecheck": "bun tsc --noEmit"
+    "typecheck": "bun tsc --noEmit",
+    "console": "bun bin/pantheon.ts console"
   },
   "devDependencies": {
     "@types/bun": "latest",
