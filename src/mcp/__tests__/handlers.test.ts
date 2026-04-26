@@ -299,3 +299,136 @@ test("summon errors not_registered when target persona doesn't exist", async () 
   expect(r.ok).toBe(false);
   expect(r.payload.error).toBe("not_registered");
 });
+
+// --- §6 LOW only_core filter on get_memory ---
+
+test("get_memory: only_core: true renders ONLY the Core tier (no Active/Index/Hidden sections)", async () => {
+  await call("register", {
+    username: "vellumpike",
+    project: "pantheon",
+    cwd: "/work",
+    description: "lead",
+    expertise: ["x"],
+    owns: ["/work"],
+  });
+  await call("claim", { username: "vellumpike" });
+  await call("append_memory", { text: "core fact", core: true });
+  await call("append_memory", { text: "active note" });
+  const all = await call("get_memory", {});
+  expect(all.payload.text).toContain("CORE");
+  expect(all.payload.text).toContain("ACTIVE");
+  const coreOnly = await call("get_memory", { only_core: true });
+  expect(coreOnly.payload.text).toContain("CORE");
+  expect(coreOnly.payload.text).not.toContain("ACTIVE");
+  expect(coreOnly.payload.text).toContain("core fact");
+  expect(coreOnly.payload.text).not.toContain("active note");
+});
+
+// --- §6 LOW find_memory cross-agent ---
+
+test("find_memory: scope='self' filters the caller's own memory", async () => {
+  await call("register", {
+    username: "vellumpike",
+    project: "pantheon",
+    cwd: "/work",
+    description: "lead",
+    expertise: ["x"],
+    owns: ["/work"],
+  });
+  await call("claim", { username: "vellumpike" });
+  await call("append_memory", { text: "alpha-keyword fact" });
+  await call("append_memory", { text: "unrelated note" });
+  const r = await call("find_memory", { query: "alpha-keyword" });
+  expect(r.payload.count).toBe(1);
+  const hits = r.payload.hits as Array<{ username: string; summary: string }>;
+  expect(hits[0]!.username).toBe("vellumpike");
+  expect(hits[0]!.summary).toContain("alpha-keyword");
+});
+
+test("find_memory: scope='all' walks every persona and attaches username", async () => {
+  // Two registered personas, each with one matching entry.
+  createPersona(ctx.paths, {
+    username: "alpha",
+    project: "p",
+    cwd: "/a",
+    platform: "linux",
+    description: "x", expertise: ["x"], owns: ["/a"],
+  });
+  createPersona(ctx.paths, {
+    username: "beta",
+    project: "p",
+    cwd: "/b",
+    platform: "linux",
+    description: "y", expertise: ["y"], owns: ["/b"],
+  });
+  // Seed memory for each by claiming + appending.
+  await call("claim", { username: "alpha" });
+  await call("append_memory", { text: "shared-keyword from alpha" });
+  await call("claim", { username: "beta" });
+  await call("append_memory", { text: "shared-keyword from beta" });
+  await call("append_memory", { text: "noise" });
+  const r = await call("find_memory", { query: "shared-keyword", scope: "all" });
+  expect(r.payload.count).toBe(2);
+  const usernames = (r.payload.hits as Array<{ username: string }>)
+    .map((h) => h.username).sort();
+  expect(usernames).toEqual(["alpha", "beta"]);
+});
+
+test("find_memory: scope='self' without a claim → no_persona", async () => {
+  // No claim; should error.
+  const r = await call("find_memory", { query: "anything" });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("no_persona");
+});
+
+// --- §6 HIGH context-pressure nudge surfaces in tool responses ---
+
+test("context-pressure: tool calls past the soft threshold inject a hint into the response", async () => {
+  // Bump just past the soft threshold via env override so the test
+  // doesn't have to dispatch 50 tools.
+  const prev = process.env.PANTHEON_PRESSURE_SOFT_TOOLS;
+  process.env.PANTHEON_PRESSURE_SOFT_TOOLS = "2";
+  try {
+    await call("register", {
+      username: "vellumpike",
+      project: "pantheon",
+      cwd: "/work",
+      description: "lead", expertise: ["x"], owns: ["/work"],
+    });
+    await call("claim", { username: "vellumpike" });
+    // append_memory IS a save — resets the counter. Run two
+    // non-save tools next to cross the soft threshold.
+    await call("append_memory", { text: "anchor" });
+    await call("session_info");
+    const r = await call("session_info");
+    const hints = r.payload.hints as string[] | undefined;
+    expect(hints).toBeDefined();
+    expect(hints!.some((h) => h.includes("context_pressure"))).toBe(true);
+    expect(hints!.some((h) => h.includes("soft hint"))).toBe(true);
+  } finally {
+    if (prev === undefined) delete process.env.PANTHEON_PRESSURE_SOFT_TOOLS;
+    else process.env.PANTHEON_PRESSURE_SOFT_TOOLS = prev;
+  }
+});
+
+test("context-pressure: a memory save resets the counter; the next call surfaces no hint", async () => {
+  const prev = process.env.PANTHEON_PRESSURE_SOFT_TOOLS;
+  process.env.PANTHEON_PRESSURE_SOFT_TOOLS = "2";
+  try {
+    await call("register", {
+      username: "vellumpike", project: "pantheon", cwd: "/work",
+      description: "lead", expertise: ["x"], owns: ["/work"],
+    });
+    await call("claim", { username: "vellumpike" });
+    await call("session_info");
+    await call("session_info"); // tools = 4 by now (register + claim count too)
+    // append_memory resets.
+    await call("append_memory", { text: "save" });
+    const r = await call("session_info");
+    const hints = (r.payload.hints as string[] | undefined) ?? [];
+    expect(hints.some((h) => h.includes("context_pressure"))).toBe(false);
+  } finally {
+    if (prev === undefined) delete process.env.PANTHEON_PRESSURE_SOFT_TOOLS;
+    else process.env.PANTHEON_PRESSURE_SOFT_TOOLS = prev;
+  }
+});

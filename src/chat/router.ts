@@ -18,6 +18,7 @@ import {
 } from "./collision.ts";
 import { TombstoneMap } from "./tombstones.ts";
 import { persistMessage } from "./persistence.ts";
+import { appendAudit } from "./audit.ts";
 import {
   DEFAULT_PRUNE_GRACE_MS,
   DEFAULT_STALE_THRESHOLD_MS,
@@ -415,6 +416,11 @@ export class ChatRouter {
         // best-effort — never fail a send because of persistence
       }
     }
+    // §6 HIGH durable chat audit log — append-only JSONL backstop
+    // for cross-agent dispute resolution. Gated by env; no-op when
+    // disabled. Best-effort so an audit-write hiccup never blocks
+    // a send.
+    appendAudit(this.paths, msg);
     this.recent.push(msg);
     if (this.recent.length > this.maxInMemory) {
       this.recent.splice(0, this.recent.length - this.maxInMemory);
@@ -869,6 +875,7 @@ export class ChatRouter {
         connected_at: sub.connected_at,
         last_seen: sub.last_seen,
         status_updated_at: sub.status_updated_at,
+        ...(sub.status_meta ? { status_meta: sub.status_meta } : {}),
       });
     }
     return out.sort((a, b) => a.username.localeCompare(b.username));

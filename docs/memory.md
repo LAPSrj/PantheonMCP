@@ -281,6 +281,39 @@ update_memory({ id, see_also: ["new-id-only"] }) // replace whole list
 Updates also run the `invalid_reference` validation against the
 persona's current memory.
 
+## `only_core` render (§6 LOW)
+
+`get_memory({ username, only_core: true })` renders ONLY the Core
+tier — skips Active / Index / Hidden sections entirely. Pairs naturally
+with `username` for cross-persona inspection: `get_memory({ username:
+"someone-else", only_core: true })` returns just that agent's
+foundational notes without their working-set context.
+
+The collapse + budget warnings still fire as normal for Core.
+`recall_memory(id)` also still works for any entry; only_core only
+gates what gets rendered, not what's reachable.
+
+## `find_memory` cross-agent search (§6 LOW)
+
+`find_memory({ query, scope: "self" | "all" })` searches across one
+or many personas' memory for entries matching `query` (case-
+insensitive substring across summary + text). Returns hits with
+`username` attached so callers can route follow-ups (e.g.
+`recall_memory({ id, username })`).
+
+| `scope`   | Behavior                                                    |
+|-----------|-------------------------------------------------------------|
+| `"self"`  | Searches the caller's claimed persona only. `no_persona` if no claim. |
+| `"all"`   | Walks every registered persona via `listPersonas`. No claim required. |
+
+Other filters (`kind`, `since`, `status`, `core`, `limit`) compose
+with `query`. Results sorted newest-first across the union; default
+`limit` 50.
+
+The pure operation `findMemory(paths, usernames, filter)` is exported
+from `src/memory/operations.ts` so the MCP handler is a thin wrapper —
+tests + CLI can bind their own usernames list.
+
 ## Snapshots (§6 LOW)
 
 Labeled snapshots of the persona's memory store live as parallel

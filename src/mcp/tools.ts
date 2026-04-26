@@ -240,13 +240,19 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "get_memory",
     description:
-      "Render your memory at startup-prompt shape (Core / Active / Index / Hidden tiers). Status NEVER mutates from rendering — collapse is render-time only; recall_memory(id) returns full text regardless. Defaults to your own.",
+      "Render your memory at startup-prompt shape (Core / Active / Index / Hidden tiers). Status NEVER mutates from rendering — collapse is render-time only; recall_memory(id) returns full text regardless. Defaults to your own. " +
+      "Pass `only_core: true` to render the Core tier in isolation (useful for cheap peer-inspection: `get_memory({ username: someone-else, only_core: true })`).",
     inputSchema: {
       type: "object",
       additionalProperties: false,
       properties: {
         username: { type: "string" },
         include_forgotten: { type: "boolean" },
+        only_core: {
+          type: "boolean",
+          description:
+            "Render Core tier only — skip Active/Index/Hidden. Default false.",
+        },
       },
     },
   },
@@ -378,6 +384,29 @@ export const TOOLS: readonly ToolDef[] = [
         kind: { type: "string" },
         since: { type: "string", description: "ISO date lower bound." },
         filter: { type: "string", description: "Case-insensitive substring across summary + text." },
+      },
+    },
+  },
+  {
+    name: "find_memory",
+    description:
+      "Search across one or many personas' memory for entries matching `query`. " +
+      "`scope: \"self\"` (default) searches your own; `scope: \"all\"` walks every registered persona. " +
+      "Returns hits with `username` attached so you can route follow-ups (e.g. `recall_memory({ id, username })`). " +
+      "Sorted newest-first across the union; capped at `limit` (default 50). " +
+      "Other filters (`kind`, `since`, `status`, `core`) compose with `query`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["query"],
+      properties: {
+        query: { type: "string", description: "Case-insensitive substring across summary + text." },
+        scope: { type: "string", enum: ["self", "all"], description: "Default 'self'." },
+        kind: { type: "string" },
+        since: { type: "string", description: "ISO date lower bound." },
+        status: { type: "string", enum: ["active", "faded", "forgotten", "all"] },
+        core: { type: "boolean" },
+        limit: { type: "number", description: "Default 50." },
       },
     },
   },
@@ -807,6 +836,22 @@ export const TOOLS: readonly ToolDef[] = [
           type: "boolean",
           description:
             "Bypass the 10-minute topic cooldown. Set true ONLY after reading a `topic_cooldown_active` rejection and confirming this really is a topic shift (not a sub-task).",
+        },
+        meta: {
+          oneOf: [
+            {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                task: { type: "string", description: "Concrete task you're on right now." },
+                blocker: { type: "string", description: "What's blocking you, if anything." },
+                eta: { type: "string", description: "Free-form ETA ('2pm', 'EOD', 'after lunch')." },
+              },
+              description:
+                "Optional structured status metadata for dashboards. Only the supplied fields update; existing meta is preserved when meta is omitted. Free-form `status` line stays the canonical signal.",
+            },
+            { type: "null", description: "Pass null to clear all metadata fields." },
+          ],
         },
       },
     },

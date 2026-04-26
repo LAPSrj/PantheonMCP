@@ -2,6 +2,7 @@ import { IdentityError } from "../identity/index.ts";
 import { MemoryError } from "../memory/index.ts";
 import { WatchdogError, isResetTrigger } from "../watchdog/index.ts";
 import { ChatError } from "../chat/index.ts";
+import { computePressure, isSaveTool, pressureHint } from "./context-pressure.ts";
 import { HANDLERS } from "./handlers/index.ts";
 import { ToolError, type HandlerContext, type MCPCallResult } from "./types.ts";
 
@@ -39,10 +40,47 @@ export async function dispatch(
         // Watchdog touch is best-effort — never fail a tool call on it.
       }
     }
-    return okResult(data);
+    // §6 HIGH context-pressure tracking. Every successful tool call
+    // bumps the activity counter; memory-save tools reset it. After
+    // the reset/bump, compute the pressure level and surface a hint
+    // in the response when at or above soft_hint.
+    try {
+      if (isSaveTool(toolName)) {
+        ctx.markMemorySave();
+      } else {
+        ctx.markActivity(toolName);
+      }
+    } catch {
+      // best-effort
+    }
+    const finalData = injectPressureHint(data, ctx);
+    return okResult(finalData);
   } catch (err) {
     return errorResult(mapError(err));
   }
+}
+
+/** Append a context-pressure hint to the response's `hints` array
+ * when the surrogate signals soft_hint or higher. Preserves any
+ * existing `hints` (e.g., the staleness nudge from `send_message`). */
+function injectPressureHint(data: unknown, ctx: HandlerContext): unknown {
+  if (typeof data !== "object" || data === null || Array.isArray(data)) {
+    return data;
+  }
+  let level: ReturnType<typeof computePressure>;
+  let state: ReturnType<typeof ctx.getPressureState>;
+  try {
+    state = ctx.getPressureState();
+    level = computePressure(state);
+  } catch {
+    return data;
+  }
+  if (level === "low") return data;
+  const hint = pressureHint(level, state);
+  if (!hint) return data;
+  const obj = data as Record<string, unknown>;
+  const existing = Array.isArray(obj.hints) ? (obj.hints as unknown[]) : [];
+  return { ...obj, hints: [...existing, hint] };
 }
 
 interface ErrorPayload {

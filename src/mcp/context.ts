@@ -40,6 +40,12 @@ export function createContext(options: CreateContextOptions = {}): HandlerContex
   const watchdog = options.watchdog ?? new Watchdog(realScheduler);
   let allowRestAuthorized = false;
   let chatAgentId: string | null = null;
+  // §6 HIGH context-pressure surrogate: tool-call counter + last-save
+  // timestamp. Dispatcher updates these; memory-save tools reset.
+  const pressure = {
+    toolCallsSinceLastSave: 0,
+    lastSaveAt: Date.now(),
+  };
   return {
     paths,
     session,
@@ -74,6 +80,19 @@ export function createContext(options: CreateContextOptions = {}): HandlerContex
     },
     setAllowRest(next: boolean): void {
       allowRestAuthorized = next;
+    },
+    markActivity(_toolName: string): void {
+      pressure.toolCallsSinceLastSave += 1;
+    },
+    markMemorySave(): void {
+      pressure.toolCallsSinceLastSave = 0;
+      pressure.lastSaveAt = Date.now();
+    },
+    getPressureState() {
+      return {
+        toolCallsSinceLastSave: pressure.toolCallsSinceLastSave,
+        lastSaveAt: pressure.lastSaveAt,
+      };
     },
   } as HandlerContext;
 }

@@ -10,6 +10,12 @@ const INDEX_FOOTER_THRESHOLD = 50;
 
 export interface RenderOptions {
   include_forgotten?: boolean;
+  /** When true, render ONLY the Core tier — skip Active/Index/Hidden.
+   * Used by callers (typically peer-inspection like `get_memory({
+   * username: other, only_core: true })`) who want the persona's
+   * foundational notes without the longer working-set context. Per
+   * the §6 LOW "cross-persona memory views" item. */
+  only_core?: boolean;
 }
 
 export interface RenderResult {
@@ -37,6 +43,7 @@ export function renderStore(
   options: RenderOptions = {},
 ): RenderResult {
   const includeForgotten = options.include_forgotten ?? false;
+  const onlyCore = options.only_core ?? false;
 
   const visible = store.entries.filter((e) =>
     includeForgotten ? true : e.status !== "forgotten",
@@ -50,9 +57,10 @@ export function renderStore(
   }
 
   const core = visible.filter((e) => Boolean(e.core));
-  const nonCoreActive = visible.filter((e) => !e.core && e.status === "active");
-  const nonCoreFaded = visible.filter((e) => !e.core && e.status === "faded");
-  const forgotten = includeForgotten
+  // only_core: skip the non-core tiers entirely.
+  const nonCoreActive = onlyCore ? [] : visible.filter((e) => !e.core && e.status === "active");
+  const nonCoreFaded = onlyCore ? [] : visible.filter((e) => !e.core && e.status === "faded");
+  const forgotten = includeForgotten && !onlyCore
     ? visible.filter((e) => e.status === "forgotten")
     : [];
 

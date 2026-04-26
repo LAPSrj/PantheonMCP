@@ -40,6 +40,22 @@ export interface Subscriber {
    * instructions. Optional (defaults to false at every read site).
    * Per-process only — not persisted in the SQLite presence table. */
   supports_channels?: boolean;
+  /** §6 LOW — structured status metadata for dashboards. Optional;
+   * present when the agent set them via `update_status({ task?,
+   * blocker?, eta? })`. The free-form `status` line is still the
+   * canonical signal; metadata is decoration that `list_agents` can
+   * render alongside. Per-process only — not persisted in SQLite
+   * (matches `supports_channels` scoping). */
+  status_meta?: StatusMeta;
+}
+
+/** §6 LOW — structured status metadata. Free-form strings;
+ * convention-driven shape. */
+export interface StatusMeta {
+  task?: string;
+  blocker?: string;
+  /** Free-form ETA string ("2pm", "EOD", "after lunch"). Not parsed. */
+  eta?: string;
 }
 
 export interface PendingAsk {
@@ -123,6 +139,11 @@ export interface PublicAgent {
   connected_at: number;
   last_seen: number;
   status_updated_at: number;
+  /** §6 LOW status-with-metadata. Only populated when the
+   * subscriber's `status_meta` is set in this process's memory.
+   * Cross-process consumers (other MCPs reading via the SQLite
+   * presence table) see no meta — it isn't persisted. */
+  status_meta?: StatusMeta;
 }
 
 export class ChatError extends Error {

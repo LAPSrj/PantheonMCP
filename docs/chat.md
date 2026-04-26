@@ -91,6 +91,57 @@ the spawned agent: "if login returns `username_taken`, do NOT call
 enriched error response, this gives the human full control without
 footguns.
 
+## Profile-update broadcasts
+
+`update_profile` emits a `system_kind: "profile_update"` event into the
+caller's project scope when one of `description` / `expertise` / `owns` /
+`color` changes. Other profile fields (mode, launch_args, channels,
+remote_control) DON'T broadcast — they're operator concerns, not
+discoverability changes.
+
+The broadcast body summarizes which fields changed (`alpha updated
+profile (description, expertise).`). Goes through the silent-event
+wrapper in the watcher (`profile_update` is in `SILENT_KINDS`) so
+peers see it as `<silent-event>` ambient noise — they don't have to
+re-render their working context for it. Best-effort: a chat-router
+hiccup never blocks the registry write.
+
+## Status-with-metadata
+
+`update_status` accepts an optional structured `meta` object alongside
+the free-form `status` line:
+
+```ts
+update_status({
+  status: "Building auth",
+  meta: { task: "wire login form", blocker: "design review pending", eta: "EOD" },
+})
+```
+
+Fields are all optional and free-form (no eta parsing). Partial updates
+preserve existing fields (`update_status({ meta: { blocker: "unblocked" }})`
+leaves task + eta intact). Pass `meta: null` to clear all metadata.
+
+Renders in `list_agents` as `status_meta` alongside `status`. Per-process
+only — not persisted in the SQLite presence table (matches
+`supports_channels` scoping). Cross-process consumers see no meta.
+
+## Durable chat audit log
+
+§6 HIGH — append-only JSONL backstop for cross-agent dispute resolution.
+Yapsmith's `9b00a1d` post-mortem flagged that the in-memory + SQLite-only
+chat history was insufficient: when attribution is contested, the
+canonical witness needs to outlive a daemon restart AND a SQLite WAL
+truncation window.
+
+`src/chat/audit.ts` exports:
+
+- `isAuditEnabled()` — reads `PANTHEON_CHAT_AUDIT_LOG` env (`1` / `true` / `yes`). Default OFF.
+- `auditPath(paths)` — `${stateDir}/chat-audit.jsonl` unless overridden by `PANTHEON_CHAT_AUDIT_PATH`.
+- `appendAudit(paths, msg)` — best-effort one-line-per-message append. Called by `ChatRouter.addMessage` after persistMessage. Format: ts, seq, id, from_agent_id, from_username, scope, target, text, plus optional system_kind / ask_id / mentions.
+
+Best-effort semantics: write failures are swallowed; the SQLite chat history is still the live record. The audit file is the durability backstop. Rotation + retention are deferred to operator discretion (no auto-truncation).
+
 ## Channels (`claude/channel` experimental capability)
 
 When the MCP client (Claude Code, with `--dangerously-load-development-channels server:pantheon` or equivalent) declares the `claude/channel` experimental capability, pantheon pushes deliverable chat messages directly back to the client as inline `notifications/claude/channel` events instead of relying on the Monitor watcher loop. Real-time, zero polling, no separate `pantheon-fetch --loop` process per agent.

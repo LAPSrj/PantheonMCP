@@ -3,6 +3,7 @@ export {
   type Mode,
   type SystemKind,
   type Subscriber,
+  type StatusMeta,
   type Message,
   type MessageInput,
   type PendingAsk,
@@ -28,8 +29,15 @@ export {
 export {
   ChatRouter,
   parseMentions,
+  renderStatusDigest,
   type RouterOptions,
 } from "./router.ts";
+
+export {
+  appendAudit,
+  auditPath,
+  isAuditEnabled,
+} from "./audit.ts";
 
 export {
   persistMessage,

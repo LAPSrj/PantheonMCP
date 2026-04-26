@@ -119,6 +119,46 @@ the watchdog on every incoming request (vanilla-MCP rule per §14);
 the dispatcher's per-tool gate is the explicit-list belt-and-braces
 signal.
 
+After watchdog touch, dispatch updates **context-pressure tracking**
+(§6 HIGH) — a save tool (`append_memory`/`update_memory`/`set_memory`/
+`snapshot_memory`/`rest`) calls `ctx.markMemorySave()`; everything
+else calls `ctx.markActivity(toolName)`. The pressure level is then
+computed via `computePressure(state)` and, when the level rises to
+`soft_hint` or higher, a hint string is appended to the response's
+`hints` array. See "Context-pressure surrogate" below.
+
+## Context-pressure surrogate (§6 HIGH)
+
+The brainstorm doc calls for an auto-context-percent nudge with a
+70% / 85% / 95% threshold ladder. Until CC exposes the actual
+context counter via a hook, pantheon uses a surrogate signal
+combining tool-call counter + wall-clock time-since-last-save:
+
+| Level          | Tool calls         | Time since save   | Hint copy                              |
+|----------------|--------------------|-------------------|----------------------------------------|
+| `low`          | < 50               | < 2 hours         | (no hint emitted)                      |
+| `soft_hint`    | ≥ 50               | ≥ 2 hours         | "soft hint — consider \`append_memory\`" |
+| `strong_nudge` | ≥ 100              | ≥ 4 hours         | "STRONG NUDGE — save state now"       |
+| `save_now`     | ≥ 150              | ≥ 8 hours         | "SAVE NOW — write a handoff entry"    |
+
+Either signal crossing a threshold raises the level. The hint is
+appended to the existing `hints` array on every tool response (so
+the staleness nudge from `send_message` and the pressure hint can
+coexist).
+
+State lives on `HandlerContext` (`getPressureState()` returns the
+snapshot); `markMemorySave` resets the counter and stamps the new
+`lastSaveAt`. Per-session — no cross-process state.
+
+Threshold overrides via env (mostly for tests):
+`PANTHEON_PRESSURE_SOFT_TOOLS`, `PANTHEON_PRESSURE_STRONG_TOOLS`,
+`PANTHEON_PRESSURE_SAVE_TOOLS`, `PANTHEON_PRESSURE_SOFT_MIN`,
+`PANTHEON_PRESSURE_STRONG_MIN`, `PANTHEON_PRESSURE_SAVE_MIN`.
+
+When a CC plugin hook for the actual context percent lands, this
+module gains a real-percent code path; the threshold ladder mapping
+already matches the brainstorm spec.
+
 ## Identity-leak fix surfacing
 
 `register` returns:

@@ -335,6 +335,52 @@ function toIndexEntry(e: MemoryEntry): MemoryIndexEntry {
   };
 }
 
+/** §6 LOW — cross-agent search. Walk one or many persona memory
+ * stores and return matching entries with `username` attached so
+ * callers can route follow-ups (e.g. `recall_memory({ id, username })`).
+ *
+ * Caller passes the usernames list — the MCP handler resolves
+ * `scope: "self" | "all"` against `listPersonas` before calling.
+ * This keeps the operation pure (no registry coupling) and testable
+ * with arbitrary fixture lists. Sorted newest-first across the union;
+ * results capped at `filter.limit` (default 50). */
+export interface FindMemoryFilter {
+  query: string;
+  kind?: string;
+  since?: string;
+  status?: "active" | "faded" | "forgotten" | "all";
+  core?: boolean;
+  /** Cap on total results across all personas. Default 50. */
+  limit?: number;
+}
+
+export interface FindMemoryHit extends MemoryIndexEntry {
+  username: string;
+}
+
+export function findMemory(
+  paths: Paths,
+  usernames: ReadonlyArray<string>,
+  filter: FindMemoryFilter,
+): FindMemoryHit[] {
+  const limit = filter.limit ?? 50;
+  const baseFilter: ListIndexFilter = {
+    filter: filter.query,
+    ...(filter.kind !== undefined ? { kind: filter.kind } : {}),
+    ...(filter.since !== undefined ? { since: filter.since } : {}),
+    ...(filter.status !== undefined ? { status: filter.status } : {}),
+    ...(filter.core !== undefined ? { core: filter.core } : {}),
+  };
+  const out: FindMemoryHit[] = [];
+  for (const username of usernames) {
+    const matches = listIndex(paths, username, baseFilter);
+    for (const m of matches) out.push({ ...m, username });
+  }
+  // listIndex returns newest-first per-persona; re-sort the union.
+  out.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  return out.slice(0, limit);
+}
+
 function byteSizeKb(text: string): number {
   return Math.round((Buffer.byteLength(text, "utf8") / 1024) * 10) / 10;
 }

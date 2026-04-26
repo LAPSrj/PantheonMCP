@@ -301,6 +301,19 @@ export const update_status: Handler = async (args, ctx) => {
   if (status !== undefined) patch.status = status;
   if (project !== undefined) patch.project = project;
   if (username !== undefined) patch.username = username;
+  // §6 LOW status-with-metadata — accepts a structured `meta`
+  // object; null clears. Only the supplied fields update; existing
+  // metadata is preserved when meta is omitted.
+  const metaArg = asObject(args.meta);
+  let metaPatch: { task?: string; blocker?: string; eta?: string } | "clear" | undefined;
+  if (args.meta === null) {
+    metaPatch = "clear";
+  } else if (metaArg !== undefined) {
+    metaPatch = {};
+    if (asString(metaArg.task) !== undefined) metaPatch.task = asString(metaArg.task)!;
+    if (asString(metaArg.blocker) !== undefined) metaPatch.blocker = asString(metaArg.blocker)!;
+    if (asString(metaArg.eta) !== undefined) metaPatch.eta = asString(metaArg.eta)!;
+  }
 
   // Topic-cooldown gate: when the caller is changing status (not just
   // renaming/switching project, not idempotent, and there was a prior
@@ -335,6 +348,20 @@ export const update_status: Handler = async (args, ctx) => {
   }
 
   const sub = router.update(agentId, patch);
+  // §6 LOW status_meta — apply directly to the in-memory subscriber
+  // (per-process, like supports_channels — not persisted in
+  // SQLite). list_agents reads it back for dashboard rendering.
+  if (metaPatch === "clear") {
+    delete sub.status_meta;
+  } else if (metaPatch !== undefined) {
+    const prev = sub.status_meta ?? {};
+    sub.status_meta = {
+      ...prev,
+      ...(metaPatch.task !== undefined ? { task: metaPatch.task } : {}),
+      ...(metaPatch.blocker !== undefined ? { blocker: metaPatch.blocker } : {}),
+      ...(metaPatch.eta !== undefined ? { eta: metaPatch.eta } : {}),
+    };
+  }
   // Per Yapsmith's revamp: do NOT addMessage(system_kind: "status_update")
   // here. Status changes accumulate via markStatusChanged and get
   // batched into the periodic status_digest sweep (daemon-tick).
@@ -345,6 +372,7 @@ export const update_status: Handler = async (args, ctx) => {
     username: sub.username,
     project: sub.project,
     status: sub.status,
+    ...(sub.status_meta ? { meta: sub.status_meta } : {}),
   };
 };
 

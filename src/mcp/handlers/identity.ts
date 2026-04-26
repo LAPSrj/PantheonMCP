@@ -180,6 +180,38 @@ export const update_profile: Handler = async (args, ctx) => {
   if (asBoolean(args.remote_control) !== undefined)
     patch.remote_control = asBoolean(args.remote_control);
   const updated = patchPersona(ctx.paths, username, patch);
+
+  // §6 HIGH — profile_update broadcast. When a profile-shaping field
+  // changed (description/expertise/owns/color), emit a system event
+  // to project peers so they can re-evaluate "who owns what" without
+  // polling list_agents. The body summarizes what changed so the
+  // status_digest-style ambient render is informative without
+  // requiring a list call.
+  const profileFieldsChanged = (
+    "description" in patch ||
+    "expertise" in patch ||
+    "owns" in patch ||
+    "color" in patch
+  );
+  if (profileFieldsChanged && ctx.chat) {
+    const changedKeys = ["description", "expertise", "owns", "color"].filter(
+      (k) => k in patch,
+    );
+    try {
+      ctx.chat.addMessage({
+        from_agent_id: "system",
+        scope: "project",
+        project: updated.project,
+        text: `${updated.username} updated profile (${changedKeys.join(", ")}).`,
+        system: true,
+        system_kind: "profile_update",
+        system_actor: updated.username,
+      });
+    } catch {
+      // best-effort — never block update_profile on a chat hiccup
+    }
+  }
+
   // Conjure-bootstrap clear: once description / expertise / owns are all
   // supplied, drop the provisional flag.
   if (updated.provisional && updated.description && updated.expertise.length > 0 && updated.owns.length > 0) {

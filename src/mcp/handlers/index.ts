@@ -29,6 +29,7 @@ export const HANDLERS: Record<string, Handler> = {
   fade_memory: memory.fade_memory,
   forget_memory: memory.forget_memory,
   list_memory: memory.list_memory,
+  find_memory: memory.find_memory,
   get_memory_details: memory.get_memory_details,
   snapshot_memory: memory.snapshot_memory,
   restore_memory: memory.restore_memory,

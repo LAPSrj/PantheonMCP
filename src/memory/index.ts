@@ -17,12 +17,15 @@ export {
   getDetails,
   setMemory,
   listIndex,
+  findMemory,
   deriveSummary,
   DETAILS_MAX_BYTES,
   SUMMARY_MAX_CHARS,
   type AppendInput,
   type UpdateInput,
   type ListIndexFilter,
+  type FindMemoryFilter,
+  type FindMemoryHit,
 } from "./operations.ts";
 
 export {

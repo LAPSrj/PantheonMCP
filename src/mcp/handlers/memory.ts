@@ -2,6 +2,7 @@ import {
   appendEntry,
   deleteSnapshot,
   fadeEntry,
+  findMemory,
   forgetEntry,
   getDetails,
   getEntry,
@@ -13,10 +14,13 @@ import {
   setMemory,
   snapshotMemory,
   updateEntry,
+  type FindMemoryFilter,
   type ListIndexFilter,
 } from "../../memory/index.ts";
+import { listPersonas } from "../../identity/index.ts";
 import {
   asBoolean,
+  asNumber,
   asString,
   asStringRequired,
   type Handler,
@@ -35,7 +39,11 @@ function targetUsername(args: Record<string, unknown>, claimed: string | null): 
 export const get_memory: Handler = async (args, ctx) => {
   const username = targetUsername(args, ctx.session.claimedUsername);
   const includeForgotten = asBoolean(args.include_forgotten) ?? false;
-  const rendered = renderForPrompt(ctx.paths, username, { include_forgotten: includeForgotten });
+  const onlyCore = asBoolean(args.only_core) ?? false;
+  const rendered = renderForPrompt(ctx.paths, username, {
+    include_forgotten: includeForgotten,
+    only_core: onlyCore,
+  });
   return {
     username,
     text: rendered.text,
@@ -147,6 +155,42 @@ export const list_memory: Handler = async (args, ctx) => {
   if (asString(args.filter) !== undefined) filter.filter = asString(args.filter)!;
   const entries = listIndex(ctx.paths, username, filter);
   return { username, count: entries.length, entries };
+};
+
+/** §6 LOW — `find_memory({ query, scope: "self"|"all" })`. Wraps
+ * `findMemory` with scope resolution: self uses the caller's
+ * claimed persona; all walks every registered persona. Returns
+ * union sorted newest-first, capped at `limit` (default 50). */
+export const find_memory: Handler = async (args, ctx) => {
+  const query = asStringRequired(args.query, "query");
+  const scope = (asString(args.scope) ?? "self") as "self" | "all";
+  if (scope !== "self" && scope !== "all") {
+    throw new ToolError(
+      "invalid_argument",
+      `find_memory: scope must be 'self' or 'all'; got '${scope}'.`,
+    );
+  }
+  let usernames: string[];
+  if (scope === "all") {
+    usernames = listPersonas(ctx.paths).map((p) => p.username);
+  } else {
+    const claimed = ctx.session.claimedUsername;
+    if (!claimed) {
+      throw new ToolError(
+        "no_persona",
+        "find_memory({ scope: 'self' }) requires a claimed persona — call `claim` or `manifest` first, or pass scope: 'all'.",
+      );
+    }
+    usernames = [claimed];
+  }
+  const filter: FindMemoryFilter = { query };
+  if (asString(args.kind) !== undefined) filter.kind = asString(args.kind)!;
+  if (asString(args.since) !== undefined) filter.since = asString(args.since)!;
+  if (asString(args.status) !== undefined) filter.status = asString(args.status) as never;
+  if (asBoolean(args.core) !== undefined) filter.core = asBoolean(args.core)!;
+  if (asNumber(args.limit) !== undefined) filter.limit = asNumber(args.limit)!;
+  const hits = findMemory(ctx.paths, usernames, filter);
+  return { scope, query, count: hits.length, hits };
 };
 
 export const get_memory_details: Handler = async (args, ctx) => {

@@ -63,6 +63,15 @@ export interface HandlerContext {
   /** Mutator for `chat_agent_id` — `login` calls this to record the
    * subscriber id, `logout` clears it. */
   setChatAgentId(id: string | null): void;
+  /** §6 HIGH context-pressure tracking. Per-session state used by the
+   * dispatcher to decide whether to surface a pressure hint in the
+   * tool response. `markActivity` increments the counter; memory-
+   * save tools call `markMemorySave` which resets the counter and
+   * stamps `lastSaveAt`. `getPressureState` returns the current
+   * snapshot for `computePressure`. */
+  markActivity(toolName: string): void;
+  markMemorySave(): void;
+  getPressureState(): { toolCallsSinceLastSave: number; lastSaveAt: number };
 }
 
 export interface SpawnMetadata {

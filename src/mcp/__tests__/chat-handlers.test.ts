@@ -428,3 +428,99 @@ test("send_message: no staleness nudge when status is fresh", async () => {
   const r = await call("send_message", { text: "hello", scope: "global" });
   expect(r.payload.hints).toBeUndefined();
 });
+
+// --- §6 LOW status-with-metadata ---
+
+test("update_status: meta { task, blocker, eta } persists on subscriber + surfaces in response + list_agents", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const r = await call("update_status", {
+    status: "Building auth",
+    meta: { task: "wire login form", blocker: "design review pending", eta: "EOD" },
+  });
+  expect(r.ok).toBe(true);
+  expect(r.payload.meta).toEqual({
+    task: "wire login form",
+    blocker: "design review pending",
+    eta: "EOD",
+  });
+  // list_agents reflects it.
+  const list = await call("list_agents");
+  const me = (list.payload.agents as Array<{ username: string; status_meta?: unknown }>)
+    .find((a) => a.username === "alpha");
+  expect(me?.status_meta).toEqual({
+    task: "wire login form",
+    blocker: "design review pending",
+    eta: "EOD",
+  });
+});
+
+test("update_status: meta is partial — supplied fields update; others preserved", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  await call("update_status", {
+    status: "Building auth",
+    meta: { task: "wire login", blocker: "review", eta: "EOD" },
+  });
+  // Update only blocker; task + eta should survive.
+  await call("update_status", { meta: { blocker: "unblocked" } });
+  const list = await call("list_agents");
+  const me = (list.payload.agents as Array<{ username: string; status_meta?: { task?: string; blocker?: string; eta?: string } }>)
+    .find((a) => a.username === "alpha");
+  expect(me?.status_meta).toEqual({
+    task: "wire login",
+    blocker: "unblocked",
+    eta: "EOD",
+  });
+});
+
+test("update_status: meta: null clears all metadata fields", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  await call("update_status", {
+    status: "Building auth",
+    meta: { task: "x", blocker: "y" },
+  });
+  const r = await call("update_status", { meta: null });
+  expect(r.ok).toBe(true);
+  expect(r.payload.meta).toBeUndefined();
+});
+
+// --- §6 HIGH profile_update broadcast ---
+
+test("update_profile: emits system_kind:profile_update to project peers when description/expertise/owns/color change", async () => {
+  // register caller + a peer in same project so the broadcast lands somewhere observable.
+  const { createPersona } = await import("../../identity/index.ts");
+  createPersona(ctx.paths, {
+    username: "alpha",
+    project: "X",
+    cwd: "/work/alpha",
+    platform: "linux",
+    description: "lead", expertise: ["x"], owns: ["/work/alpha"],
+  });
+  await call("claim", { username: "alpha" });
+  const peer = ctx.chat!.add({ username: "betauser", project: "X", transient: false });
+  ctx.chat!.takeMessages(peer.agent_id); // drain initial
+  // Profile field change → broadcast.
+  const r = await call("update_profile", { description: "updated lead description" });
+  expect(r.ok).toBe(true);
+  const taken = ctx.chat!.takeMessages(peer.agent_id);
+  const msg = taken.messages.find((m) => m.system_kind === "profile_update");
+  expect(msg).toBeDefined();
+  expect(msg!.text).toContain("alpha updated profile");
+  expect(msg!.text).toContain("description");
+});
+
+test("update_profile: non-profile fields (mode, launch_args, channels) do NOT emit a broadcast", async () => {
+  const { createPersona } = await import("../../identity/index.ts");
+  createPersona(ctx.paths, {
+    username: "alpha",
+    project: "X",
+    cwd: "/work/alpha",
+    platform: "linux",
+    description: "lead", expertise: ["x"], owns: ["/work/alpha"],
+  });
+  await call("claim", { username: "alpha" });
+  const peer = ctx.chat!.add({ username: "betauser", project: "X", transient: false });
+  ctx.chat!.takeMessages(peer.agent_id);
+  await call("update_profile", { mode: "fresh", launch_args: ["--print"] });
+  const taken = ctx.chat!.takeMessages(peer.agent_id);
+  expect(taken.messages.some((m) => m.system_kind === "profile_update")).toBe(false);
+});
