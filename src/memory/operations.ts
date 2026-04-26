@@ -1,0 +1,346 @@
+import type { Paths } from "../storage/index.ts";
+import { loadStore, mutateStore } from "./store.ts";
+import {
+  MemoryError,
+  type MemoryEntry,
+  type MemoryIndexEntry,
+  type MemoryStatus,
+  type MemoryStore,
+} from "./types.ts";
+
+/** §4 / §12-H — `details` field hard cap. Enforced at the API boundary
+ * AND inside the store mutator (defense in depth). */
+export const DETAILS_MAX_BYTES = 5 * 1024 * 1024;
+/** §4 — summary upper bound; rejected at API. */
+export const SUMMARY_MAX_CHARS = 240;
+
+export interface AppendInput {
+  /** Optional ≤240 char headline. When omitted, derived from `text`'s
+   * first non-empty line. */
+  summary?: string;
+  /** Required body. Counts toward the Core/Active byte budget. */
+  text: string;
+  /** Optional ≤5MB unbounded payload. Never inlined at startup. */
+  details?: string;
+  kind?: string;
+  core?: boolean;
+  summoner_username?: string;
+}
+
+export interface UpdateInput {
+  summary?: string;
+  text?: string;
+  details?: string | null;
+  kind?: string;
+  core?: boolean;
+  status?: MemoryStatus;
+}
+
+export function appendEntry(
+  paths: Paths,
+  username: string,
+  input: AppendInput,
+): MemoryEntry {
+  validateAppend(input);
+  const summary = input.summary ?? deriveSummary(input.text);
+  validateSummaryLength(summary);
+
+  let created!: MemoryEntry;
+  mutateStore(paths, username, (store) => {
+    const existingIds = new Set(store.entries.map((e) => e.id));
+    created = {
+      id: slugify(summary || input.text, existingIds),
+      date: new Date().toISOString(),
+      summary,
+      text: input.text,
+      status: "active",
+      ...(input.details !== undefined ? { details: input.details } : {}),
+      ...(input.kind !== undefined ? { kind: input.kind } : {}),
+      ...(input.core ? { core: true } : {}),
+      ...(input.summoner_username !== undefined
+        ? { summoner_username: input.summoner_username }
+        : {}),
+    };
+    return { ...store, entries: [...store.entries, created] };
+  });
+  return created;
+}
+
+export function getEntry(
+  paths: Paths,
+  username: string,
+  id: string,
+): MemoryEntry | null {
+  const store = loadStore(paths, username);
+  return store.entries.find((e) => e.id === id) ?? null;
+}
+
+export function updateEntry(
+  paths: Paths,
+  username: string,
+  id: string,
+  patch: UpdateInput,
+): MemoryEntry {
+  if (patch.text !== undefined && patch.text.length === 0) {
+    throw new MemoryError("missing_text", "Entry text must be non-empty.");
+  }
+  if (patch.summary !== undefined) validateSummaryLength(patch.summary);
+  if (patch.details !== undefined && patch.details !== null) {
+    validateDetailsSize(patch.details);
+  }
+  if (
+    patch.status !== undefined &&
+    patch.status !== "active" &&
+    patch.status !== "faded" &&
+    patch.status !== "forgotten"
+  ) {
+    throw new MemoryError(
+      "invalid_status",
+      `Invalid status '${patch.status}'. Use 'active', 'faded', or 'forgotten'.`,
+    );
+  }
+
+  let updated!: MemoryEntry;
+  mutateStore(paths, username, (store) => {
+    const idx = store.entries.findIndex((e) => e.id === id);
+    if (idx === -1) {
+      throw new MemoryError("entry_not_found", `No memory entry with id '${id}'.`);
+    }
+    const current = store.entries[idx]!;
+    const next: MemoryEntry = {
+      ...current,
+      ...(patch.summary !== undefined ? { summary: patch.summary } : {}),
+      ...(patch.text !== undefined ? { text: patch.text } : {}),
+      ...(patch.kind !== undefined ? { kind: patch.kind } : {}),
+      ...(patch.status !== undefined ? { status: patch.status } : {}),
+    };
+    if (patch.details === null) {
+      delete next.details;
+    } else if (patch.details !== undefined) {
+      next.details = patch.details;
+    }
+    if (patch.core !== undefined) {
+      if (patch.core) next.core = true;
+      else delete next.core;
+    }
+    const entries = store.entries.slice();
+    entries[idx] = next;
+    updated = next;
+    return { ...store, entries };
+  });
+  return updated;
+}
+
+/** §13 explicit user calls only — sets status to faded. Status NEVER
+ * auto-mutates from render-time budget enforcement. */
+export function fadeEntry(
+  paths: Paths,
+  username: string,
+  id: string,
+): MemoryEntry {
+  return updateEntry(paths, username, id, { status: "faded" });
+}
+
+export function forgetEntry(
+  paths: Paths,
+  username: string,
+  id: string,
+): MemoryEntry {
+  return updateEntry(paths, username, id, { status: "forgotten" });
+}
+
+/** `recall_memory(id)` — §4: returns full text regardless of render
+ * tier. The render layer collapses to summary; this path always
+ * returns the body. Also flips faded → active per summon-mcp parity. */
+export function recallEntry(
+  paths: Paths,
+  username: string,
+  id: string,
+): MemoryEntry {
+  let recalled!: MemoryEntry;
+  mutateStore(paths, username, (store) => {
+    const idx = store.entries.findIndex((e) => e.id === id);
+    if (idx === -1) {
+      throw new MemoryError("entry_not_found", `No memory entry with id '${id}'.`);
+    }
+    const current = store.entries[idx]!;
+    if (current.status === "active") {
+      recalled = current;
+      return undefined;
+    }
+    const next: MemoryEntry = { ...current, status: "active" };
+    const entries = store.entries.slice();
+    entries[idx] = next;
+    recalled = next;
+    return { ...store, entries };
+  });
+  return recalled;
+}
+
+/** Returns `details` only. The natural read path for the heavy
+ * payload — never bundled into the startup render. */
+export function getDetails(
+  paths: Paths,
+  username: string,
+  id: string,
+): string | null {
+  const entry = getEntry(paths, username, id);
+  if (!entry) {
+    throw new MemoryError("entry_not_found", `No memory entry with id '${id}'.`);
+  }
+  return entry.details ?? null;
+}
+
+/** `set_memory` — replace the entire active entry list with a single
+ * new entry. Rare; preserved for parity with summon-mcp. */
+export function setMemory(
+  paths: Paths,
+  username: string,
+  input: AppendInput,
+): MemoryEntry {
+  validateAppend(input);
+  const summary = input.summary ?? deriveSummary(input.text);
+  validateSummaryLength(summary);
+
+  const entry: MemoryEntry = {
+    id: slugify(summary || input.text, new Set()),
+    date: new Date().toISOString(),
+    summary,
+    text: input.text,
+    status: "active",
+    ...(input.details !== undefined ? { details: input.details } : {}),
+    ...(input.kind !== undefined ? { kind: input.kind } : {}),
+    ...(input.core ? { core: true } : {}),
+    ...(input.summoner_username !== undefined
+      ? { summoner_username: input.summoner_username }
+      : {}),
+  };
+  mutateStore(paths, username, (store) => ({
+    ...store,
+    entries: [entry],
+  }));
+  return entry;
+}
+
+export interface ListIndexFilter {
+  status?: MemoryStatus | "all";
+  core?: boolean;
+  kind?: string;
+  /** ISO date string lower bound on entry date. */
+  since?: string;
+  /** Substring match (case-insensitive) against summary OR text. */
+  filter?: string;
+}
+
+/** §11b `list_memory` — index-shape only, no inline bodies. Sorted
+ * by date descending (newest at top) per §12-H. */
+export function listIndex(
+  paths: Paths,
+  username: string,
+  options: ListIndexFilter = {},
+): MemoryIndexEntry[] {
+  const store = loadStore(paths, username);
+  const status = options.status ?? "active";
+  const matches = store.entries.filter((e) => {
+    if (status !== "all" && e.status !== status) return false;
+    if (options.core !== undefined && Boolean(e.core) !== options.core) return false;
+    if (options.kind !== undefined && e.kind !== options.kind) return false;
+    if (options.since !== undefined && e.date < options.since) return false;
+    if (options.filter !== undefined) {
+      const f = options.filter.toLowerCase();
+      const hay = `${e.summary}\n${e.text}`.toLowerCase();
+      if (!hay.includes(f)) return false;
+    }
+    return true;
+  });
+  matches.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  return matches.map(toIndexEntry);
+}
+
+function toIndexEntry(e: MemoryEntry): MemoryIndexEntry {
+  return {
+    id: e.id,
+    date: e.date,
+    status: e.status,
+    core: Boolean(e.core),
+    summary: e.summary,
+    size_kb: byteSizeKb(e.text),
+    has_details: e.details !== undefined,
+    ...(e.kind !== undefined ? { kind: e.kind } : {}),
+  };
+}
+
+function byteSizeKb(text: string): number {
+  return Math.round((Buffer.byteLength(text, "utf8") / 1024) * 10) / 10;
+}
+
+function validateAppend(input: AppendInput): void {
+  if (!input.text || input.text.length === 0) {
+    throw new MemoryError("missing_text", "Entry text is required.");
+  }
+  if (input.details !== undefined) validateDetailsSize(input.details);
+}
+
+function validateSummaryLength(summary: string): void {
+  if (summary.length > SUMMARY_MAX_CHARS) {
+    throw new MemoryError(
+      "summary_too_long",
+      `Summary is ${summary.length} chars; cap is ${SUMMARY_MAX_CHARS}. Trim or move detail to text/details.`,
+      { length: summary.length, cap: SUMMARY_MAX_CHARS },
+    );
+  }
+}
+
+function validateDetailsSize(details: string): void {
+  const bytes = Buffer.byteLength(details, "utf8");
+  if (bytes > DETAILS_MAX_BYTES) {
+    throw new MemoryError(
+      "entry_too_large",
+      `details payload is ${bytes} bytes; cap is ${DETAILS_MAX_BYTES} (5 MB).`,
+      { bytes, cap: DETAILS_MAX_BYTES },
+    );
+  }
+}
+
+export function deriveSummary(text: string): string {
+  const firstLine = text.split("\n").find((l) => l.trim().length > 0) ?? "";
+  const clean = firstLine.replace(/^#+\s*/, "").trim();
+  if (clean.length <= SUMMARY_MAX_CHARS) return clean;
+  // Sentence-aware fallback: cut at the last sentence boundary that
+  // fits, else hard-trim with ellipsis.
+  const trimmed = clean.slice(0, SUMMARY_MAX_CHARS);
+  const lastBoundary = Math.max(
+    trimmed.lastIndexOf(". "),
+    trimmed.lastIndexOf("! "),
+    trimmed.lastIndexOf("? "),
+  );
+  if (lastBoundary >= SUMMARY_MAX_CHARS / 2) {
+    return trimmed.slice(0, lastBoundary + 1);
+  }
+  return trimmed.slice(0, SUMMARY_MAX_CHARS - 1) + "…";
+}
+
+function slugify(source: string, existingIds: Set<string>): string {
+  const clean = source
+    .replace(/^#+\s*/, "")
+    .replace(/\d{4}-\d{2}-\d{2}[T ]?\d{0,2}:?\d{0,2}:?\d{0,2}[Z ]?/g, "")
+    .replace(/^[\s—–-]+/, "")
+    .trim();
+
+  let slug = clean
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 40)
+    .replace(/-$/, "");
+
+  if (!slug) slug = `entry-${Date.now()}`;
+  if (!existingIds.has(slug)) return slug;
+  for (let i = 2; ; i++) {
+    const candidate = `${slug}-${i}`;
+    if (!existingIds.has(candidate)) return candidate;
+  }
+}
+
+export type { MemoryStore };

@@ -1,0 +1,39 @@
+export {
+  type MemoryEntry,
+  type MemoryStore,
+  type MemoryStatus,
+  type MemoryIndexEntry,
+  type MemoryErrorCode,
+  MemoryError,
+} from "./types.ts";
+
+export {
+  appendEntry,
+  getEntry,
+  updateEntry,
+  fadeEntry,
+  forgetEntry,
+  recallEntry,
+  getDetails,
+  setMemory,
+  listIndex,
+  deriveSummary,
+  DETAILS_MAX_BYTES,
+  SUMMARY_MAX_CHARS,
+  type AppendInput,
+  type UpdateInput,
+  type ListIndexFilter,
+} from "./operations.ts";
+
+export {
+  renderForPrompt,
+  renderStore,
+  type RenderOptions,
+  type RenderResult,
+  ACTIVE_BUDGET_BYTES,
+  CORE_BUDGET_BYTES,
+  CORE_HEAD_KEEP,
+  CORE_TAIL_KEEP,
+} from "./render.ts";
+
+export { loadStore, mutateStore } from "./store.ts";
