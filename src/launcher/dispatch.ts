@@ -87,18 +87,11 @@ function tryBuild(
   if (!adapter.capabilities().has(mode)) {
     return { ok: false, plan: {} as SpawnPlan };
   }
-  try {
-    const plan = adapter.buildSpawnPlan({
-      ...args,
-      target: { ...args.target, mode },
-    });
-    return { ok: true, plan };
-  } catch (err) {
-    if (err instanceof AdapterError && err.code === "adapter_not_implemented") {
-      return { ok: false, plan: {} as SpawnPlan };
-    }
-    throw err;
-  }
+  const plan = adapter.buildSpawnPlan({
+    ...args,
+    target: { ...args.target, mode },
+  });
+  return { ok: true, plan };
 }
 
 /** Default mode resolution honors the legacy env-knob shim per §11a:
@@ -137,10 +130,6 @@ function defaultModeFor(_adapter: Adapter, env: NodeJS.ProcessEnv): SpawnMode {
 const ADAPTERS_EXCLUDING_GENERIC = [
   "wt",
   "kitty",
-  "wezterm",
-  "iterm2",
   "tmux",
-  "gnome",
-  "terminal_app",
   "alacritty",
 ];

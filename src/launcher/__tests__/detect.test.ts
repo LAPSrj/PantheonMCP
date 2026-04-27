@@ -15,12 +15,15 @@ test("pickAdapter picks kitty when KITTY_PID is set (and WT is not)", () => {
   expect(pickAdapter(envOnly({ KITTY_WINDOW_ID: "1" })).name).toBe("kitty");
 });
 
-test("pickAdapter picks wezterm / iterm2 / gnome / terminal_app / alacritty by env signature", () => {
-  expect(pickAdapter(envOnly({ WEZTERM_PANE: "x" })).name).toBe("wezterm");
-  expect(pickAdapter(envOnly({ ITERM_SESSION_ID: "x" })).name).toBe("iterm2");
-  expect(pickAdapter(envOnly({ GNOME_TERMINAL_SCREEN: "x" })).name).toBe("gnome");
-  expect(pickAdapter(envOnly({ TERM_PROGRAM: "Apple_Terminal" })).name).toBe("terminal_app");
+test("pickAdapter picks alacritty by env signature", () => {
   expect(pickAdapter(envOnly({ ALACRITTY_LOG: "x" })).name).toBe("alacritty");
+});
+
+test("hosts without a dedicated adapter (WezTerm/iTerm2/GNOME/Terminal.app) fall through to generic", () => {
+  expect(pickAdapter(envOnly({ WEZTERM_PANE: "x" })).name).toBe("generic");
+  expect(pickAdapter(envOnly({ ITERM_SESSION_ID: "x" })).name).toBe("generic");
+  expect(pickAdapter(envOnly({ GNOME_TERMINAL_SCREEN: "x" })).name).toBe("generic");
+  expect(pickAdapter(envOnly({ TERM_PROGRAM: "Apple_Terminal" })).name).toBe("generic");
 });
 
 test("pickAdapter picks tmux when TMUX is set and no higher-priority host", () => {
@@ -31,7 +34,7 @@ test("pickAdapter falls back to generic when nothing matches", () => {
   expect(pickAdapter(envOnly({})).name).toBe("generic");
 });
 
-test("pickAdapter respects priority: WT beats kitty beats wezterm beats iterm2 beats tmux", () => {
+test("pickAdapter respects priority: WT beats kitty beats tmux", () => {
   expect(
     pickAdapter(envOnly({ WT_SESSION: "x", KITTY_PID: "x", TMUX: "/x" })).name,
   ).toBe("wt");
@@ -40,8 +43,8 @@ test("pickAdapter respects priority: WT beats kitty beats wezterm beats iterm2 b
 
 test("pickAdapter skips named adapters when opts.skip is provided", () => {
   expect(
-    pickAdapter(envOnly({ TMUX: "/x", GNOME_TERMINAL_SCREEN: "y" }), {
+    pickAdapter(envOnly({ TMUX: "/x", ALACRITTY_LOG: "y" }), {
       skip: ["tmux"],
     }).name,
-  ).toBe("gnome");
+  ).toBe("alacritty");
 });

@@ -122,8 +122,7 @@ export class AdapterError extends Error {
 
 export type AdapterErrorCode =
   | "unsupported_capability"
-  | "missing_dependency"
-  | "adapter_not_implemented";
+  | "missing_dependency";
 
 /** Default downgrade ladder per §5: try the request first, then fall
  * to less-capable modes in order until one is supported. */

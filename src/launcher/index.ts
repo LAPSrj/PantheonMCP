@@ -19,10 +19,6 @@ export {
   kitty,
   tmux,
   generic,
-  wezterm,
-  iterm2,
-  gnome,
-  terminal_app,
   alacritty,
 } from "./adapters/index.ts";
 

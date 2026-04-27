@@ -341,16 +341,15 @@ test("generic adapter just spawns the exec command directly", () => {
   expect(plan.cwd).toBe("/work");
 });
 
-// --- stub adapters fall through gracefully ---
+// --- hosts without a dedicated adapter ---
 
-test("stub adapter (e.g. wezterm) downgrades into generic 'new-window'", () => {
+test("WezTerm-like host without a dedicated adapter resolves via generic", () => {
+  // Pantheon doesn't ship a WezTerm-specific adapter; the detect
+  // ladder skips past WEZTERM_PANE and lands on `generic`. The user
+  // gets a basic `new-window` spawn rather than an error.
   const plan = resolveSpawnPlan(
     args({ target: { mode: "split-pane" } }),
     { env: { WEZTERM_PANE: "x" } },
   );
-  // wezterm is detected but its buildSpawnPlan throws
-  // adapter_not_implemented; downgrade ladder doesn't help (every mode
-  // throws), so we fall through to `generic`.
   expect(plan.adapter).toBe("generic");
-  expect(plan.downgrade_note).toContain("fell through to generic");
 });
