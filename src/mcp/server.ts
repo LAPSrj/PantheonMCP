@@ -9,10 +9,16 @@ import {
   DEFAULT_REST_TIMEOUT_SECONDS,
   defaultOnDeadline,
 } from "../watchdog/index.ts";
-import { stampRested } from "../identity/index.ts";
+import { stampRested, transitionClaim } from "../identity/index.ts";
 import { ChatRouter, pruneStale } from "../chat/index.ts";
 import { expireHandoffs } from "../memory/index.ts";
 import { openChatDb, resolvePaths } from "../storage/index.ts";
+import { parseThresholdsFromEnv } from "../cli/context-thresholds.ts";
+import {
+  ensureStopHookWrapper,
+  readClaudeSessionId,
+  writeRuntimeEnv,
+} from "../cli/runtime-bridge.ts";
 import { createContext } from "./context.ts";
 import { dispatch } from "./dispatch.ts";
 import { HookPoller, sweepStaleSessionDirs } from "./hook-poller.ts";
@@ -29,6 +35,40 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
   const summoner = process.env.PANTHEON_SUMMONER ?? null;
   const spawnMetadata = readSpawnMetadataFromEnv();
   const paths = resolvePaths();
+  // Capture the real CC session UUID at boot so `rest` can stamp
+  // `persona.resume_session_id` without the agent passing it
+  // manually, and the watchdog auto-rest path can do the same.
+  // `null` when pantheon is launched outside a CC session — resume
+  // features silently no-op in that case.
+  const claudeSessionAtBoot = readClaudeSessionId(process.ppid);
+
+  // Stop-hook plumbing: write the per-CC-session runtime env file so
+  // `pantheon context-check` can match this session and read the
+  // configured thresholds. Best-effort — when CC's session file isn't
+  // readable (pantheon launched outside a CC session), the Stop hook
+  // silently no-ops. Also (re)generates the bash wrapper script that
+  // settings.json's Stop hook invokes; idempotent.
+  try {
+    const claudePid = process.ppid;
+    const claudeSessionId = readClaudeSessionId(claudePid);
+    if (claudeSessionId) {
+      const windowOverrideRaw = process.env.PANTHEON_CONTEXT_WINDOW;
+      const windowOverride = windowOverrideRaw && Number.isFinite(Number(windowOverrideRaw))
+        ? Number(windowOverrideRaw)
+        : null;
+      writeRuntimeEnv({
+        claude_session_id: claudeSessionId,
+        claude_pid: claudePid,
+        cwd_at_boot: process.cwd(),
+        context_thresholds: parseThresholdsFromEnv(),
+        context_window_override: windowOverride,
+        written_at: Date.now(),
+      });
+    }
+    ensureStopHookWrapper();
+  } catch {
+    // best-effort — context-check feature is non-critical at boot
+  }
 
   // Open the chat DB lazily — it's the same connection the router
   // persists into. Per §15, the daemon owns this; for now the per-MCP
@@ -52,7 +92,31 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
       scheduleExit: makeRealExitScheduler(process.ppid),
       spawn_metadata: spawnMetadata,
       chat: router,
+      claude_session_id: claudeSessionAtBoot,
     });
+
+  // Summoned agents arrive with `PANTHEON_USERNAME` set by the spawn
+  // handler. Claim that persona at MCP boot so the session is in
+  // `claimed_persona` from the very first tool call — agents don't
+  // need to manually run `manifest`/`claim`, and a cold `login`
+  // doesn't trip the `registered_persona` rejection.
+  //
+  // Skipped when the test harness pre-injected an `options.context`
+  // (it owns the session lifecycle) or when no PANTHEON_USERNAME is
+  // set (cold `pantheon serve` outside a summon). Best-effort —
+  // never crash the daemon if the env-named persona is missing.
+  if (!options.context) {
+    const summonedUsername = process.env.PANTHEON_USERNAME;
+    if (summonedUsername && !ctx.session.claimedUsername) {
+      try {
+        transitionClaim(ctx.paths, ctx.session, summonedUsername);
+      } catch {
+        // Persona may have been unregistered between summon and boot,
+        // or the env var is stale. Login's auto-claim path will
+        // handle the cwd-match case at chat-login time.
+      }
+    }
+  }
 
   // Arm the watchdog with the per-summon rest_timeout if our spawner
   // set PANTHEON_REST_TIMEOUT (the env contract from §14 / spawn handler);
@@ -65,7 +129,16 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
       defaultOnDeadline(s);
       if (s.claimedUsername) {
         try {
-          stampRested(ctx.paths, s.claimedUsername, "auto_rest_timeout", null);
+          // Stamp the real CC session UUID (when known) so a future
+          // `summon --resume` lands on the same conversation. Falls
+          // through to null when pantheon was launched outside a CC
+          // session — `--resume` simply won't fire that summon.
+          stampRested(
+            ctx.paths,
+            s.claimedUsername,
+            "auto_rest_timeout",
+            ctx.claude_session_id,
+          );
         } catch {
           // best-effort — never let the watchdog crash the daemon
         }
