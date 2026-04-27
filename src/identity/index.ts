@@ -6,6 +6,9 @@ export {
   type SummonMode,
   type ClaudeColor,
   type IdentityErrorCode,
+  type PermissionMode,
+  PERMISSION_MODES,
+  DEFAULT_PERMISSION_MODE,
   IdentityError,
 } from "./types.ts";
 

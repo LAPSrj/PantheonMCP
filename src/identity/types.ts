@@ -48,6 +48,15 @@ export interface Persona {
    * The CLI flag (`--remote-control` / `--rc [name]`) overrides
    * per-call. */
   remote_control?: boolean;
+  /** Default Claude Code permission mode for spawns of this persona.
+   * Forwarded as `--permission-mode <value>` to the spawned `claude`.
+   * Cascade (highest priority first):
+   *   1. per-call `summon({ permission_mode })` arg
+   *   2. this field
+   *   3. `PANTHEON_DEFAULT_PERMISSION_MODE` env on the spawning MCP
+   *   4. hardcoded floor: `"acceptEdits"`
+   * `null` (or absent) means "fall through to the cascade". */
+  permission_mode?: PermissionMode | null;
 }
 
 export interface PersonaPatch {
@@ -63,6 +72,7 @@ export interface PersonaPatch {
   provisional?: boolean;
   channels?: string[];
   remote_control?: boolean;
+  permission_mode?: PermissionMode | null;
 }
 
 export type Platform = "wsl" | "windows" | "mac" | "linux";
@@ -78,6 +88,28 @@ export type ClaudeColor =
   | "orange"
   | "pink"
   | "cyan";
+
+/** Claude Code's `--permission-mode` values. `acceptEdits` is the
+ * `⏵⏵` mode in CC's prompt bar — auto-accepts edit/write tool
+ * calls. `default` keeps prompts; `plan` blocks all edits;
+ * `bypassPermissions` skips ALL checks (handle with care). */
+export type PermissionMode =
+  | "default"
+  | "acceptEdits"
+  | "plan"
+  | "bypassPermissions";
+
+export const PERMISSION_MODES: ReadonlyArray<PermissionMode> = [
+  "default",
+  "acceptEdits",
+  "plan",
+  "bypassPermissions",
+];
+
+/** Cascade floor — what summoned agents land on when nothing else
+ * overrides. `acceptEdits` makes the prompt bar show `⏵⏵ accept
+ * edits on` from the first turn. */
+export const DEFAULT_PERMISSION_MODE: PermissionMode = "acceptEdits";
 
 /** Input shape for `createPersona`. Server-managed fields
  * (`registered_at`, `registered_by_pid`, `last_*`, `summon_count`,
@@ -100,6 +132,7 @@ export interface PersonaCreate {
   provisional?: boolean;
   channels?: string[];
   remote_control?: boolean;
+  permission_mode?: PermissionMode | null;
 }
 
 export class IdentityError extends Error {

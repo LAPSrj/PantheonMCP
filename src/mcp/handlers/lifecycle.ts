@@ -37,7 +37,12 @@ export const rest: Handler = async (args, ctx) => {
     throw new ToolError("no_persona", "rest requires a claimed persona.");
   }
   const reason = asString(args.reason) ?? "explicit_rest";
-  const sessionId = asString(args.session_id) ?? null;
+  // session_id cascade: explicit caller arg > MCP-boot-captured CC
+  // session UUID > null. Stamping the id is what makes a later
+  // `summon --resume` actually resume this conversation; the
+  // ctx-fallback means agents don't have to know their own UUID.
+  const sessionId =
+    asString(args.session_id) ?? ctx.claude_session_id ?? null;
 
   // §6 MEDIUM idle-handoff slot — write a `kind: "handoff"` memory
   // entry with a 7-day TTL, optionally DM the target. Best-effort

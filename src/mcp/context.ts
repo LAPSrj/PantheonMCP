@@ -29,6 +29,11 @@ export interface CreateContextOptions {
   /** Override the path to `~/.claude.json` (for tests). Defaults to
    * `path.join(os.homedir(), ".claude.json")`. */
   claude_config_path?: string;
+  /** Real Claude Code session UUID. The MCP server reads this from
+   * `~/.claude/sessions/<ppid>.json` at boot and forwards it. Tests
+   * can inject a fixed value to drive the rest-stamping path
+   * deterministically. */
+  claude_session_id?: string | null;
 }
 
 /** Build a runtime context around the four foundation layers. The MCP
@@ -69,6 +74,7 @@ export function createContext(options: CreateContextOptions = {}): HandlerContex
     spawn_metadata: options.spawn_metadata ?? null,
     chat: options.chat ?? null,
     claude_config_path: options.claude_config_path ?? paths.claudeConfigPath,
+    claude_session_id: options.claude_session_id ?? null,
     get chat_agent_id(): string | null {
       return chatAgentId;
     },

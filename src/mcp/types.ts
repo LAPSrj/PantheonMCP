@@ -54,6 +54,14 @@ export interface HandlerContext {
    * handler to auto-trust the persona's cwd before spawn. Defaults to
    * `path.join(os.homedir(), ".claude.json")`; tests inject a tmp path. */
   claude_config_path: string;
+  /** Real Claude Code session UUID for the parent process, read at
+   * MCP boot from `~/.claude/sessions/<ppid>.json`. Used by `rest` to
+   * stamp `persona.resume_session_id` automatically (so `summon
+   * --resume` works without the caller manually passing the id) and
+   * by the auto-rest watchdog deadline callback. `null` when pantheon
+   * was launched outside a CC session — resume features silently
+   * no-op in that case. */
+  claude_session_id: string | null;
   /** Chat router instance. `null` when no router is attached to this
    * context (e.g. early bootstrap, identity-only test harnesses). */
   chat: ChatRouter | null;

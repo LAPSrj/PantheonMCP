@@ -1,5 +1,6 @@
 import {
   IdentityError,
+  PERMISSION_MODES,
   forkPersona,
   listPersonas,
   patchPersona,
@@ -10,6 +11,7 @@ import {
   transitionManifest,
   transitionRegister,
   transitionUnregister,
+  type PermissionMode,
 } from "../../identity/index.ts";
 import { loadStore } from "../../memory/index.ts";
 import {
@@ -20,6 +22,10 @@ import {
   asStringArray,
   asStringRequired,
 } from "../types.ts";
+
+function isPermissionModeArg(v: unknown): v is PermissionMode {
+  return typeof v === "string" && (PERMISSION_MODES as readonly string[]).includes(v);
+}
 
 export const whoami: Handler = async (args, ctx) => {
   const cwd = asString(args.cwd) ?? process.cwd();
@@ -82,6 +88,9 @@ export const register: Handler = async (args, ctx) => {
         : {}),
       ...(asBoolean(args.remote_control) !== undefined
         ? { remote_control: asBoolean(args.remote_control)! }
+        : {}),
+      ...(isPermissionModeArg(args.permission_mode)
+        ? { permission_mode: args.permission_mode }
         : {}),
     },
     {
@@ -179,6 +188,13 @@ export const update_profile: Handler = async (args, ctx) => {
   if (asStringArray(args.channels) !== undefined) patch.channels = asStringArray(args.channels);
   if (asBoolean(args.remote_control) !== undefined)
     patch.remote_control = asBoolean(args.remote_control);
+  if ("permission_mode" in args) {
+    if (args.permission_mode === null) {
+      patch.permission_mode = null;
+    } else if (isPermissionModeArg(args.permission_mode)) {
+      patch.permission_mode = args.permission_mode;
+    }
+  }
   const updated = patchPersona(ctx.paths, username, patch);
 
   // §6 HIGH — profile_update broadcast. When a profile-shaping field
@@ -205,7 +221,6 @@ export const update_profile: Handler = async (args, ctx) => {
         text: `${updated.username} updated profile (${changedKeys.join(", ")}).`,
         system: true,
         system_kind: "profile_update",
-        system_actor: updated.username,
       });
     } catch {
       // best-effort — never block update_profile on a chat hiccup

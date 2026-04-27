@@ -1,8 +1,11 @@
 import {
+  DEFAULT_PERMISSION_MODE,
   IdentityError,
+  PERMISSION_MODES,
   createPersona,
   readPersona,
   stampSummoned,
+  type PermissionMode,
 } from "../../identity/index.ts";
 import {
   decideNextSplit,
@@ -86,7 +89,12 @@ export async function spawnPersona(
   persona: Persona,
 ): Promise<unknown> {
   const prompt = asString(args.prompt) ?? "";
-  const resume = asBoolean(args.resume) ?? false;
+  // Resume cascade: caller arg wins; otherwise honor `persona.mode`
+  // ("resume" personas auto-resume on every summon, "fresh" personas
+  // start clean). Without this fallback, `persona.mode = "resume"`
+  // was a label with no effect — agents had to remember to pass
+  // `resume: true` every time.
+  const resume = asBoolean(args.resume) ?? (persona.mode === "resume");
   const target = asObject(args.target) as SpawnTarget | undefined;
   const restTimeoutRaw = args.rest_timeout;
   const restTimeout: number | "never" = parseRestTimeout(restTimeoutRaw);
@@ -112,6 +120,18 @@ export async function spawnPersona(
   if (rcResolved !== null) {
     launchArgs.push("--remote-control", rcResolved);
   }
+
+  // Permission-mode cascade — per-call > persona.permission_mode >
+  // PANTHEON_DEFAULT_PERMISSION_MODE env > "acceptEdits" floor.
+  // Forwarded as `--permission-mode <value>` so the spawned `claude`
+  // starts in the desired mode (e.g. `acceptEdits` shows `⏵⏵ accept
+  // edits on` in the prompt bar — no Shift+Tab keystroke needed).
+  const permissionMode = resolvePermissionMode(
+    args.permission_mode,
+    persona,
+    ctx.spawn_env,
+  );
+  launchArgs.push("--permission-mode", permissionMode);
 
   if (resume && persona.resume_session_id) {
     launchArgs.push("--resume", persona.resume_session_id);
@@ -340,6 +360,32 @@ function resolveRemoteControl(raw: unknown, persona: Persona): string | null {
   return null;
 }
 
+function isPermissionMode(v: unknown): v is PermissionMode {
+  return typeof v === "string" && (PERMISSION_MODES as readonly string[]).includes(v);
+}
+
+/** Resolve the effective permission mode for a spawn:
+ *   1. caller-supplied `args.permission_mode`
+ *   2. `persona.permission_mode`
+ *   3. `PANTHEON_DEFAULT_PERMISSION_MODE` env on the spawning MCP
+ *   4. `DEFAULT_PERMISSION_MODE` floor (`"acceptEdits"`)
+ *
+ * Invalid values at any layer fall through silently to the next layer
+ * — better to ship the agent with the floor than to error a summon. */
+function resolvePermissionMode(
+  raw: unknown,
+  persona: Persona,
+  env: NodeJS.ProcessEnv,
+): PermissionMode {
+  if (isPermissionMode(raw)) return raw;
+  if (persona.permission_mode != null && isPermissionMode(persona.permission_mode)) {
+    return persona.permission_mode;
+  }
+  const envDefault = env.PANTHEON_DEFAULT_PERMISSION_MODE;
+  if (isPermissionMode(envDefault)) return envDefault;
+  return DEFAULT_PERMISSION_MODE;
+}
+
 export const summon: Handler = (args, ctx) => performSummon(args, ctx, { any_project: false });
 export const summon_any: Handler = (args, ctx) => performSummon(args, ctx, { any_project: true });
 
@@ -393,6 +439,9 @@ async function performConjure(
       : {}),
     ...(asBoolean(args.remote_control) !== undefined
       ? { remote_control: asBoolean(args.remote_control)! }
+      : {}),
+    ...(isPermissionMode(args.permission_mode)
+      ? { permission_mode: args.permission_mode }
       : {}),
     provisional: true,
   });

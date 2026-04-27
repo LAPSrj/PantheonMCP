@@ -122,6 +122,14 @@ function validatePersonaShape(p: Record<string, unknown>): string[] {
   if ("remote_control" in p && typeof p.remote_control !== "boolean") {
     errors.push("remote_control must be boolean if present");
   }
+  if ("permission_mode" in p && p.permission_mode !== null) {
+    const valid = ["default", "acceptEdits", "plan", "bypassPermissions"];
+    if (typeof p.permission_mode !== "string" || !valid.includes(p.permission_mode)) {
+      errors.push(
+        "permission_mode must be one of: default, acceptEdits, plan, bypassPermissions, or null",
+      );
+    }
+  }
   return errors;
 }
 

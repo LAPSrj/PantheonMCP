@@ -147,10 +147,112 @@ test("summon: resume + saved session id appends --resume <id>", async () => {
   expect(argv).toContain("session-abc");
 });
 
+test("summon: persona.mode === 'resume' defaults args.resume to true", async () => {
+  const persona = fixturePersona({ mode: "resume" });
+  const { writePersona } = await import("../../identity/index.ts");
+  writePersona(ctx.paths, { ...persona, resume_session_id: "session-xyz" });
+
+  // No explicit resume arg — should still resume because of mode.
+  await call("summon", { username: "moth-whistle" });
+  const argv = recorder[0]!.args;
+  expect(argv).toContain("--resume");
+  expect(argv).toContain("session-xyz");
+});
+
+test("summon: explicit resume:false beats persona.mode === 'resume'", async () => {
+  const persona = fixturePersona({ mode: "resume" });
+  const { writePersona } = await import("../../identity/index.ts");
+  writePersona(ctx.paths, { ...persona, resume_session_id: "session-xyz" });
+
+  await call("summon", { username: "moth-whistle", resume: false });
+  const argv = recorder[0]!.args;
+  expect(argv).not.toContain("--resume");
+});
+
 test("summon: rest_timeout 'never' propagates via PANTHEON_REST_TIMEOUT env", async () => {
   fixturePersona();
   await call("summon", { username: "moth-whistle", rest_timeout: "never" });
   expect(recorder[0]!.env?.PANTHEON_REST_TIMEOUT).toBe("never");
+});
+
+// --- permission_mode cascade ---
+
+function lastSpawnArgs(): string[] {
+  return recorder[recorder.length - 1]!.args;
+}
+
+function permissionModeFromArgs(args: string[]): string | null {
+  const i = args.indexOf("--permission-mode");
+  return i >= 0 && i + 1 < args.length ? args[i + 1]! : null;
+}
+
+test("permission_mode cascade: floor is 'acceptEdits' when nothing else set", async () => {
+  fixturePersona();
+  await call("summon", { username: "moth-whistle" });
+  expect(permissionModeFromArgs(lastSpawnArgs())).toBe("acceptEdits");
+});
+
+test("permission_mode cascade: persona.permission_mode wins over the floor", async () => {
+  fixturePersona({ permission_mode: "plan" });
+  await call("summon", { username: "moth-whistle" });
+  expect(permissionModeFromArgs(lastSpawnArgs())).toBe("plan");
+});
+
+test("permission_mode cascade: per-call arg wins over persona.permission_mode", async () => {
+  fixturePersona({ permission_mode: "plan" });
+  await call("summon", {
+    username: "moth-whistle",
+    permission_mode: "bypassPermissions",
+  });
+  expect(permissionModeFromArgs(lastSpawnArgs())).toBe("bypassPermissions");
+});
+
+test("permission_mode cascade: PANTHEON_DEFAULT_PERMISSION_MODE env wins over the floor when persona unset", async () => {
+  // Rebuild ctx with the env var set; spawn_env is read by the resolver.
+  const paths = ctx.paths;
+  const newCtx = createContext({
+    paths,
+    session: ctx.session,
+    watchdog: ctx.watchdog,
+    parent_pid: ctx.parent_pid,
+    platform: "linux",
+    spawn_executor: ctx.spawn_executor,
+    stderr_probe_ms: 5,
+    spawn_env: { PANTHEON_DEFAULT_PERMISSION_MODE: "plan" } as NodeJS.ProcessEnv,
+  });
+  fixturePersona();
+  await dispatch("summon", { username: "moth-whistle" }, newCtx);
+  expect(permissionModeFromArgs(lastSpawnArgs())).toBe("plan");
+});
+
+test("permission_mode cascade: persona.permission_mode beats the env default", async () => {
+  const paths = ctx.paths;
+  const newCtx = createContext({
+    paths,
+    session: ctx.session,
+    watchdog: ctx.watchdog,
+    parent_pid: ctx.parent_pid,
+    platform: "linux",
+    spawn_executor: ctx.spawn_executor,
+    stderr_probe_ms: 5,
+    spawn_env: { PANTHEON_DEFAULT_PERMISSION_MODE: "plan" } as NodeJS.ProcessEnv,
+  });
+  fixturePersona({ permission_mode: "default" });
+  await dispatch("summon", { username: "moth-whistle" }, newCtx);
+  expect(permissionModeFromArgs(lastSpawnArgs())).toBe("default");
+});
+
+test("permission_mode cascade: invalid per-call value falls through to persona", async () => {
+  fixturePersona({ permission_mode: "plan" });
+  await call("summon", { username: "moth-whistle", permission_mode: "garbage" });
+  expect(permissionModeFromArgs(lastSpawnArgs())).toBe("plan");
+});
+
+test("permission_mode: --permission-mode flag is always present in argv", async () => {
+  fixturePersona();
+  await call("summon", { username: "moth-whistle" });
+  const args = lastSpawnArgs();
+  expect(args).toContain("--permission-mode");
 });
 
 // --- summon project gate ---

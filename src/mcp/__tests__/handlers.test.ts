@@ -149,6 +149,41 @@ test("update_profile clears provisional once description+expertise+owns are all 
   expect(r.payload.provisional).toBe(false);
 });
 
+test("update_profile persists permission_mode and round-trips via readPersona", async () => {
+  createPersona(ctx.paths, {
+    username: "moth-whistle",
+    project: "pantheon",
+    cwd: "/work",
+    platform: "linux",
+    description: "x",
+    expertise: ["x"],
+    owns: ["/x"],
+  });
+  await call("claim", { username: "moth-whistle" });
+  const r = await call("update_profile", { permission_mode: "plan" });
+  expect(r.ok).toBe(true);
+  expect(r.payload.permission_mode).toBe("plan");
+  const { readPersona } = await import("../../identity/index.ts");
+  expect(readPersona(ctx.paths, "moth-whistle")?.permission_mode).toBe("plan");
+});
+
+test("update_profile permission_mode: null clears the field", async () => {
+  createPersona(ctx.paths, {
+    username: "moth-whistle",
+    project: "pantheon",
+    cwd: "/work",
+    platform: "linux",
+    description: "x",
+    expertise: ["x"],
+    owns: ["/x"],
+    permission_mode: "plan",
+  });
+  await call("claim", { username: "moth-whistle" });
+  const r = await call("update_profile", { permission_mode: null });
+  expect(r.ok).toBe(true);
+  expect(r.payload.permission_mode).toBeNull();
+});
+
 test("session_info reports current state", async () => {
   const r = await call("session_info");
   expect(r.ok).toBe(true);
@@ -243,6 +278,81 @@ test("rest requires either summoned session or allow_rest", async () => {
   const ok = await call("rest", { reason: "user_done" });
   expect(ok.ok).toBe(true);
   expect(ctx.session.isResting).toBe(true);
+});
+
+test("rest auto-stamps resume_session_id from ctx.claude_session_id when caller omits it", async () => {
+  // Build a fresh ctx with a known CC session UUID so we can assert
+  // the auto-capture path.
+  const paths = resolvePaths({ PANTHEON_HOME: tmpDir } as NodeJS.ProcessEnv);
+  const ctx2 = createContext({
+    paths,
+    session: new Session("s2"),
+    watchdog: new Watchdog(new FakeScheduler() as never),
+    parent_pid: 99999,
+    platform: "linux",
+    scheduleExit: (delay, reason) => exitCalls.push({ delay, reason }),
+    claude_session_id: "cc-uuid-abc-123",
+  });
+  await dispatch(
+    "register",
+    {
+      username: "vellumpike",
+      project: "pantheon",
+      cwd: "/work",
+      claim_after: true,
+    },
+    ctx2,
+  );
+  await dispatch("allow_rest", {}, ctx2);
+  await dispatch("rest", { reason: "user_done" }, ctx2);
+  const { readPersona } = await import("../../identity/index.ts");
+  expect(readPersona(paths, "vellumpike")?.resume_session_id).toBe("cc-uuid-abc-123");
+});
+
+test("rest: explicit args.session_id overrides ctx.claude_session_id", async () => {
+  const paths = resolvePaths({ PANTHEON_HOME: tmpDir } as NodeJS.ProcessEnv);
+  const ctx2 = createContext({
+    paths,
+    session: new Session("s2"),
+    watchdog: new Watchdog(new FakeScheduler() as never),
+    parent_pid: 99999,
+    platform: "linux",
+    scheduleExit: (delay, reason) => exitCalls.push({ delay, reason }),
+    claude_session_id: "ctx-default",
+  });
+  await dispatch(
+    "register",
+    {
+      username: "vellumpike",
+      project: "pantheon",
+      cwd: "/work",
+      claim_after: true,
+    },
+    ctx2,
+  );
+  await dispatch("allow_rest", {}, ctx2);
+  await dispatch(
+    "rest",
+    { reason: "user_done", session_id: "explicit-override" },
+    ctx2,
+  );
+  const { readPersona } = await import("../../identity/index.ts");
+  expect(readPersona(paths, "vellumpike")?.resume_session_id).toBe("explicit-override");
+});
+
+test("rest: leaves resume_session_id null when neither arg nor ctx provides one", async () => {
+  // ctx (the default in beforeEach) has no claude_session_id, so the
+  // cascade falls through to null and stampRested skips the field.
+  await call("register", {
+    username: "vellumpike",
+    project: "pantheon",
+    cwd: "/work",
+    claim_after: true,
+  });
+  await call("allow_rest");
+  await call("rest", { reason: "user_done" });
+  const { readPersona } = await import("../../identity/index.ts");
+  expect(readPersona(ctx.paths, "vellumpike")?.resume_session_id).toBeNull();
 });
 
 test("extend_rest reasons about minimum 60min and rearms watchdog", async () => {
