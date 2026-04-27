@@ -98,7 +98,6 @@ export interface MessageInput {
   in_reply_to_ask?: string;
   system?: boolean;
   system_kind?: SystemKind;
-  system_actor?: string;
   /** Guest-supplied display name stored inline for non-registry-backed
    * messages. Persona messages set this to null and resolve via
    * registry on render. */
@@ -109,7 +108,7 @@ export interface MessageInput {
   not_for?: string;
 }
 
-export interface Message extends Required<Omit<MessageInput, "target" | "project" | "reply_to" | "ask_id" | "in_reply_to_ask" | "system" | "system_kind" | "system_actor" | "from_username_inline" | "not_for">> {
+export interface Message extends Required<Omit<MessageInput, "target" | "project" | "reply_to" | "ask_id" | "in_reply_to_ask" | "system" | "system_kind" | "from_username_inline" | "not_for">> {
   id: string;
   seq: number;
   ts: number;
@@ -126,7 +125,6 @@ export interface Message extends Required<Omit<MessageInput, "target" | "project
   in_reply_to_ask?: string;
   system?: boolean;
   system_kind?: SystemKind;
-  system_actor?: string;
   from_username_inline?: string | null;
 }
 
@@ -176,6 +174,7 @@ export type ChatErrorCode =
   | "answer_unknown"
   | "respondent_disconnected"
   | "missing_target"
+  | "recipient_offline"
   | "promote_validation_failed";
 
 /** Discriminated outcome of an `ask`. The router used to return

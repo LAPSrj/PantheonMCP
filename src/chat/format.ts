@@ -28,7 +28,7 @@ export type PriorityTag =
 export function priorityTag(msg: Message, receiver: Subscriber): PriorityTag {
   if (msg.ask_id && msg.target === receiver.username) return "[required reply]";
   if (msg.scope === "dm" && msg.target === receiver.username) return "[likely reply]";
-  if (msg.system_actor === "admin") return "[likely reply]";
+  if (isAdminConsoleMessage(msg)) return "[likely reply]";
   if (
     msg.scope === "project" &&
     msg.mentions.includes(receiver.username)
@@ -94,4 +94,19 @@ export function modeMarker(mode: Subscriber["mode"]): string {
  * (`quibbler [G][D]`). */
 export function guestMarker(transient: boolean): string {
   return transient ? "[G]" : "";
+}
+
+/** Detect a message from the admin console. The console writes every
+ * outbound broadcast with `from_agent_id: "system"` and
+ * `from_username_inline: "admin"`, both of which survive SQLite
+ * persistence — so the same predicate works for in-memory dispatch
+ * and for cross-process row consumers (watcher tail, audit replay).
+ *
+ * Admin is the only special-cased actor in pantheon, and it exists
+ * only because the CLI console broadcasts as one. There is no general
+ * role attribute. */
+export function isAdminConsoleMessage(
+  msg: { from_agent_id: string; from_username_inline?: string | null },
+): boolean {
+  return msg.from_agent_id === "system" && msg.from_username_inline === "admin";
 }

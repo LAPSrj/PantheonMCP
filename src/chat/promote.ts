@@ -92,7 +92,6 @@ export function promoteInPlace(args: {
     text: `${persona.username} promoted from guest to persona (project: ${persona.project}).`,
     system: true,
     system_kind: "promotion",
-    system_actor: "system",
   });
 
   return persona;

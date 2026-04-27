@@ -83,10 +83,13 @@ export function isDeliverableRow(
   receiver: ReceiverState,
   mentioned: Set<string>,
 ): boolean {
-  // Always-deliverable channel: keepalives + admin.
+  // Always-deliverable channel: keepalives + admin console broadcasts.
+  // Admin is the only special-cased actor in pantheon (no general role
+  // attribute); the canonical pair is from_agent_id="system" +
+  // from_username_inline="admin", both of which persist in SQLite.
   if (row.kind === "keepalive") return true;
-  if (row.from_agent_id === "system" && row.kind === null) {
-    // Plain system messages (no kind) — treat as informational; mode applies.
+  if (row.from_agent_id === "system" && row.from_username_inline === "admin") {
+    return true;
   }
   // Personal: DM to me OR @mention of me.
   const personal = row.scope === "dm" || mentioned.has(row.id);
@@ -315,23 +318,66 @@ function priorityTagForRow(
   if (row.scope === "dm" && row.target_username === receiver.username) {
     return "[likely reply]";
   }
+  // Admin console broadcasts (the only special-cased actor in pantheon
+  // — there is no general role attribute). Detected via the persisted
+  // pair (from_agent_id="system", from_username_inline="admin").
+  if (row.from_agent_id === "system" && row.from_username_inline === "admin") {
+    return "[likely reply]";
+  }
   if (mentioned) return "[maybe reply]";
   return "[no reply]";
+}
+
+/** Watcher emit threshold: messages whose body exceeds this byte
+ * count get source-truncated to a stub that names the sender +
+ * carries the message_id, so observers can call `get_message` to
+ * pull the full text. CC's Monitor harness has its own per-event
+ * cap that truncates messages mid-text without warning; pantheon's
+ * source-truncation lands ahead of that cap so the agent gets a
+ * structured signal ("call get_message") instead of a silent cut.
+ *
+ * Default 1500 chars — conservative; may need bumping if CC's cap
+ * turns out to be larger. Configurable via env
+ * `PANTHEON_WATCHER_TRUNCATE_AT`. */
+const DEFAULT_WATCHER_TRUNCATE_AT = 1500;
+
+function watcherTruncateThreshold(): number {
+  const raw = process.env.PANTHEON_WATCHER_TRUNCATE_AT;
+  if (raw === undefined) return DEFAULT_WATCHER_TRUNCATE_AT;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_WATCHER_TRUNCATE_AT;
+  return n;
+}
+
+/** Body-for-emit: returns the full text when within threshold, else
+ * a stub naming the sender + message_id. Used by `formatDirected`
+ * for both DM/project/global rows and `status_digest` rows. */
+function watcherBody(row: MessageRow): string {
+  const limit = watcherTruncateThreshold();
+  if (row.text.length <= limit) return row.text;
+  const sender = senderHandle(row);
+  return (
+    `[oversized message from ${sender} — original ${row.text.length} chars; ` +
+    `call mcp__pantheon__get_message({ message_id: "${row.id}" }) to read the full text.]`
+  );
 }
 
 function formatDirected(row: MessageRow, receiver: ReceiverState): WatcherEvent {
   // Mention computed off the joined set inside selectReceivableRows
   // is dropped here to keep formatBatch pure; recompute cheaply for
-  // the priority tag (single-row case is common).
+  // the priority tag (single-row case is common). Compute against
+  // the ORIGINAL text — `@user` should still flag a mention even
+  // when the body is about to be source-truncated for emit.
   const mentioned = row.text.toLowerCase().includes(`@${receiver.username.toLowerCase()}`);
   const tag = priorityTagForRow(row, receiver, mentioned);
   const dateStr = new Date(row.ts).toISOString().slice(11, 19); // HH:MM:SS UTC
+  const body = watcherBody(row);
   // status_digest gets a `· status_digest` label and the body on the
   // next line, mirroring chat-mcp's keepalive-style header. No
   // sender/target suffix — it's a system event.
   if (row.kind === "status_digest") {
     return {
-      line: `${tag} ${dateStr} · status_digest\n${row.text}`,
+      line: `${tag} ${dateStr} · status_digest\n${body}`,
       message_ids: [row.id],
       last_seq: row.seq,
     };
@@ -341,11 +387,17 @@ function formatDirected(row: MessageRow, receiver: ReceiverState): WatcherEvent 
     row.scope === "dm" ? ` →${row.target_username ?? "?"}` : "";
   const replySuffix = row.reply_to ? ` ↩${row.reply_to.slice(0, 8)}` : "";
   const correlationSuffix = row.correlation_id ? ` [ask=${row.correlation_id.slice(0, 8)}]` : "";
-  const line = `${tag} ${dateStr} ${sender}${targetSuffix}${replySuffix}${correlationSuffix}: ${row.text}`;
+  const line = `${tag} ${dateStr} ${sender}${targetSuffix}${replySuffix}${correlationSuffix}: ${body}`;
   return { line, message_ids: [row.id], last_seq: row.seq };
 }
 
 function senderHandle(row: MessageRow): string {
+  // Admin console messages render as a bare "admin" (no asterisk) —
+  // the asterisk is the guest marker (§10), and the console is not a
+  // guest. This pair is the canonical admin discriminator.
+  if (row.from_agent_id === "system" && row.from_username_inline === "admin") {
+    return "admin";
+  }
   if (row.from_username_inline) return `${row.from_username_inline}*`;
   if (row.from_agent_id === "system") return "system";
   return `agent:${row.from_agent_id.slice(0, 8)}`;

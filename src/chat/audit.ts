@@ -58,7 +58,6 @@ export function appendAudit(paths: Paths, msg: Message): void {
       ...(msg.project !== undefined ? { project: msg.project } : {}),
       ...(msg.system ? { system: true } : {}),
       ...(msg.system_kind !== undefined ? { system_kind: msg.system_kind } : {}),
-      ...(msg.system_actor !== undefined ? { system_actor: msg.system_actor } : {}),
       ...(msg.ask_id !== undefined ? { ask_id: msg.ask_id } : {}),
       ...(msg.in_reply_to_ask !== undefined ? { in_reply_to_ask: msg.in_reply_to_ask } : {}),
       ...(msg.reply_to !== undefined ? { reply_to: msg.reply_to } : {}),

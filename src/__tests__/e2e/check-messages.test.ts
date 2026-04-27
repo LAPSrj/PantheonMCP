@@ -61,23 +61,37 @@ test("cross-process: cursor reset after disconnect (full backlog on rejoin)", as
   await call(fix.procA, "login", { username: "alpha", project: "p", transient: false });
   await call(fix.procB, "login", { username: "beta", project: "p", transient: false });
 
-  // procA writes a DM to beta.
-  await call(fix.procA, "send_message", { text: "before logout", scope: "dm", target: "beta" });
+  // procA writes a project-scoped message visible to all project-p
+  // members (including beta while she's online).
+  await call(fix.procA, "send_message", {
+    text: "before logout",
+    scope: "project",
+    target: "p",
+  });
 
   // beta logs out (subscribers row deleted; cursor goes with it).
   await call(fix.procB, "logout");
 
-  // procA writes another DM after beta is gone.
-  await call(fix.procA, "send_message", { text: "after logout", scope: "dm", target: "beta" });
+  // procA writes another project-scoped message after beta is gone.
+  // (DM-to-offline-target now fails by design; project scope persists
+  // for everyone in the project regardless of who's online, which is
+  // the right vehicle for testing cursor-reset semantics.)
+  await call(fix.procA, "send_message", {
+    text: "after logout",
+    scope: "project",
+    target: "p",
+  });
 
   // beta logs in again — fresh agent_id, cursor starts at 0, sees backlog.
   await call(fix.procB, "login", { username: "beta", project: "p", transient: false });
   const r = await call(fix.procB, "check_messages");
-  const dms = (r.payload.messages as Array<{ text: string; scope: string }>).filter((m) => m.scope === "dm").map((m) => m.text);
-  // Both DMs should be visible (target_username matches, and beta's
-  // agent_id is fresh so cursor starts at 0 → full backlog).
-  expect(dms).toContain("before logout");
-  expect(dms).toContain("after logout");
+  const projectMsgs = (r.payload.messages as Array<{ text: string; scope: string }>)
+    .filter((m) => m.scope === "project")
+    .map((m) => m.text);
+  // Both messages should be visible (project membership matches, and
+  // beta's agent_id is fresh so cursor starts at 0 → full backlog).
+  expect(projectMsgs).toContain("before logout");
+  expect(projectMsgs).toContain("after logout");
 });
 
 test("cross-process: mention bypass — DM mode receives @mention via check_messages", async () => {

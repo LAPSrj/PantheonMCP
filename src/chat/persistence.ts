@@ -34,12 +34,14 @@ export function persistMessage(db: Database, msg: Message): number {
         msg.project ?? null,
         msg.target ?? null,
         msg.from_agent_id,
-        // Kind tracking is stored on every system message; for normal
-        // user messages it's null. For the from_transient flag we
-        // need to know if the sender was a guest at write time —
-        // resolved by the router via subscriber state and passed in
-        // via `from_username_inline` (set when guest, null when persona).
-        msg.from_username_inline !== null && msg.from_username_inline !== undefined ? 1 : 0,
+        // from_transient: 1 when the sender was a guest at write time.
+        // Admin console messages set from_username_inline="admin" but
+        // the console is not a guest — exclude that pair.
+        msg.from_username_inline !== null
+          && msg.from_username_inline !== undefined
+          && !(msg.from_agent_id === "system" && msg.from_username_inline === "admin")
+          ? 1
+          : 0,
         msg.from_username_inline ?? null,
         msg.text,
         msg.system_kind ?? null,
@@ -97,6 +99,18 @@ export function queryMessages(db: Database, filter: QueryFilter = {}): MessageRo
   const sql = `SELECT * FROM messages ${whereClause} ORDER BY ts DESC LIMIT ?`;
   const allParams = [...params, limit] as never[];
   return db.query(sql).all(...allParams) as MessageRow[];
+}
+
+/** Fetch a single persisted message by id. Returns `null` when the
+ * id doesn't match any row. Used by `mcp__pantheon__get_message` so
+ * an observer who saw a watcher-stub event ([oversized message …])
+ * can pull the full body on demand — the recovery path for messages
+ * pantheon source-truncated above the watcher emit threshold. */
+export function getMessageById(db: Database, id: string): MessageRow | null {
+  const row = db.query("SELECT * FROM messages WHERE id = ?").get(id) as
+    | MessageRow
+    | undefined;
+  return row ?? null;
 }
 
 /** Raw row shape — kind/from_transient as stored. Renderers convert

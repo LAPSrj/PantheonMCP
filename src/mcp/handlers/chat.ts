@@ -1,9 +1,15 @@
 import {
   ChatError,
+  getMessageById,
   promoteInPlace,
   type PromoteFields,
 } from "../../chat/index.ts";
-import { listPersonas } from "../../identity/index.ts";
+import { openChatDb } from "../../storage/index.ts";
+import {
+  listPersonas,
+  readPersona,
+  transitionClaim,
+} from "../../identity/index.ts";
 import { getResponseTemplate } from "../../responses/templates.ts";
 import {
   asBoolean,
@@ -38,7 +44,27 @@ export const login: Handler = async (args, ctx) => {
   // claimed this handle as a persona, the chat-add must accept it
   // (otherwise registered personas can never join chat under their
   // own name — the original bug E2E surfaced).
-  const claimedPersona = ctx.session.claimedUsername;
+  let claimedPersona = ctx.session.claimedUsername;
+
+  // Auto-claim shortcut: if the session is unclaimed AND the requested
+  // username matches a registered persona whose cwd == this process's
+  // cwd, claim it transparently. Lets agents skip an explicit
+  // `manifest`/`claim` and go straight to `login` without hitting
+  // `registered_persona` rejection. Cwd-match is the safety gate —
+  // without it, any agent could claim any registered name by guessing.
+  let autoClaimed = false;
+  if (!claimedPersona) {
+    const persona = readPersona(ctx.paths, username);
+    if (persona && persona.cwd === process.cwd()) {
+      try {
+        transitionClaim(ctx.paths, ctx.session, username);
+        claimedPersona = ctx.session.claimedUsername;
+        autoClaimed = true;
+      } catch {
+        // best-effort — fall through to manual error path on failure
+      }
+    }
+  }
   // The MCP server's request handler injects `supports_channels`
   // into args after detecting `claude/channel` experimental
   // capability on the client. Plumb to the subscriber so the
@@ -46,6 +72,7 @@ export const login: Handler = async (args, ctx) => {
   // watcher fallback.
   const supportsChannels = asBoolean(args.supports_channels) ?? false;
   let subscriber;
+  let autoSuffixed: { intended: string; assigned: string } | null = null;
   try {
     subscriber = router.add({
       username,
@@ -56,49 +83,91 @@ export const login: Handler = async (args, ctx) => {
       ...(claimedPersona === username ? { claimed_persona: claimedPersona } : {}),
     });
   } catch (err) {
-    // Enrich `username_taken` (and the related `already_registered` /
-    // `username_prefix_collision`) with structured remediation
-    // options so the caller (a spawned agent's bootstrap, typically)
-    // has a clear next-step instead of being a zombie pane.
-    //
-    // We DO NOT auto-evict the existing session — that other session
-    // may be load-bearing. Three options:
-    //   1. close the OTHER session
-    //   2. close THIS pane
-    //   3. re-summon with --chat-username-suffix to pick a numbered alias
-    //
-    // `suggested_suffix` is the next free `<base><N>` so the caller
-    // can act on option 3 without a probe round trip.
     const e = err as { code?: string; message?: string; extra?: Record<string, unknown> };
     const code = e.code ?? "";
+    const reason = e.extra?.["reason"] as string | undefined;
+
+    // Auto-suffix path: when the caller is the persona-owner and the
+    // exact-match conflict is "another live subscriber holds my
+    // canonical handle", silently take the next sibling-incarnation
+    // slot (`<base>2`, `<base>3`, ...). Persona identity stays
+    // canonical — only the chat handle is suffixed. The agent gets a
+    // rename-aware `note` so it knows what happened, peers see the
+    // suffixed handle in the join broadcast, and the admin console
+    // shows it in the roster.
+    //
+    // Restricted to `subscriber_taken` (exact-match): we DO NOT
+    // auto-suffix `registered_persona` (handle is reserved by a
+    // DIFFERENT persona — caller has no claim to it),
+    // `username_prefix_collision`, or `subscriber_prefix_collision`
+    // (caller's intended handle isn't <peer><N>; auto-renaming would
+    // change their intent radically).
     if (
-      code === "username_taken" ||
-      code === "already_registered" ||
-      code === "username_prefix_collision"
+      code === "username_taken" &&
+      reason === "subscriber_taken" &&
+      claimedPersona === username
     ) {
-      const baseForSuffix = (e.extra?.["conflicting"] as string | undefined) ?? username;
-      const suggestedSuffix = router.nextAvailableIncarnation(baseForSuffix, {
-        ...(claimedPersona ? { claimed_persona: claimedPersona } : {}),
+      const suggested = router.nextAvailableIncarnation(username, {
+        claimed_persona: claimedPersona,
       });
-      throw new ToolError(
-        code,
-        `Cannot log into chat as '${username}': ${e.message}`,
-        {
-          ...(e.extra ?? {}),
-          options: [
-            `Close the OTHER session (the one already chatting as '${username}'), then retry login from this pane.`,
-            "Close THIS pane if the other session is the intended one.",
-            suggestedSuffix
-              ? `Re-summon this persona with \`--chat-username-suffix ${suggestedSuffix.slice(baseForSuffix.length)}\` (or \`--chat-username-suffix auto\`) to chat as '${suggestedSuffix}' — your persona identity stays canonical.`
-              : "Re-summon this persona with `--chat-username-suffix <N>` to chat under a numbered alias.",
-          ],
-          ...(suggestedSuffix ? { suggested_suffix: suggestedSuffix } : {}),
-          do_not_auto_logout:
-            "DO NOT call `logout` — that would evict the other session, which may be doing real work.",
-        },
-      );
+      if (suggested) {
+        try {
+          subscriber = router.add({
+            username: suggested,
+            project,
+            transient,
+            status,
+            supports_channels: supportsChannels,
+            claimed_persona: claimedPersona,
+          });
+          autoSuffixed = { intended: username, assigned: suggested };
+        } catch {
+          // Suffix race — a peer claimed the same suffix between our
+          // walk and our add. Fall through to the manual-options
+          // error path below; the agent retries.
+        }
+      }
     }
-    throw err;
+
+    if (!subscriber) {
+      // Enrich `username_taken` (and the related `already_registered` /
+      // `username_prefix_collision`) with structured remediation
+      // options when auto-suffix didn't apply or didn't succeed.
+      //
+      // We DO NOT auto-evict the existing session — that other
+      // session may be load-bearing. Three options:
+      //   1. close the OTHER session
+      //   2. close THIS pane
+      //   3. re-summon with --chat-username-suffix to pick a numbered alias
+      if (
+        code === "username_taken" ||
+        code === "already_registered" ||
+        code === "username_prefix_collision"
+      ) {
+        const baseForSuffix = (e.extra?.["conflicting"] as string | undefined) ?? username;
+        const suggestedSuffix = router.nextAvailableIncarnation(baseForSuffix, {
+          ...(claimedPersona ? { claimed_persona: claimedPersona } : {}),
+        });
+        throw new ToolError(
+          code,
+          `Cannot log into chat as '${username}': ${e.message}`,
+          {
+            ...(e.extra ?? {}),
+            options: [
+              `Close the OTHER session (the one already chatting as '${username}'), then retry login from this pane.`,
+              "Close THIS pane if the other session is the intended one.",
+              suggestedSuffix
+                ? `Re-summon this persona with \`--chat-username-suffix ${suggestedSuffix.slice(baseForSuffix.length)}\` (or \`--chat-username-suffix auto\`) to chat as '${suggestedSuffix}' — your persona identity stays canonical.`
+                : "Re-summon this persona with `--chat-username-suffix <N>` to chat under a numbered alias.",
+            ],
+            ...(suggestedSuffix ? { suggested_suffix: suggestedSuffix } : {}),
+            do_not_auto_logout:
+              "DO NOT call `logout` — that would evict the other session, which may be doing real work.",
+          },
+        );
+      }
+      throw err;
+    }
   }
   // Bind this MCP session to the new chat subscriber so subsequent
   // chat handlers (send_message, ask, set_mode, …) can resolve it
@@ -108,15 +177,20 @@ export const login: Handler = async (args, ctx) => {
   // Tombstone reclaim broadcast (§10 / §11c).
   router.consumeTombstoneAndBroadcast(username, subscriber.agent_id);
 
-  // Broadcast `join` system event to project scope.
+  // Broadcast `join` system event to project scope. When the chat
+  // handle was auto-suffixed (canonical handle was held by a peer),
+  // include the rename marker so admin console + peers see it as a
+  // sibling-incarnation rather than a fresh agent.
+  const joinText = autoSuffixed
+    ? `${subscriber.username} joined ${project} (sibling-incarnation of ${autoSuffixed.intended} — canonical handle held by another live session).`
+    : `${subscriber.username}${transient ? "*" : ""} joined ${project}.`;
   router.addMessage({
     from_agent_id: "system",
     scope: "project",
     project,
-    text: `${username}${transient ? "*" : ""} joined ${project}.`,
+    text: joinText,
     system: true,
     system_kind: "join",
-    system_actor: "system",
   });
 
   let promoted = false;
@@ -157,6 +231,34 @@ export const login: Handler = async (args, ctx) => {
       : `Logged in as ${subscriber.username}. ` +
         `Run pantheon-fetch --agent-id ${subscriber.agent_id} --loop to start the watcher.`;
   }
+  // Auto-suffix prelude: gives the agent enough context to know it's
+  // running as an incarnation rather than the canonical handle, and
+  // tells the human that this was an automatic decision (not a
+  // manual `--chat-username-suffix` choice). The original `note`
+  // (login template) follows verbatim — the agent still gets the
+  // standard channels/watcher guidance.
+  if (autoSuffixed) {
+    note =
+      `Logged in as '${autoSuffixed.assigned}' — your canonical handle '${autoSuffixed.intended}' is currently held by another live session, ` +
+      `so pantheon auto-assigned the next sibling-incarnation slot. Persona identity stays canonical (registry entry is still '${autoSuffixed.intended}'); ` +
+      `only the chat-display handle is suffixed. Peers and the admin console see you as '${autoSuffixed.assigned}'. ` +
+      `If the canonical handle frees up later (the other session logs out), a fresh login will reclaim it. ` +
+      `No action needed — continue your work.\n\n` +
+      note;
+  }
+  // Auto-claim prelude: when login transitioned the session from
+  // `unclaimed` to `claimed_persona` on the caller's behalf, surface
+  // it so the agent doesn't think they're a guest. Persona identity
+  // is now canonical for this session — memory writes, rest, and
+  // session_info reflect that.
+  if (autoClaimed) {
+    note =
+      `Auto-claimed persona '${username}' (registered at this cwd). Your session is now in 'claimed_persona' state — ` +
+      `memory, rest_timeout, and session_info all reflect persona identity rather than guest. ` +
+      `Skipping manual \`manifest\`/\`claim\` is fine when the registered persona's cwd matches the running process; ` +
+      `pantheon does the transition for you.\n\n` +
+      note;
+  }
   return {
     ok: true,
     agent_id: subscriber.agent_id,
@@ -165,6 +267,15 @@ export const login: Handler = async (args, ctx) => {
     transient: subscriber.transient,
     channels_enabled: supportsChannels,
     promoted,
+    ...(autoSuffixed
+      ? {
+          auto_suffixed: {
+            intended: autoSuffixed.intended,
+            assigned: autoSuffixed.assigned,
+          },
+        }
+      : {}),
+    ...(autoClaimed ? { auto_claimed: true } : {}),
     note,
   };
 };
@@ -184,7 +295,6 @@ export const logout: Handler = async (_args, ctx) => {
       text: `${removed.username}${removed.transient ? "*" : ""} left ${removed.project}.`,
       system: true,
       system_kind: "leave",
-      system_actor: "system",
     });
   }
   ctx.setChatAgentId(null);
@@ -207,6 +317,22 @@ export const send_message: Handler = async (args, ctx) => {
   const replyTo = asString(args.reply_to);
   if (scope === "dm" && !target) {
     throw new ChatError("missing_target", "scope='dm' requires a target username.");
+  }
+  // DM delivery contract: if the recipient isn't online, refuse the
+  // send. Pantheon has no offline-DM queue, so silently persisting
+  // the message would mean the sender thinks they delivered but the
+  // recipient never sees it (the original chat-mcp behavior). Fail
+  // loud — caller learns immediately and can re-send when the
+  // recipient reconnects (or pick a different addressee).
+  if (scope === "dm" && target) {
+    const online = router.onlineUsernames();
+    if (!online.has(target.toLowerCase())) {
+      throw new ChatError(
+        "recipient_offline",
+        `Cannot DM '${target}' — they are not currently in chat. Pantheon has no offline-DM queue; the message was NOT persisted. Retry once they connect, or use scope='project'/'global' to broadcast.`,
+        { target },
+      );
+    }
   }
   const msg = router.addMessage({
     from_agent_id: agentId,
@@ -248,6 +374,19 @@ export const ask: Handler = async (args, ctx) => {
   const target = asStringRequired(args.target, "target");
   const text = asStringRequired(args.text, "text");
   const timeoutMs = asNumber(args.timeout_ms) ?? 30_000;
+  // Same delivery contract as DM: ask-to-offline never resolves
+  // (no peer is there to answer), so it would time out after
+  // `timeout_ms` seconds with no signal. Fail fast instead — the
+  // caller learns the recipient isn't around without burning the
+  // timeout budget.
+  const online = router.onlineUsernames();
+  if (!online.has(target.toLowerCase())) {
+    throw new ChatError(
+      "recipient_offline",
+      `Cannot ask '${target}' — they are not currently in chat. The ask was NOT persisted; retry once they connect, or pick a different respondent.`,
+      { target },
+    );
+  }
   const result = await router.ask({
     from_agent_id: agentId,
     target_username: target,
@@ -455,3 +594,54 @@ function requireAgentId(ctx: Parameters<Handler>[1]): string {
   }
   return ctx.chat_agent_id;
 }
+
+/** Fetch the full text of a single chat message by id. The recovery
+ * path for watcher events that arrived as `[oversized message …]`
+ * stubs — pantheon source-truncates messages above the watcher emit
+ * threshold so they fit inside CC's Monitor harness cap, and ships
+ * the full body through this tool on demand. Returns the row's full
+ * text + metadata; throws `not_found` if the id is unknown. */
+export const get_message: Handler = async (args, ctx) => {
+  const messageId = asStringRequired(args.message_id, "message_id");
+  // Open the chat DB read-only via the resolved path. The router's
+  // private db handle isn't exposed; opening here keeps the handler
+  // self-contained and works in test harnesses that wire a router
+  // without a db just as cleanly (returns null → not_found).
+  let db: ReturnType<typeof openChatDb> | null = null;
+  try {
+    db = openChatDb(ctx.paths.chatDbPath);
+  } catch {
+    throw new ToolError(
+      "chat_unavailable",
+      "Chat database is not available for read.",
+    );
+  }
+  try {
+    const row = getMessageById(db, messageId);
+    if (!row) {
+      throw new ToolError(
+        "not_found",
+        `No message with id '${messageId}'.`,
+        { message_id: messageId },
+      );
+    }
+    return {
+      ok: true,
+      id: row.id,
+      seq: row.seq,
+      ts: row.ts,
+      scope: row.scope,
+      project: row.project,
+      target_username: row.target_username,
+      from_agent_id: row.from_agent_id,
+      from_username_inline: row.from_username_inline,
+      from_transient: row.from_transient === 1,
+      text: row.text,
+      kind: row.kind,
+      reply_to: row.reply_to,
+      correlation_id: row.correlation_id,
+    };
+  } finally {
+    db.close();
+  }
+};

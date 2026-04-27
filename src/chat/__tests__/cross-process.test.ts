@@ -77,3 +77,52 @@ test("setMode write-through is visible to other routers", () => {
   const seen = routerB.publicList();
   expect(seen[0]?.mode).toBe("quiet");
 });
+
+test("cross-process collision: second router cannot add the same username", () => {
+  // Regression for the duplicate-`semaphoremole` chat bug. Each MCP
+  // process has its own ChatRouter with its own in-memory subscriber
+  // map. Without consulting the cross-process `subscribers` table,
+  // the second login passed availability and both ended up chatting
+  // under the same name.
+  const routerA = new ChatRouter({ paths, db: dbA });
+  const routerB = new ChatRouter({ paths, db: dbB });
+  routerA.add({ username: "semaphoremole", project: "liaison", transient: false });
+  expect(() =>
+    routerB.add({ username: "semaphoremole", project: "liaison", transient: false }),
+  ).toThrow(/username_taken|subscriber_taken/);
+});
+
+test("cross-process collision: claimed_persona owner still blocked when peer is online", () => {
+  // Even when the second login is a registered persona-owner asking
+  // to chat as itself, the cross-process collision still fires —
+  // there's already a peer logged in under the same handle. The
+  // remediation lives at the MCP login-handler layer (suggested
+  // suffix), not the router.
+  const routerA = new ChatRouter({ paths, db: dbA });
+  const routerB = new ChatRouter({ paths, db: dbB });
+  routerA.add({
+    username: "semaphoremole",
+    project: "liaison",
+    transient: false,
+    claimed_persona: "semaphoremole",
+  });
+  expect(() =>
+    routerB.add({
+      username: "semaphoremole",
+      project: "liaison",
+      transient: false,
+      claimed_persona: "semaphoremole",
+    }),
+  ).toThrow(/username_taken|subscriber_taken/);
+});
+
+test("cross-process suffix-walk skips peer-owned handles", () => {
+  // `nextAvailableIncarnation("alice")` must skip `alice2` if a peer
+  // is already chatting as `alice2`, returning `alice3`.
+  const routerA = new ChatRouter({ paths, db: dbA });
+  const routerB = new ChatRouter({ paths, db: dbB });
+  routerA.add({ username: "alice", project: "p", transient: false });
+  routerA.add({ username: "alice2", project: "p", transient: false });
+  const next = routerB.nextAvailableIncarnation("alice");
+  expect(next).toBe("alice3");
+});

@@ -30,6 +30,7 @@ import {
   upsertSubscriber,
 } from "./presence.ts";
 import { selectReceivableRows } from "./watcher.ts";
+import { isAdminConsoleMessage } from "./format.ts";
 import type { MessageRow } from "./persistence.ts";
 
 function sleep(ms: number): Promise<void> {
@@ -311,7 +312,6 @@ export class ChatRouter {
         text: renderStatusDigest(others),
         system: true,
         system_kind: "status_digest",
-        system_actor: "system",
       });
       dispatched++;
     }
@@ -361,7 +361,6 @@ export class ChatRouter {
       ...(project !== undefined ? { project } : {}),
       system: true,
       system_kind: "handle_recycled",
-      system_actor: "system",
     });
   }
 
@@ -397,7 +396,6 @@ export class ChatRouter {
         : {}),
       ...(input.system !== undefined ? { system: input.system } : {}),
       ...(input.system_kind !== undefined ? { system_kind: input.system_kind } : {}),
-      ...(input.system_actor !== undefined ? { system_actor: input.system_actor } : {}),
       from_username_inline: fromUsernameInline,
     };
 
@@ -581,7 +579,7 @@ export class ChatRouter {
 
   isDeliverable(sub: Subscriber, msg: Message): boolean {
     if (msg.system_kind === "keepalive") return true;
-    if (msg.system_actor === "admin") return true;
+    if (isAdminConsoleMessage(msg)) return true;
     const personal =
       msg.scope === "dm" || msg.mentions.includes(sub.username);
     if (personal) return true;
@@ -927,12 +925,54 @@ export class ChatRouter {
   ): AvailabilityResult {
     return isHandleAvailable({
       username,
-      subscribers: this.subscribers.values(),
+      // Cross-process collision: each MCP server has its own router
+      // and `this.subscribers` only knows about THIS process's
+      // subscribers. Without merging the SQLite-side `listActive`
+      // rows, two MCP processes could each pass `add()` and end up
+      // chatting under the same name — the bug surfaced when running
+      // a registered persona twice via `manifest`.
+      subscribers: this.allKnownSubscribers(),
       tombstones: this.tombstones,
       paths: this.paths,
       ...(ignoreSelf !== undefined ? { ignore_self_username: ignoreSelf } : {}),
       ...(claimedPersona !== undefined ? { claimed_persona: claimedPersona } : {}),
     });
+  }
+
+  /** Iterable view of every active subscriber visible to this
+   * process — in-memory (this router's own) + SQLite-side
+   * (peer routers' subscribers, kept fresh by their heartbeats).
+   * Deduplicated by `agent_id`; in-memory entries win when both
+   * sources have the same id (the local copy is the freshest).
+   * `listActive` filters by 30s heartbeat threshold so a crashed
+   * peer doesn't lock up its handle forever. */
+  private allKnownSubscribers(): Iterable<Subscriber> {
+    const merged = new Map<string, Subscriber>();
+    if (this.db) {
+      try {
+        const rows = listActive(this.db, { now: this.clock() });
+        for (const r of rows) {
+          merged.set(r.agent_id, {
+            agent_id: r.agent_id,
+            username: r.username,
+            project: r.project,
+            transient: r.transient,
+            status: r.status,
+            mode: r.mode,
+            connected_at: r.connected_at,
+            last_seen: r.last_heartbeat,
+            status_updated_at: r.status_updated_at,
+            promoted_at: r.promoted_at,
+          });
+        }
+      } catch {
+        // best-effort — fall through to in-memory only on DB error
+      }
+    }
+    for (const sub of this.subscribers.values()) {
+      merged.set(sub.agent_id, sub);
+    }
+    return merged.values();
   }
 
   /** Walk `<base>2`, `<base>3`, ..., `<base><max>` and return the

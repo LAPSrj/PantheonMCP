@@ -168,6 +168,78 @@ test("formatBatch: silent events get coalesced into a single <silent-event> line
   expect(events[0]!.message_ids).toEqual(["j1", "j2", "l1"]);
 });
 
+test("formatBatch: oversized message body is replaced with a get_message stub", () => {
+  const longText = "x".repeat(2000); // > default 1500 threshold
+  persistMessage(
+    db,
+    msg({
+      id: "big",
+      seq: 1,
+      from_agent_id: "peer",
+      scope: "dm",
+      target: "vellumpike",
+      text: longText,
+    }),
+  );
+  const events = tailOnce({ db, receiver: me, since_seq: 0 });
+  expect(events).toHaveLength(1);
+  const line = events[0]!.line;
+  // Stub names the sender, the original size, and the exact tool call.
+  // (test fixture uses agent_id "peer" — senderHandle emits
+  // "agent:peer" since no inline username is set; in production the
+  // sender resolves to the real username via from_username_inline or
+  // a presence lookup at format time.)
+  expect(line).toContain("[oversized message from agent:peer");
+  expect(line).toContain("original 2000 chars");
+  expect(line).toContain('mcp__pantheon__get_message({ message_id: "big" })');
+  // Original text is NOT in the emitted line.
+  expect(line.includes(longText)).toBe(false);
+  // message_ids still surfaces the row id so callers can correlate.
+  expect(events[0]!.message_ids).toEqual(["big"]);
+});
+
+test("formatBatch: messages at or below threshold pass through unchanged", () => {
+  const fits = "y".repeat(1500); // exactly the default threshold
+  persistMessage(
+    db,
+    msg({
+      id: "fits",
+      seq: 1,
+      from_agent_id: "peer",
+      scope: "dm",
+      target: "vellumpike",
+      text: fits,
+    }),
+  );
+  const events = tailOnce({ db, receiver: me, since_seq: 0 });
+  expect(events[0]!.line).toContain(fits);
+  expect(events[0]!.line.includes("[oversized message")).toBe(false);
+});
+
+test("formatBatch: PANTHEON_WATCHER_TRUNCATE_AT env override changes the threshold", () => {
+  const prev = process.env.PANTHEON_WATCHER_TRUNCATE_AT;
+  process.env.PANTHEON_WATCHER_TRUNCATE_AT = "10";
+  try {
+    persistMessage(
+      db,
+      msg({
+        id: "small",
+        seq: 1,
+        from_agent_id: "peer",
+        scope: "dm",
+        target: "vellumpike",
+        text: "this is more than ten chars",
+      }),
+    );
+    const events = tailOnce({ db, receiver: me, since_seq: 0 });
+    expect(events[0]!.line).toContain("[oversized message");
+    expect(events[0]!.line).toContain('message_id: "small"');
+  } finally {
+    if (prev === undefined) delete process.env.PANTHEON_WATCHER_TRUNCATE_AT;
+    else process.env.PANTHEON_WATCHER_TRUNCATE_AT = prev;
+  }
+});
+
 test("formatBatch: silent events flushed before a directed message", () => {
   persistMessage(db, msg({ id: "j1", seq: 1, from_agent_id: "system", scope: "project", text: "alpha joined", project: "pantheon", system: true, system_kind: "join" as SystemKind }));
   persistMessage(db, msg({ id: "dm", seq: 2, from_agent_id: "peer", scope: "dm", target: "vellumpike", text: "hi" }));
