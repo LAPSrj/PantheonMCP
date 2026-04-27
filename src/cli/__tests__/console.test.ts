@@ -84,7 +84,7 @@ test("non-TTY stdin: a bare line broadcasts to scope=global as admin", async () 
         kind: string | null;
       }>;
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.text).toBe("[ADMIN] hello world");
+    expect(rows[0]!.text).toBe("hello world");
     expect(rows[0]!.from_agent_id).toBe("system");
     expect(rows[0]!.from_username_inline).toBe("admin");
   } finally {
@@ -106,7 +106,7 @@ test("non-TTY stdin: /dm sends a scoped DM to the named target", async () => {
       .query("SELECT * FROM messages WHERE scope = ? ORDER BY seq DESC LIMIT 1")
       .get("dm") as { text: string; target_username: string | null };
     expect(row).not.toBeNull();
-    expect(row.text).toBe("[ADMIN] check the build");
+    expect(row.text).toBe("check the build");
     expect(row.target_username).toBe("vellumpike");
   } finally {
     db.close();
@@ -126,7 +126,7 @@ test("non-TTY stdin: /proj sends to the named project", async () => {
     const row = db
       .query("SELECT * FROM messages WHERE scope = ? ORDER BY seq DESC LIMIT 1")
       .get("project") as { text: string; project: string | null };
-    expect(row.text).toBe("[ADMIN] pause work");
+    expect(row.text).toBe("pause work");
     expect(row.project).toBe("nyus");
   } finally {
     db.close();
@@ -146,15 +146,16 @@ test("non-TTY stdin: /quit ends the session cleanly", async () => {
 });
 
 test("non-TTY stdin: /dm with missing text emits a usage hint, no message persisted", async () => {
-  const stderr = new StringSink();
+  const stdout = new StringSink();
   await runConsole({
     args: ["--no-tail", "--no-roster"],
     stdin: Readable.from(["/dm vellumpike\n"]),
-    stdout: new StringSink(),
-    stderr,
+    stdout,
+    stderr: new StringSink(),
     paths,
   });
-  expect(stderr.buf).toContain("Usage: /dm <user> <text>");
+  // Slash-command errors render inline (red), not on stderr — chat-mcp parity.
+  expect(stdout.buf).toContain("usage: /dm <user> <text>");
   const db = openChatDb(paths.chatDbPath);
   try {
     const rows = db.query("SELECT COUNT(*) as n FROM messages").get() as { n: number };
@@ -164,23 +165,24 @@ test("non-TTY stdin: /dm with missing text emits a usage hint, no message persis
   }
 });
 
-test("non-TTY stdin: unknown slash command writes to stderr but doesn't exit", async () => {
-  const stderr = new StringSink();
+test("non-TTY stdin: unknown slash command renders inline error but doesn't exit", async () => {
+  const stdout = new StringSink();
   await runConsole({
     args: ["--no-tail", "--no-roster"],
     stdin: Readable.from(["/bogus\nhello\n"]),
-    stdout: new StringSink(),
-    stderr,
+    stdout,
+    stderr: new StringSink(),
     paths,
   });
-  expect(stderr.buf).toContain("unknown command '/bogus'");
+  // Slash-command errors render inline (red), not on stderr — chat-mcp parity.
+  expect(stdout.buf).toContain("unknown command: /bogus");
   // The subsequent line still broadcasts.
   const db = openChatDb(paths.chatDbPath);
   try {
     const row = db
       .query("SELECT text FROM messages ORDER BY seq DESC LIMIT 1")
       .get() as { text: string } | undefined;
-    expect(row?.text).toBe("[ADMIN] hello");
+    expect(row?.text).toBe("hello");
   } finally {
     db.close();
   }

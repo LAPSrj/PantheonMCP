@@ -1,43 +1,40 @@
 import readline from "node:readline";
 import { openChatDb, resolvePaths, type Paths } from "../storage/index.ts";
-import { randomUUID } from "node:crypto";
-import {
-  ChatRouter,
-  formatBatch,
-  listActive,
-  type PresenceRow,
-  type ReceiverState,
-} from "../chat/index.ts";
-import { tailLoop } from "../chat/watcher.ts";
+import { ChatRouter, listActive, type PresenceRow } from "../chat/index.ts";
 import type { MessageRow } from "../chat/persistence.ts";
-import { heartbeat, upsertSubscriber, removeSubscriber } from "../chat/presence.ts";
-import type { Subscriber } from "../chat/types.ts";
 import { EXIT_CODES } from "./exit-codes.ts";
+import {
+  buildPresenceIndex,
+  createFormatter,
+  normalizeRow,
+  paintWith,
+} from "./console-format.ts";
 
 /** §11b CLI `pantheon console` — interactive admin REPL.
  *
  * Watch every chat event in real time + broadcast as `admin` (DM,
- * project, or global). Models the same `[admin] >` prompt + slash
- * command surface as chat-mcp's console.ts.
+ * project, or global). Behavior + visuals mirror chat-mcp/src/console.ts:
+ * the same `[admin] >` prompt, slash commands, pinned roster strip,
+ * per-message separator, and the chat-mcp formatter (rich headers +
+ * markdown body wrap). The only special-cased actor in pantheon is
+ * the console — there is no general role attribute.
  *
  * Architectural note: pantheon doesn't have a daemon-client model
  * (one MCP process per CC session, per §15). The console writes
  * straight to `chat.db` via a transient `ChatRouter` and reads via
- * the same `tailLoop` the per-agent watcher uses. SQLite WAL handles
- * concurrent writes from running MCP processes.
+ * a SQLite-tail loop scoped to the console (no priority-tag prefix,
+ * no silent-event coalescing — those are watcher concerns for AI
+ * agents, not the human admin).
  *
- * The console DOES register a synthetic presence row so peers see it
- * in `list_agents` while connected — `username:"console"`,
- * `project:"admin"`, `transient:true`. The transient flag drives the
- * asterisk render (`console*`); pairing with project="admin" gives
- * the `console* (admin)` form yapsmith specced. Row is upserted
- * silently (no `router.add` → no `join` event) and removed silently
- * on shutdown (no `router.remove` → no `leave` event).
+ * The console does NOT register a presence row — chat-mcp's admin
+ * console is invisible to peers and pantheon mirrors that. Peers
+ * see only real agents in `list_agents`.
  *
- * Outbound messages set `from_agent_id: "system"` + `system_actor:
- * "admin"` so the watcher gives them the `[likely reply]` priority
- * tag (per `priorityTagForRow`) and the body is prefixed with
- * `[ADMIN]` for visual clarity in the tail. */
+ * Outbound messages set `from_agent_id: "system"` +
+ * `from_username_inline: "admin"`. That pair is the canonical admin
+ * discriminator (both fields persist in SQLite, so cross-process
+ * consumers — watcher, audit replay — detect admin without a separate
+ * field). */
 
 export interface RunConsoleOptions {
   args: string[];
@@ -57,22 +54,21 @@ interface ParsedArgs {
 const HELP = `pantheon console — interactive admin chat (watch + broadcast)
 
 Options:
-  --tail N       Print last N messages on start (default 20, max 500).
-  --no-tail      Skip backfill, only show new messages.
-  --color        Force ANSI colors.
-  --no-color     Disable ANSI colors.
-  --no-roster    Skip the pinned roster strip above the prompt.
-  --help, -h     This message.
+  --tail N       Print last N messages on start (default 20, max 500)
+  --no-tail      Skip backfill, only show new messages
+  --color        Force ANSI colors
+  --no-color     Disable ANSI colors
+  --no-roster    Skip the pinned roster strip above the prompt
 
 Prompt commands (type at the [admin] > prompt):
   <text>                   Broadcast as admin to scope=global (default).
-  /g <text>                Same as above.  Alias: /global
+  /g <text>                Same as above.
   /dm <user> <text>        DM to <user> as admin.
-  /proj <project> <text>   Broadcast to project <project>.  Alias: /p
-  /who                     Refresh the pinned roster.
+  /proj <project> <text>   Broadcast to project <project>. Short: /p
+  /who                     Print currently connected agents (names only, pinned).
   /status                  Print connected agents with their status lines.
-  /help                    Show this.  Alias: /?
-  /quit                    Exit.  Aliases: /exit, /q  (Ctrl-C also works.)
+  /help                    Show this.
+  /quit                    Exit (Ctrl-C also works).
 `;
 
 function parseArgs(
@@ -121,25 +117,6 @@ function parseArgs(
   return out;
 }
 
-const ANSI: Record<string, string> = {
-  reset: "\x1b[0m",
-  bold: "\x1b[1m",
-  red: "\x1b[31m",
-  yellow: "\x1b[33m",
-  cyan: "\x1b[36m",
-  grey: "\x1b[90m",
-  dim: "\x1b[2m",
-};
-
-function paint(color: boolean, kind: keyof typeof ANSI, text: string): string {
-  if (!color) return text;
-  return `${ANSI[kind]}${text}${ANSI.reset}`;
-}
-
-function stripAnsi(s: string): string {
-  return s.replace(/\x1b\[[0-9;]*m/g, "");
-}
-
 function modeMarkerForRow(mode: PresenceRow["mode"]): string {
   switch (mode) {
     case "quiet":
@@ -154,10 +131,6 @@ function modeMarkerForRow(mode: PresenceRow["mode"]): string {
 }
 
 function rosterKey(rows: PresenceRow[]): string {
-  // Stable signature for diff-detection. Only the fields the roster
-  // actually renders: agent_id, username, project, mode, transient,
-  // status. Heartbeat changes don't affect the rendered roster, so
-  // they don't trigger a redraw.
   return rows
     .map((r) =>
       [r.agent_id, r.username, r.project, r.mode, r.transient ? "1" : "0", r.status].join("␟"),
@@ -176,63 +149,130 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
 
   const paths = options.paths ?? resolvePaths();
   const db = openChatDb(paths.chatDbPath);
-  // Transient router — re-exposes the same SQLite handle for writes.
   const router = new ChatRouter({ paths, db });
 
   const interactive = Boolean((stdin as NodeJS.ReadStream).isTTY);
-  const prompt = paint(parsed.color, "bold", paint(parsed.color, "red", "[admin] > "));
+  const paint = paintWith(parsed.color);
+  const { format } = createFormatter(parsed.color);
+  const promptStr = paint("bold", paint("red", "[admin] > "));
   const rl = readline.createInterface({
     input: stdin,
     output: stdout,
-    prompt,
+    prompt: promptStr,
     terminal: interactive,
   });
 
   const widthOf = (): number => (stdout as NodeJS.WriteStream).columns ?? 80;
 
-  const separator = (): string =>
-    paint(parsed.color, "grey", "─".repeat(Math.min(widthOf(), 80)));
-
-  // ---- Pinned roster + status area --------------------------------
-  let statusLines: string[] = [];
-  const rosterEnabled = parsed.roster && interactive;
-
-  const statusHeight = (): number => {
-    if (!rosterEnabled) return 0;
+  const separator = (): string => {
+    // Width-1 to avoid the phantom-wrap on cols-wide writes: a line
+    // exactly cols chars long leaves the cursor at col=cols (off-screen)
+    // and the trailing \n then advances another row, producing a
+    // visually-empty extra row that statusHeight() doesn't count. With
+    // width-1 the cursor stays in the visible region and \n advances
+    // exactly one row.
     const cols = widthOf();
-    let rows = 0;
-    for (const l of statusLines) {
-      const visLen = stripAnsi(l).length;
-      rows += Math.max(1, Math.ceil(visLen / cols));
-    }
-    return rows;
+    const w = Math.max(1, (cols > 0 ? cols : 80) - 1);
+    return paint("grey", "─".repeat(w));
   };
 
+  // ---- Pinned roster + status area --------------------------------
+  // Use ANSI cursor save/restore (DECSC/DECRC) to mark where the
+  // status area begins. On clear, restore to that mark and clear from
+  // there to end of screen — sidesteps height-calculation off-by-ones
+  // (separator phantom-wraps, rl.prompt(true) cursor desync after raw
+  // stdout.write, etc.) by relying on the terminal's own cursor
+  // tracking.
+  //
+  // The save mark is placed just BEFORE writing statusLines, so a
+  // restore lands at the row where status started — exactly where new
+  // content should overwrite. WSL/Windows Terminal supports DECSC/DECRC.
+  let statusLines: string[] = [];
+  let statusDrawn = false;
+  const rosterEnabled = parsed.roster && interactive;
+
+  const SAVE_CURSOR = "\x1b7";
+  const RESTORE_CURSOR = "\x1b8";
+  const CLEAR_TO_END = "\x1b[J";
+
   const clearStatusArea = (): void => {
-    if (!rosterEnabled) return;
-    readline.cursorTo(stdout as NodeJS.WriteStream, 0);
-    readline.clearLine(stdout as NodeJS.WriteStream, 0);
-    const h = statusHeight();
-    if (h > 0) {
-      readline.moveCursor(stdout as NodeJS.WriteStream, 0, -h);
-      readline.clearScreenDown(stdout as NodeJS.WriteStream);
-    }
+    if (!rosterEnabled || !statusDrawn) return;
+    stdout.write(RESTORE_CURSOR);
+    stdout.write(CLEAR_TO_END);
+    statusDrawn = false;
   };
 
   const drawStatusArea = (): void => {
     if (rosterEnabled && statusLines.length > 0) {
+      stdout.write(SAVE_CURSOR);
       stdout.write(statusLines.join("\n") + "\n");
+      statusDrawn = true;
     }
     if (interactive) rl.prompt(true);
   };
 
-  // ---- Roster rendering ------------------------------------------
+  const printLine = (line: string): void => {
+    clearStatusArea();
+    stdout.write(line + "\n");
+    drawStatusArea();
+  };
+
+  const printRow = (row: MessageRow, presence: ReadonlyMap<string, PresenceRow>): void => {
+    const cm = normalizeRow(row, presence);
+    printLine(format(cm) + "\n" + separator());
+  };
+
+  // ---- Keepalive coalescing (parity with chat-mcp) --------------
+  // Keepalives fan out to every non-channels agent in the same daemon
+  // sweep, so they arrive in a burst (microseconds apart on push, or
+  // a single SQL batch on pull). Rendering each individually means
+  // the admin sees the same roster dump N times in a row. Coalesce:
+  // buffer targets for KEEPALIVE_COALESCE_MS, then emit one summary
+  // line "HH:MM:SS · keepalive — pinged N: alice, bob, ...".
+  const KEEPALIVE_COALESCE_MS = 500;
+  let keepaliveBuf: { ts: number; targets: string[] } | null = null;
+  let keepaliveTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const renderKeepaliveSummary = (ts: number, targets: string[]): string => {
+    const when = new Date(ts).toLocaleTimeString("en-GB");
+    const time = paint("grey", when);
+    // Build each ANSI segment independently — nesting grey around an
+    // already-bolded count would reset to default fg for the rest of
+    // the line when the inner bold-reset fires.
+    const intro = paint("grey", "keepalive — pinged ");
+    const count = paint("bold", paint("grey", String(targets.length)));
+    const tail = paint("grey", `: ${targets.join(", ")}`);
+    return `${time} ${paint("grey", "·")} ${intro}${count}${tail}\n${separator()}`;
+  };
+
+  const flushKeepaliveBuf = (): void => {
+    if (!keepaliveBuf) return;
+    const { ts, targets } = keepaliveBuf;
+    keepaliveBuf = null;
+    if (keepaliveTimer) {
+      clearTimeout(keepaliveTimer);
+      keepaliveTimer = null;
+    }
+    printLine(renderKeepaliveSummary(ts, targets));
+  };
+
+  const handleKeepaliveLive = (row: MessageRow): void => {
+    const target = row.target_username ?? "?";
+    if (!keepaliveBuf) keepaliveBuf = { ts: row.ts, targets: [] };
+    if (!keepaliveBuf.targets.includes(target)) {
+      keepaliveBuf.targets.push(target);
+    }
+    if (keepaliveTimer) clearTimeout(keepaliveTimer);
+    keepaliveTimer = setTimeout(flushKeepaliveBuf, KEEPALIVE_COALESCE_MS);
+  };
+
+  // ---- Roster rendering (parity with chat-mcp) -------------------
   // Group by project, sort projects alphabetically, sort users
   // case-insensitive within each project. Transient subscribers
-  // render with an asterisk suffix (`console*`) — matches §10's
+  // render with an asterisk suffix (`console*`) — matches the §10
   // guest marker. Mode tag ([Q]/[P]/[D]) appended after the name.
   const renderRoster = (rows: PresenceRow[]): string[] => {
-    if (rows.length === 0) return [paint(parsed.color, "grey", "(no connected agents)")];
+    if (rows.length === 0) return [paint("grey", "(no agents connected)")];
     const byProject = new Map<string, PresenceRow[]>();
     for (const r of rows) {
       const list = byProject.get(r.project);
@@ -241,28 +281,28 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
     }
     const projects = Array.from(byProject.keys()).sort();
     const lines: string[] = [
-      paint(parsed.color, "grey", "─".repeat(Math.min(widthOf(), 80))),
-      paint(parsed.color, "grey", `${rows.length} agent(s) connected:`),
+      paint("grey", `${rows.length} agent(s) connected:`),
     ];
-    const sep = paint(parsed.color, "grey", ", ");
+    const sep = paint("grey", ", ");
     for (const proj of projects) {
       const users = byProject
         .get(proj)!
         .slice()
         .sort((a, b) => a.username.localeCompare(b.username, undefined, { sensitivity: "base" }))
         .map((r) => {
-          const name = paint(parsed.color, "cyan", r.transient ? `${r.username}*` : r.username);
+          const display = r.transient ? `${r.username}*` : r.username;
+          const name = paint("bold", paint("cyan", display));
           const tag = modeMarkerForRow(r.mode);
-          return tag ? `${name} ${paint(parsed.color, "yellow", tag)}` : name;
+          return tag ? `${name} ${paint("yellow", tag)}` : name;
         })
         .join(sep);
-      lines.push(`  ${paint(parsed.color, "grey", `[${proj}]`)} ${users}`);
+      lines.push(`  ${paint("grey", `[${proj}]`)} ${users}`);
     }
     return lines;
   };
 
   const renderStatusList = (rows: PresenceRow[]): string[] => {
-    if (rows.length === 0) return [paint(parsed.color, "grey", "(no connected agents)")];
+    if (rows.length === 0) return [paint("grey", "(no agents connected)")];
     const byProject = new Map<string, PresenceRow[]>();
     for (const r of rows) {
       const list = byProject.get(r.project);
@@ -271,23 +311,20 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
     }
     const projects = Array.from(byProject.keys()).sort();
     const lines: string[] = [
-      paint(parsed.color, "grey", `${rows.length} agent(s) connected:`),
+      paint("grey", `${rows.length} agent(s) connected:`),
     ];
     for (const proj of projects) {
-      lines.push(paint(parsed.color, "grey", `  [${proj}]`));
+      lines.push(paint("grey", `  [${proj}]`));
       const users = byProject
         .get(proj)!
         .slice()
         .sort((a, b) => a.username.localeCompare(b.username, undefined, { sensitivity: "base" }));
       for (const r of users) {
-        const name = paint(
-          parsed.color,
-          "cyan",
-          r.transient ? `${r.username}*` : r.username,
-        );
+        const display = r.transient ? `${r.username}*` : r.username;
+        const name = paint("bold", paint("cyan", display));
         const tag = modeMarkerForRow(r.mode);
-        const head = tag ? `${name} ${paint(parsed.color, "yellow", tag)}` : name;
-        const status = r.status ? paint(parsed.color, "dim", ` — ${r.status}`) : "";
+        const head = tag ? `${name} ${paint("yellow", tag)}` : name;
+        const status = r.status ? paint("grey", ` — ${r.status}`) : "";
         lines.push(`    ${head}${status}`);
       }
     }
@@ -295,69 +332,74 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
   };
 
   let lastRosterKey = "";
+  let presenceIndex = new Map<string, PresenceRow>();
 
   const refreshRoster = (force: boolean = false): void => {
-    if (!rosterEnabled) return;
     const rows = listActive(db);
-    const key = rosterKey(rows);
+    presenceIndex = buildPresenceIndex(rows);
+    if (!rosterEnabled) return;
+    const visibleRows = rows;
+    const key = rosterKey(visibleRows);
     if (!force && key === lastRosterKey) return;
     lastRosterKey = key;
-    statusLines = renderRoster(rows);
+    const rendered = renderRoster(visibleRows);
+    rendered.push(separator());
+    // Clear with the OLD statusLines still in effect (statusHeight()
+    // reads from statusLines), THEN swap to the new rendering, THEN
+    // redraw. Doing this in the wrong order leaves leftover rows when
+    // the roster grows/shrinks between refreshes.
     clearStatusArea();
+    statusLines = rendered;
     drawStatusArea();
   };
-
-  const printMessage = (line: string): void => {
-    // Same as printLine but with a per-message separator (UX parity
-    // with chat-mcp). The separator visually delimits each message
-    // so multi-line bodies (status_digest, pasted text) don't blur.
-    clearStatusArea();
-    stdout.write(line + "\n" + separator() + "\n");
-    drawStatusArea();
-  };
-
-  // ---- Synthetic console subscriber ------------------------------
-  // Bypass `router.add` (would validate the username + emit a `join`
-  // system event into the chat — both wrong for an admin console).
-  // Instead, write directly to the presence table via
-  // upsertSubscriber. The reserved-looking handle can't collide with
-  // real agents; the row is removed on shutdown via removeSubscriber
-  // (NOT router.remove — same reason: no `leave` event).
-  const consoleSubscriber: Subscriber = {
-    agent_id: `console-${randomUUID()}`,
-    username: "console",
-    project: "admin",
-    transient: true,
-    status: "(admin REPL)",
-    mode: "all",
-    connected_at: Date.now(),
-    last_seen: Date.now(),
-    status_updated_at: Date.now(),
-    promoted_at: null,
-  };
-  upsertSubscriber(db, consoleSubscriber);
 
   // ---- Tail-on-start ---------------------------------------------
-  // Read the last N raw rows directly and run them through
-  // `formatBatch` with the synthetic admin receiver — same renderer
-  // the live stream uses, so cold backfill and live tail share one
-  // grammar. We deliberately skip the visibility/deliverability
-  // filter for backfill so admin can browse the full history.
+  // Read raw rows directly and feed them through the same chat-mcp
+  // formatter the live tail uses, so cold backfill and live tail
+  // share one grammar. We deliberately skip the visibility filter
+  // for backfill so admin can browse the full history.
+  const initialPresence = listActive(db);
+  presenceIndex = buildPresenceIndex(initialPresence);
+  let lastSeenSeq = 0;
   if (parsed.tail > 0) {
     const rows = db
       .query("SELECT * FROM messages ORDER BY seq DESC LIMIT ?")
       .all(parsed.tail) as MessageRow[];
     const ascending = rows.reverse();
-    const receiver: ReceiverState = {
-      agent_id: consoleSubscriber.agent_id,
-      username: consoleSubscriber.username,
-      project: consoleSubscriber.project,
-      mode: "all",
+    // Same-second keepalive bucketing: a single daemon sweep fans out
+    // to N agents all within the same ts, so the unfolded tail would
+    // render N copies of the same roster dump. Group consecutive
+    // keepalives sharing a 1-second bucket into one summary line.
+    let pendingKa: { ts: number; targets: string[] } | null = null;
+    const flushPendingKa = (): void => {
+      if (!pendingKa) return;
+      const { ts, targets } = pendingKa;
+      pendingKa = null;
+      stdout.write(renderKeepaliveSummary(ts, targets) + "\n");
     };
-    const events = formatBatch(ascending, receiver);
-    for (const e of events) {
-      stdout.write(e.line + "\n" + separator() + "\n");
+    for (const row of ascending) {
+      lastSeenSeq = Math.max(lastSeenSeq, row.seq);
+      if (row.kind === "keepalive") {
+        const bucket = Math.floor(row.ts / 1000);
+        const target = row.target_username ?? "?";
+        if (pendingKa && Math.floor(pendingKa.ts / 1000) === bucket) {
+          if (!pendingKa.targets.includes(target)) pendingKa.targets.push(target);
+        } else {
+          flushPendingKa();
+          pendingKa = { ts: row.ts, targets: [target] };
+        }
+        continue;
+      }
+      flushPendingKa();
+      const cm = normalizeRow(row, presenceIndex);
+      stdout.write(format(cm) + "\n" + separator() + "\n");
     }
+    flushPendingKa();
+  } else {
+    // Even with no backfill, anchor the live tail to "from now on" so
+    // we don't replay old messages once the loop starts.
+    const max = db.query("SELECT MAX(seq) AS s FROM messages").get() as { s: number | null };
+    lastSeenSeq = max.s ?? 0;
   }
 
   // ---- Live tail --------------------------------------------------
@@ -369,52 +411,64 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
     process.on("SIGINT", onSig);
   }
 
+  const sleep = (ms: number, signal?: AbortSignal): Promise<void> =>
+    new Promise((resolve) => {
+      const t = setTimeout(resolve, ms);
+      signal?.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(t);
+          resolve();
+        },
+        { once: true },
+      );
+    });
+
   const tailPromise = (async () => {
-    try {
-      for await (const event of tailLoop({
-        db,
-        agent_id: consoleSubscriber.agent_id,
-        wait_ms: 500,
-        coalesce_window_ms: 500,
-        receiver_refresh_ms: 60 * 60 * 1000,
-        signal: controller.signal,
-        mode_override: "all",
-      })) {
-        printMessage(event.line);
-        // Event-driven roster refresh: any presence change (join,
-        // leave, rename, project_change, status_update, profile_update,
-        // handle_recycled) updates the subscribers table. Diff against
-        // the last rendered key — if the visible roster changed,
-        // refresh. Avoids parsing the silent-event body. Status-only
-        // updates DO show in /status output, so we refresh on those
-        // too — yapsmith's verdict said skip status, but pantheon's
-        // /status output is the same data the pinned roster could
-        // surface and admins need it live.
-        refreshRoster();
+    // Console is human-facing — keep the poll interval short so new
+    // messages appear near-instantly. 100ms gives ~50ms perceived
+    // latency on average; SQLite indexed `seq > ?` is cheap enough
+    // that this costs nothing real even when chat.db is large.
+    // (Agent-side watcher uses 500ms — that path is invisible to a
+    // human and doesn't need the snappier cadence.)
+    const waitMs = 100;
+    const batch = 50;
+    while (!controller.signal.aborted) {
+      const rows = db
+        .query("SELECT * FROM messages WHERE seq > ? ORDER BY seq ASC LIMIT ?")
+        .all(lastSeenSeq, batch) as MessageRow[];
+      if (rows.length === 0) {
+        await sleep(waitMs, controller.signal);
+        continue;
       }
-    } catch (err) {
-      stderr.write(`pantheon-console: tail error: ${(err as Error).message}\n`);
+      // Refresh presence once per batch — cheap and keeps sender /
+      // target project tags accurate against churn.
+      presenceIndex = buildPresenceIndex(listActive(db));
+      let touchedPresenceKind = false;
+      for (const row of rows) {
+        lastSeenSeq = row.seq;
+        if (row.kind === "keepalive") {
+          handleKeepaliveLive(row);
+          continue;
+        }
+        // Any non-keepalive row breaks the coalesce window — flush
+        // immediately so the summary lands above the next message.
+        flushKeepaliveBuf();
+        if (
+          row.kind &&
+          row.kind !== "status_digest" &&
+          row.kind !== "status_update" &&
+          row.kind !== "status"
+        ) {
+          touchedPresenceKind = true;
+        }
+        printRow(row, presenceIndex);
+      }
+      if (touchedPresenceKind) refreshRoster();
     }
   })();
 
-  // Heartbeat the synthetic presence row every 5s so pruneStale
-  // (30s threshold) doesn't evict the console mid-session. Roster
-  // refresh is event-driven now, not timer-driven.
-  const heartbeatTimer = setInterval(() => {
-    try {
-      heartbeat(db, consoleSubscriber.agent_id);
-    } catch {
-      // best-effort
-    }
-  }, 5_000);
-
   refreshRoster(true);
-  if (interactive) {
-    stdout.write(
-      paint(parsed.color, "grey", "pantheon console — type /help for commands, /quit to exit.") +
-        "\n",
-    );
-  }
 
   // ---- Resize handler --------------------------------------------
   // Without this, the pinned roster corrupts on terminal resize until
@@ -422,11 +476,12 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
   // buffer at the current width.
   const onResize = () => {
     if (interactive && rosterEnabled) {
-      // Re-render at the new width.
       const rows = listActive(db);
-      statusLines = renderRoster(rows);
-      lastRosterKey = rosterKey(rows);
+      const rendered = renderRoster(rows);
+      rendered.push(separator());
       clearStatusArea();
+      statusLines = rendered;
+      lastRosterKey = rosterKey(rows);
       drawStatusArea();
     } else if (interactive) {
       rl.prompt(true);
@@ -437,6 +492,10 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
   }
 
   // ---- Slash-command dispatcher ----------------------------------
+  // The admin discriminator is the pair (from_agent_id="system",
+  // from_username_inline="admin") — both survive SQLite persistence,
+  // so isAdminConsoleMessage() works for cross-process consumers
+  // (watcher tail, audit log) without needing a separate role field.
   const broadcast = (
     scope: "global" | "project" | "dm",
     text: string,
@@ -446,9 +505,7 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
     router.addMessage({
       from_agent_id: "system",
       scope,
-      text: `[ADMIN] ${text}`,
-      system: true,
-      system_actor: "admin",
+      text,
       from_username_inline: "admin",
       ...(extras.project !== undefined ? { project: extras.project } : {}),
       ...(extras.target !== undefined ? { target: extras.target } : {}),
@@ -464,65 +521,79 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
       return true;
     }
     if (line === "/who") {
-      // Refresh the pinned roster (don't print into the message
-      // stream — that's double-rendering with a pinned roster).
+      // Print roster inline AND refresh the pinned strip — matches
+      // chat-mcp's `/who` UX (it prints into scroll). The pinned
+      // strip stays up-to-date for free.
+      const rows = listActive(db);
+      const block = renderRoster(rows).join("\n");
+      printLine(block + "\n" + separator());
       refreshRoster(true);
       return true;
     }
     if (line === "/status") {
       const rows = listActive(db);
       const block = renderStatusList(rows).join("\n");
-      printMessage(block);
+      printLine(block + "\n" + separator());
       return true;
     }
     if (line.startsWith("/dm ")) {
       const rest = line.slice(4).trim();
       const sp = rest.indexOf(" ");
       if (sp <= 0) {
-        stderr.write("Usage: /dm <user> <text>\n");
+        printLine(paint("red", "usage: /dm <user> <text>"));
         return true;
       }
       const target = rest.slice(0, sp);
+      const text = rest.slice(sp + 1).trim();
+      if (!text) {
+        printLine(paint("red", "empty text"));
+        return true;
+      }
       // Soft-warn: chat router has no offline-DM queue. If the target
       // isn't currently connected, the message persists in chat.db
-      // but the recipient won't see it on next login (their cursor
-      // advances past it via heartbeat / refreshReceiver). Surface
-      // the gap to the admin without blocking — legitimate use case
-      // is sending to a known persona that's about to connect.
+      // but the recipient won't see it on next login.
       if (!listActive(db).some((a) => a.username === target)) {
-        printMessage(
-          paint(parsed.color, "yellow", `warning: ${target} not currently connected — message stored but not delivered`),
+        printLine(
+          paint("yellow", `warning: ${target} not currently connected — message stored but not delivered`),
         );
       }
-      broadcast("dm", rest.slice(sp + 1).trim(), { target });
+      broadcast("dm", text, { target });
       return true;
     }
     if (line.startsWith("/proj ") || line.startsWith("/p ")) {
       const rest = line.slice(line.indexOf(" ") + 1).trim();
       const sp = rest.indexOf(" ");
       if (sp <= 0) {
-        stderr.write("Usage: /proj <project> <text>\n");
+        printLine(paint("red", "usage: /proj <project> <text>"));
         return true;
       }
       const proj = rest.slice(0, sp);
-      // Soft-warn: cheaper than DM validation — single roster scan
-      // for any agent in the project. If no one's listening, message
-      // still writes (deferred audience).
+      const text = rest.slice(sp + 1).trim();
+      if (!text) {
+        printLine(paint("red", "empty text"));
+        return true;
+      }
       if (!listActive(db).some((a) => a.project === proj)) {
-        printMessage(
-          paint(parsed.color, "yellow", `warning: no agents currently in project '${proj}' — message stored but not delivered`),
+        printLine(
+          paint("yellow", `warning: no agents currently in project '${proj}' — message stored but not delivered`),
         );
       }
-      broadcast("project", rest.slice(sp + 1).trim(), { project: proj });
+      broadcast("project", text, { project: proj });
       return true;
     }
     if (line.startsWith("/g ") || line.startsWith("/global ")) {
       const text = line.startsWith("/g ") ? line.slice(3).trim() : line.slice(8).trim();
+      if (!text) {
+        printLine(paint("red", "empty text"));
+        return true;
+      }
       broadcast("global", text);
       return true;
     }
     if (line.startsWith("/")) {
-      stderr.write(`pantheon-console: unknown command '${line.split(" ")[0]}'. Try /help.\n`);
+      printLine(
+        paint("red", `unknown command: ${line.split(" ")[0]} (try /help)`),
+      );
       return true;
     }
     // Bare text → global broadcast.
@@ -538,9 +609,6 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
         controller.abort();
         rl.close();
       } else {
-        // rl.prompt(true) preserves any mid-typed buffer; covers the
-        // race where a system event lands between line completion and
-        // the next render pass.
         clearStatusArea();
         drawStatusArea();
       }
@@ -554,21 +622,21 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
     rl.once("close", () => resolve());
   });
   controller.abort();
-  clearInterval(heartbeatTimer);
+  // Flush any pending keepalive summary so the user sees what landed
+  // in the last debounce window before we exit.
+  flushKeepaliveBuf();
   if (interactive) {
     (stdout as NodeJS.WriteStream).off("resize", onResize);
   }
   await tailPromise;
-  // Best-effort: remove the synthetic console subscriber row so it
-  // doesn't sit in the presence table forever.
-  try {
-    removeSubscriber(db, consoleSubscriber.agent_id);
-  } catch {
-    // best-effort
-  }
   if (interactive) {
     process.off("SIGTERM", onSig);
     process.off("SIGINT", onSig);
+    // Leave the terminal on a clean line so the shell prompt lands
+    // below — without this, the shell prompt (`leandro@host$ `) would
+    // appear directly after `[admin] >` on the same row.
+    clearStatusArea();
+    stdout.write("\n");
   }
   db.close();
   return EXIT_CODES.SUCCESS;
