@@ -46,13 +46,13 @@ export const HANDLERS: Record<string, Handler> = {
   idle: lifecycle.idle,
   extend_idle: lifecycle.extend_idle,
 
-  // Spawn (stubs — §11a)
+  // Spawn (§11a)
   summon: spawn.summon,
   summon_any: spawn.summon_any,
   conjure: spawn.conjure,
   conjure_any: spawn.conjure_any,
 
-  // Chat (stubs — §11c)
+  // Chat (§11c)
   login: chat.login,
   logout: chat.logout,
   send_message: chat.send_message,
@@ -63,4 +63,5 @@ export const HANDLERS: Record<string, Handler> = {
   check_messages: chat.check_messages,
   list_agents: chat.list_agents,
   find_role: chat.find_role,
+  get_message: chat.get_message,
 };

@@ -12,6 +12,20 @@ const COLOR_ENUM = [
   "cyan",
 ] as const;
 
+const PERMISSION_MODE_ENUM = [
+  "default",
+  "acceptEdits",
+  "plan",
+  "bypassPermissions",
+] as const;
+
+const PERMISSION_MODE_SCHEMA = {
+  type: "string",
+  enum: PERMISSION_MODE_ENUM as unknown as string[],
+  description:
+    "Claude Code `--permission-mode` for spawned `claude` processes. `acceptEdits` (default) shows '⏵⏵ accept edits on' from the first turn. `plan` blocks all edits; `default` keeps interactive prompts; `bypassPermissions` skips ALL checks (use with care).",
+} as const;
+
 const SPAWN_TARGET_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -100,6 +114,7 @@ export const TOOLS: readonly ToolDef[] = [
           description:
             "When true, every summon forwards `--remote-control \"<persona.project>\"`. CLI flag (`--remote-control` / `--rc`) overrides per-call.",
         },
+        permission_mode: PERMISSION_MODE_SCHEMA,
         force: { type: "boolean", description: "Override cwd-mismatch + prefix-collision checks." },
         claim_after: {
           type: "boolean",
@@ -170,6 +185,11 @@ export const TOOLS: readonly ToolDef[] = [
         launch_args: { type: "array", items: { type: "string" } },
         channels: { type: "array", items: { type: "string" } },
         remote_control: { type: "boolean" },
+        permission_mode: {
+          oneOf: [PERMISSION_MODE_SCHEMA, { type: "null" }],
+          description:
+            "Default permission mode for spawns of this persona. `null` clears the field (cascade falls back to env / floor).",
+        },
       },
     },
   },
@@ -482,11 +502,11 @@ export const TOOLS: readonly ToolDef[] = [
     },
   },
 
-  // -------- Spawn (stubs until §11a launcher adapters land) --------
+  // -------- Spawn --------
   {
     name: "summon",
     description:
-      "Spawn an agent in your OWN project. Stub in this build — handler returns `not_implemented` until §11a launcher adapters land. The schema (incl. `target` and `rest_timeout`) is final.",
+      "Spawn an agent in your OWN project. Resolves the persona registration, applies cross-project guard, picks a host adapter (wt / kitty / tmux / alacritty / generic), opens a window/tab/pane per `target`, and arms a watchdog with `rest_timeout`. Pass `chat_username_suffix` to chat under `<persona>2` when the canonical handle is taken by a peer.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -511,6 +531,7 @@ export const TOOLS: readonly ToolDef[] = [
           description:
             "Per-call override for the persona's `remote_control` field. `true` uses the persona's project as the RC name; pass a string for an explicit name.",
         },
+        permission_mode: PERMISSION_MODE_SCHEMA,
         chat_username_suffix: {
           type: "string",
           description:
@@ -522,7 +543,7 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "summon_any",
     description:
-      "Cross-project variant of `summon`. Stub until §11a lands.",
+      "Cross-project variant of `summon` — bypasses the same-project guard. Same flow otherwise (adapter dispatch, watchdog, optional `chat_username_suffix`).",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -547,6 +568,7 @@ export const TOOLS: readonly ToolDef[] = [
           description:
             "Per-call override for the persona's `remote_control` field. `true` uses the persona's project as the RC name; pass a string for an explicit name.",
         },
+        permission_mode: PERMISSION_MODE_SCHEMA,
         chat_username_suffix: {
           type: "string",
           description:
@@ -558,7 +580,7 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "conjure",
     description:
-      "Create a NEW persona and summon it in one call. Same project. Stub until §11a lands.",
+      "Create a NEW persona and summon it in one atomic call. Same project. Combines `register` + `summon` so the new agent is registered, the cwd is auto-trusted, the spawn target is opened, and the watchdog is armed without two round trips.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -582,6 +604,10 @@ export const TOOLS: readonly ToolDef[] = [
         remote_control: {
           type: "boolean",
           description: "Initial remote_control flag persisted on the new persona.",
+        },
+        permission_mode: {
+          ...PERMISSION_MODE_SCHEMA,
+          description: "Initial permission_mode persisted on the new persona (also used for this first spawn).",
         },
         chat_username_suffix: {
           type: "string",
@@ -596,7 +622,7 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "conjure_any",
     description:
-      "Cross-project variant of `conjure`. Stub until §11a lands.",
+      "Cross-project variant of `conjure` — bypasses the caller-project guard so you can spawn a new persona for a different project than your own.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -620,6 +646,10 @@ export const TOOLS: readonly ToolDef[] = [
         remote_control: {
           type: "boolean",
           description: "Initial remote_control flag persisted on the new persona.",
+        },
+        permission_mode: {
+          ...PERMISSION_MODE_SCHEMA,
+          description: "Initial permission_mode persisted on the new persona (also used for this first spawn).",
         },
         chat_username_suffix: {
           type: "string",
@@ -877,7 +907,7 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "find_role",
     description:
-      "Search registry + connected-agent list by `owns` / `expertise` / `online`. Stub until §11c (joins registry with chat router state).",
+      "Search registry + connected-agent list by `owns` / `expertise` / `online`. Joins registry with chat router state.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -885,6 +915,19 @@ export const TOOLS: readonly ToolDef[] = [
         owns: { type: "string" },
         expertise: { type: "string" },
         online: { type: "boolean" },
+      },
+    },
+  },
+  {
+    name: "get_message",
+    description:
+      "Fetch the full text of a single chat message by id. Recovery path for watcher events that arrived as `[oversized message …]` stubs — pantheon source-truncates messages above its watcher emit threshold so they fit inside CC's Monitor-event harness cap, and ships the full body through this tool on demand. The `message_id` is in the stub event the watcher emitted. Returns the full row (text + metadata); errors `not_found` for unknown ids.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["message_id"],
+      properties: {
+        message_id: { type: "string" },
       },
     },
   },
