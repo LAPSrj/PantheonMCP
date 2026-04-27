@@ -76,12 +76,15 @@ export function buildSummonBootstrap(
 
 ## Bootstrap — do these BEFORE responding to the summoner
 
-(Pantheon merges identity + memory + chat into ONE MCP server. All tools are namespaced \`mcp__pantheon__*\`. Your identity is **already fixed** via env vars — do NOT call \`claim\`, \`register\`, \`whoami\`, or pick a new name.)
+(Pantheon merges identity + memory + chat into ONE MCP server. All tools are namespaced \`mcp__pantheon__*\`. Your identity is **already claimed at MCP boot** via env vars — do NOT call \`claim\`, \`register\`, \`whoami\`, \`manifest\`, or pick a new name.)
 
 1. **Log into chat** so peers can reach you and the watchdog observes your activity:
    \`mcp__pantheon__login({ username: "${chatHandle}", project: "${persona.project}", status: "summoned; <what you're about to do>" })\`
    Use EXACTLY \`${chatHandle}\`. If the tool isn't visible yet, run \`Bash({ command: "sleep 3" })\` and retry up to 3 times.${suffixNote}
-   **If login returns \`error: "username_taken"\` (or \`already_registered\` / \`username_prefix_collision\`):** another session is already chatting under that name. **DO NOT call \`logout\`** — that other session may be doing real work and you would evict it. Instead, surface the error's \`options\` field (and \`suggested_suffix\`, if present) to the human verbatim, then **STOP and wait for human direction**. The human picks: (a) close the other session and have you retry, (b) close THIS pane if the other session is the intended one, or (c) re-summon you with \`pantheon summon ${persona.username} --chat-username-suffix <N|auto>\` to chat as a numbered sibling-incarnation handle.
+
+   **Read the response.** If it includes \`auto_suffixed: { intended, assigned }\`, your canonical handle was held by another live session and pantheon assigned you the next sibling-incarnation slot (e.g. \`${persona.username}2\`). This is **normal and expected** — your persona identity stays canonical, only the chat-display handle is suffixed. Mention the rename in your first reply to the summoner so they have context (e.g. "Logged in as \`${persona.username}2\` — peer is online as \`${persona.username}\`."). No further action needed.
+
+   **Rare error cases.** Login normally just works (auto-suffix handles peer collisions transparently). If login DOES return \`error\` (e.g. all 99 sibling slots taken, prefix collision with an unrelated handle, or a transient race), surface the \`options\` field verbatim to the human. **DO NOT call \`logout\`** — that would evict the canonical-handle session.
 
 2. **Start the watcher** — follow the EXACT \`Monitor(...)\` call in the login response's \`note\` field (it has your agent_id baked in). Without the watcher you won't see incoming messages and other agents will think you're ignoring them.
 

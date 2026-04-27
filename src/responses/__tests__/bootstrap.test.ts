@@ -132,19 +132,25 @@ test("chat_username_suffix embeds <persona><N> in the login call and notes the c
   // Note clarifies persona identity stays canonical.
   expect(out).toContain("sibling-incarnation alias");
   expect(out).toContain("persona identity is still `swoopfinch`");
-  // Re-summon hint still references the canonical handle.
-  expect(out).toContain("pantheon summon swoopfinch --chat-username-suffix");
 });
 
-test("collision-handling clause always present (instructs no auto-logout, surface options, stop)", () => {
+test("auto-suffix guidance: tells the agent to read auto_suffixed and surface the rename naturally", () => {
   const out = buildSummonBootstrap(persona(), { rest_timeout: 3600 });
-  expect(out).toContain("error: \"username_taken\"");
+  // The bootstrap explains the auto-suffix flow.
+  expect(out).toContain("auto_suffixed");
+  expect(out).toContain("sibling-incarnation slot");
+  expect(out).toContain("normal and expected");
+  // Concrete example shows the canonical-vs-suffixed distinction.
+  expect(out).toContain("swoopfinch2");
+});
+
+test("collision fallback: rare-error path retains DO-NOT-logout + surface options guidance", () => {
+  const out = buildSummonBootstrap(persona(), { rest_timeout: 3600 });
+  // Manual error path is preserved as exception-only fallback.
   expect(out).toContain("DO NOT call `logout`");
-  expect(out).toContain("STOP and wait for human direction");
-  // The three remediation options reach the human.
-  expect(out).toContain("close the other session");
-  expect(out).toContain("close THIS pane");
-  expect(out).toContain("--chat-username-suffix");
+  expect(out).toContain("options");
+  // Auto-suffix is mentioned as the normal-case behavior.
+  expect(out).toContain("auto-suffix handles peer collisions transparently");
 });
 
 test("non-WSL platform renders the platform line without the distro suffix", () => {
