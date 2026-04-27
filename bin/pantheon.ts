@@ -26,6 +26,7 @@ import { runConsole } from "../src/cli/console.ts";
 import { runStatusline } from "../src/cli/statusline.ts";
 import { runSummon } from "../src/cli/summon.ts";
 import { validateFile, type ValidateType } from "../src/cli/validate.ts";
+import { runContextCheck } from "../src/cli/context-check.ts";
 import { EXIT_CODES } from "../src/cli/exit-codes.ts";
 import { assertNoLegacyLayout, LegacyLayoutError } from "../src/storage/index.ts";
 
@@ -53,6 +54,10 @@ Subcommands:
   console [...flags]     Interactive admin REPL — watch + broadcast.
                          Flags: --tail N --no-tail --color --no-color
                                 --no-roster
+  context-check          Stop-hook handler. Reads CC's Stop event JSON
+                         from stdin, emits a hook-decision JSON. Wire
+                         via the wrapper script that pantheon serve
+                         drops at \`~/.pantheon/context-check-wrapper.sh\`.
 
   --version              Print version.
   --help, -h             This message.
@@ -169,6 +174,11 @@ async function main(): Promise<void> {
     case "console": {
       const code = await runConsole({ args: rest });
       process.exit(code);
+    }
+
+    case "context-check": {
+      runContextCheck();
+      process.exit(EXIT_CODES.SUCCESS);
     }
 
     case "validate": {
