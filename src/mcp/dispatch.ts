@@ -62,11 +62,17 @@ export async function dispatch(
 
 /** Append a context-pressure hint to the response's `hints` array
  * when the surrogate signals soft_hint or higher. Preserves any
- * existing `hints` (e.g., the staleness nudge from `send_message`). */
+ * existing `hints` (e.g., the staleness nudge from `send_message`).
+ *
+ * Gated on having a claimed persona — the hint tells the agent to
+ * call `append_memory` / `rest`, which only persona-claimed sessions
+ * can do. Surfacing it on guests / unclaimed sessions is pure noise
+ * (no memory store, no persona to rest). */
 function injectPressureHint(data: unknown, ctx: HandlerContext): unknown {
   if (typeof data !== "object" || data === null || Array.isArray(data)) {
     return data;
   }
+  if (!ctx.session.claimedUsername) return data;
   let level: ReturnType<typeof computePressure>;
   let state: ReturnType<typeof ctx.getPressureState>;
   try {
