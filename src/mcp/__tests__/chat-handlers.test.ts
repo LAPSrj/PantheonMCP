@@ -169,6 +169,248 @@ test("login collision: suggested_suffix walks past taken numbers", async () => {
   expect(payload.suggested_suffix).toBe("swoopfinch4");
 });
 
+// --- auto-suffix on duplicate-handle login ---
+
+async function registerAndClaim(c: HandlerContext, username: string, project: string) {
+  await dispatch(
+    "register",
+    {
+      username,
+      project,
+      cwd: `/work/${username}`,
+      description: `${username} agent`,
+      expertise: [],
+      owns: [],
+      claim_after: true,
+    },
+    c,
+  );
+}
+
+async function registerOnly(c: HandlerContext, username: string, project: string, cwd?: string) {
+  await dispatch(
+    "register",
+    {
+      username,
+      project,
+      cwd: cwd ?? `/work/${username}`,
+      description: `${username} agent`,
+      expertise: [],
+      owns: [],
+    },
+    c,
+  );
+}
+
+test("auto-claim: unclaimed login at matching cwd auto-claims the persona", async () => {
+  // Create a persona registered to THIS process's cwd so the
+  // cwd-match safety gate fires.
+  await registerOnly(ctx, "amberhowl", "nyus-monitor", process.cwd());
+  // Fresh session — never called manifest or claim.
+  expect(ctx.session.claimedUsername).toBeNull();
+
+  const r = await call("login", { username: "amberhowl", project: "nyus-monitor" });
+  expect(r.ok).toBe(true);
+  expect(r.payload.username).toBe("amberhowl");
+  expect(r.payload.auto_claimed).toBe(true);
+  expect(r.payload.note).toContain("Auto-claimed persona 'amberhowl'");
+  // Session is now in claimed_persona state.
+  expect(ctx.session.claimedUsername).toBe("amberhowl");
+});
+
+test("auto-claim: cwd mismatch falls through to error path", async () => {
+  // Persona registered at a DIFFERENT cwd than this process.
+  await registerOnly(ctx, "stranger", "p", "/some/other/cwd");
+  expect(ctx.session.claimedUsername).toBeNull();
+
+  const r = await dispatch(
+    "login",
+    { username: "stranger", project: "p", transient: false },
+    ctx,
+  );
+  expect(r.isError).toBe(true);
+  const payload = JSON.parse(r.content[0]!.text) as Record<string, unknown>;
+  // already_registered: persona exists, caller's claim doesn't match,
+  // and cwd-match auto-claim didn't fire because cwds differ.
+  expect(payload.error).toBe("already_registered");
+  expect(payload.auto_claimed).toBeUndefined();
+  expect(ctx.session.claimedUsername).toBeNull();
+});
+
+test("auto-claim + auto-suffix combine: unclaimed agent at matching cwd whose canonical handle is taken gets <base>2", async () => {
+  // First agent claims canonical and joins chat.
+  await registerOnly(ctx, "amberhowl", "nyus-monitor", process.cwd());
+  await dispatch("claim", { username: "amberhowl" }, ctx);
+  await call("login", { username: "amberhowl", project: "nyus-monitor" });
+
+  // Second agent: separate session, never manifested, but lives at
+  // the same cwd (because the persona is registered to it). Login
+  // should auto-claim AND auto-suffix in one step.
+  const ctx2 = createContext({
+    paths: ctx.paths,
+    session: new Session("test-session-2"),
+    watchdog: ctx.watchdog,
+    parent_pid: ctx.parent_pid,
+    platform: ctx.platform,
+    chat: ctx.chat,
+  });
+  const r = await dispatch(
+    "login",
+    { username: "amberhowl", project: "nyus-monitor" },
+    ctx2,
+  );
+  expect(r.isError).toBeFalsy();
+  const payload = JSON.parse(r.content[0]!.text) as Record<string, unknown>;
+  expect(payload.username).toBe("amberhowl2");
+  expect(payload.auto_claimed).toBe(true);
+  expect((payload.auto_suffixed as { assigned: string }).assigned).toBe("amberhowl2");
+  // Note carries both context messages.
+  expect(payload.note).toContain("Auto-claimed persona 'amberhowl'");
+  expect(payload.note).toContain("Logged in as 'amberhowl2'");
+});
+
+test("auto-suffix: persona-owner whose canonical handle is taken auto-renames to <base>2", async () => {
+  // First instance of `semaphoremole` claims the persona and joins chat.
+  await registerAndClaim(ctx, "semaphoremole", "liaison");
+  const first = await call("login", { username: "semaphoremole", project: "liaison" });
+  expect(first.ok).toBe(true);
+  expect(first.payload.username).toBe("semaphoremole");
+
+  // Second MCP session — same persona, different process. Persona is
+  // already registered by the first registerAndClaim, so this one
+  // just claims it.
+  const ctx2 = createContext({
+    paths: ctx.paths,
+    session: new Session("test-session-2"),
+    watchdog: ctx.watchdog,
+    parent_pid: ctx.parent_pid,
+    platform: ctx.platform,
+    chat: ctx.chat,
+  });
+  await dispatch("claim", { username: "semaphoremole" }, ctx2);
+
+  const second = await dispatch(
+    "login",
+    { username: "semaphoremole", project: "liaison" },
+    ctx2,
+  );
+  expect(second.isError).toBeFalsy();
+  const payload = JSON.parse(second.content[0]!.text) as Record<string, unknown>;
+  expect(payload.username).toBe("semaphoremole2");
+  const auto = payload.auto_suffixed as { intended: string; assigned: string };
+  expect(auto).toEqual({ intended: "semaphoremole", assigned: "semaphoremole2" });
+  expect(payload.note).toContain("auto-assigned the next sibling-incarnation slot");
+  expect(payload.note).toContain("Logged in as 'semaphoremole2'");
+});
+
+test("auto-suffix: walks past taken slots", async () => {
+  await registerAndClaim(ctx, "alice", "p");
+  await call("login", { username: "alice", project: "p" });
+  // Pre-take alice2 + alice3 by direct router.add (simulates other peers).
+  ctx.chat!.add({ username: "alice2", project: "p", transient: false });
+  ctx.chat!.add({ username: "alice3", project: "p", transient: false });
+
+  const ctx2 = createContext({
+    paths: ctx.paths,
+    session: new Session("s2"),
+    watchdog: ctx.watchdog,
+    parent_pid: ctx.parent_pid,
+    platform: ctx.platform,
+    chat: ctx.chat,
+  });
+  await dispatch("claim", { username: "alice" }, ctx2);
+  const r = await dispatch("login", { username: "alice", project: "p" }, ctx2);
+  const payload = JSON.parse(r.content[0]!.text) as Record<string, unknown>;
+  expect(payload.username).toBe("alice4");
+  expect((payload.auto_suffixed as { assigned: string }).assigned).toBe("alice4");
+});
+
+test("auto-suffix: does NOT trigger for guest (transient) logins", async () => {
+  // Guest collisions stay on the manual-options error path — guests
+  // have no persona ownership, so picking <base>2 silently could
+  // confuse peers about who's actually claiming the namespace.
+  await call("login", { username: "guest", project: "p", transient: true });
+  const ctx2 = createContext({
+    paths: ctx.paths,
+    session: new Session("g2"),
+    watchdog: ctx.watchdog,
+    parent_pid: ctx.parent_pid,
+    platform: ctx.platform,
+    chat: ctx.chat,
+  });
+  const r = await dispatch(
+    "login",
+    { username: "guest", project: "p", transient: true },
+    ctx2,
+  );
+  expect(r.isError).toBe(true);
+  const payload = JSON.parse(r.content[0]!.text) as Record<string, unknown>;
+  expect(payload.error).toBe("username_taken");
+  expect(payload.auto_suffixed).toBeUndefined();
+  expect(payload.suggested_suffix).toBe("guest2");
+});
+
+test("auto-suffix: does NOT trigger when the canonical handle is owned by a different persona", async () => {
+  // Register two personas; both try to claim `mallory` as their chat
+  // handle. Second login is `already_registered` (different owner)
+  // — this is NOT auto-suffix-able because the caller has no claim
+  // on the base name.
+  await registerAndClaim(ctx, "mallory", "p");
+  await call("login", { username: "mallory", project: "p" });
+
+  const ctx2 = createContext({
+    paths: ctx.paths,
+    session: new Session("s2"),
+    watchdog: ctx.watchdog,
+    parent_pid: ctx.parent_pid,
+    platform: ctx.platform,
+    chat: ctx.chat,
+  });
+  await registerAndClaim(ctx2, "trent", "p");
+  // ctx2's session claims `trent`, but is trying to chat as `mallory`.
+  // The collision reason is `registered_persona` (mallory belongs to
+  // someone else), not `subscriber_taken`.
+  const r = await dispatch(
+    "login",
+    { username: "mallory", project: "p", transient: true },
+    ctx2,
+  );
+  expect(r.isError).toBe(true);
+  const payload = JSON.parse(r.content[0]!.text) as Record<string, unknown>;
+  // Either `already_registered` (persona collision) or `username_taken`
+  // (subscriber collision via the live mallory) — the auto-suffix
+  // path is gated on `subscriber_taken` AND owner-claim, neither of
+  // which applies for ctx2.
+  expect(payload.auto_suffixed).toBeUndefined();
+  expect(payload.options).toBeInstanceOf(Array);
+});
+
+test("auto-suffix: join system message marks the rename for peers", async () => {
+  await registerAndClaim(ctx, "bob", "p");
+  await call("login", { username: "bob", project: "p" });
+
+  const ctx2 = createContext({
+    paths: ctx.paths,
+    session: new Session("s2"),
+    watchdog: ctx.watchdog,
+    parent_pid: ctx.parent_pid,
+    platform: ctx.platform,
+    chat: ctx.chat,
+  });
+  await dispatch("claim", { username: "bob" }, ctx2);
+  // Add a peer to receive the join broadcast.
+  const peer = ctx.chat!.add({ username: "watcher", project: "p", transient: false });
+  await dispatch("login", { username: "bob", project: "p" }, ctx2);
+
+  const taken = ctx.chat!.takeMessages(peer.agent_id);
+  const joinMsg = taken.messages.find(
+    (m) => m.system_kind === "join" && m.text.includes("bob2"),
+  );
+  expect(joinMsg).toBeDefined();
+  expect(joinMsg!.text).toContain("sibling-incarnation of bob");
+  expect(joinMsg!.text).toContain("canonical handle held by another live session");
+});
+
 test("login with promote flips guest → claimed_persona via promoteInPlace", async () => {
   const r = await call("login", {
     username: "leandro",
@@ -210,6 +452,105 @@ test("send_message with scope='dm' requires a target", async () => {
   const r = await call("send_message", { text: "psst", scope: "dm" });
   expect(r.ok).toBe(false);
   expect(r.payload.error).toBe("missing_target");
+});
+
+test("send_message: DM to an online peer succeeds and delivers", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const target = ctx.chat!.add({ username: "beta", project: "X", transient: false });
+  const r = await call("send_message", {
+    text: "psst",
+    scope: "dm",
+    target: "beta",
+  });
+  expect(r.ok).toBe(true);
+  const taken = ctx.chat!.takeMessages(target.agent_id);
+  expect(taken.messages.map((m) => m.text)).toContain("psst");
+});
+
+test("send_message: DM to an offline target fails recipient_offline + does NOT persist", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  // No `gamma` ever added — strictly offline.
+  const r = await call("send_message", {
+    text: "ghost-DM",
+    scope: "dm",
+    target: "gamma",
+  });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("recipient_offline");
+  expect((r.payload.message as string)).toContain("not currently in chat");
+  expect((r.payload.message as string)).toContain("NOT persisted");
+  // Bonus: re-running list of in-memory messages by-id confirms the
+  // router never accepted the send (no message_id surfaced in the
+  // error payload — the failure is pre-addMessage).
+  expect(r.payload.message_id).toBeUndefined();
+});
+
+test("get_message: returns the full row by id", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  ctx.chat!.add({ username: "beta", project: "X", transient: false });
+  const sent = await call("send_message", {
+    text: "hello beta",
+    scope: "dm",
+    target: "beta",
+  });
+  // Persistence is tied to the router's db. The test harness uses an
+  // in-memory router (no db wired), so get_message will open a fresh
+  // chat.db at the resolved path — which is the test tmpdir's
+  // chat.db. We persist a row directly via the router's persistence
+  // layer to ensure it lands in the same db get_message reads.
+  const messageId = sent.payload.message_id as string;
+  // Directly persist to chat.db at the resolved path so get_message
+  // can find it (router in this test isn't db-backed).
+  const { openChatDb } = await import("../../storage/index.ts");
+  const db = openChatDb(ctx.paths.chatDbPath);
+  db.run(
+    "INSERT INTO messages (id, seq, ts, scope, project, target_username, from_agent_id, from_transient, from_username_inline, text, kind, reply_to, correlation_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [
+      messageId,
+      1,
+      Date.now(),
+      "dm",
+      "X",
+      "beta",
+      "system",
+      0,
+      null,
+      "hello beta",
+      null,
+      null,
+      null,
+    ],
+  );
+  db.close();
+
+  const r = await call("get_message", { message_id: messageId });
+  expect(r.ok).toBe(true);
+  expect(r.payload.id).toBe(messageId);
+  expect(r.payload.text).toBe("hello beta");
+  expect(r.payload.scope).toBe("dm");
+});
+
+test("get_message: unknown id returns not_found", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const r = await call("get_message", { message_id: "ghost-id" });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("not_found");
+});
+
+test("ask: offline target fails recipient_offline immediately (no timeout wait)", async () => {
+  await call("login", { username: "asker", project: "p", transient: false });
+  const t0 = Date.now();
+  const r = await dispatch(
+    "ask",
+    { target: "ghost", text: "?", timeout_ms: 5000 },
+    ctx,
+  );
+  const elapsed = Date.now() - t0;
+  // Must fail fast, not eat the 5s timeout budget.
+  expect(elapsed).toBeLessThan(500);
+  expect(r.isError).toBe(true);
+  const payload = JSON.parse(r.content[0]!.text) as Record<string, unknown>;
+  expect(payload.error).toBe("recipient_offline");
 });
 
 // --- ask / answer ---
