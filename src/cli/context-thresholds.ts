@@ -26,6 +26,21 @@ export const DEFAULT_CONTEXT_THRESHOLDS: ContextThreshold[] = [
   { fraction: 0.85, block: false },
 ];
 
+/** Disable kill-switch. Set `PANTHEON_CONTEXT_CHECK=off` (or
+ * `0` / `false` / `disabled`, case-insensitive) on the pantheon
+ * mcpServers entry to fully suppress the Stop-hook context warning.
+ * When disabled, the MCP boot path skips writing the per-session
+ * runtime env file, so the wrapper's fast-path returns `{}` without
+ * spawning bun. */
+export function isContextCheckDisabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const raw = env.PANTHEON_CONTEXT_CHECK;
+  if (!raw) return false;
+  const v = raw.trim().toLowerCase();
+  return v === "off" || v === "0" || v === "false" || v === "disabled";
+}
+
 export function parseThresholdsFromEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): ContextThreshold[] {

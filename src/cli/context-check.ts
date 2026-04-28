@@ -25,6 +25,7 @@
 import fs from "node:fs";
 import {
   detectWindowFromModel,
+  isContextCheckDisabled,
   renderThresholdMessage,
   selectThreshold,
   shouldResetFired,
@@ -157,6 +158,10 @@ function transcriptHadRecentMemorySave(transcriptPath: string): boolean {
 
 export function runContextCheck(): void {
   try {
+    if (isContextCheckDisabled()) {
+      emit({});
+      return;
+    }
     const raw = readStdinSync();
     if (!raw) {
       emit({});

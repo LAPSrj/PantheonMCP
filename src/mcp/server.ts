@@ -13,8 +13,12 @@ import { stampRested, transitionClaim } from "../identity/index.ts";
 import { ChatRouter, pruneStale } from "../chat/index.ts";
 import { expireHandoffs } from "../memory/index.ts";
 import { openChatDb, resolvePaths } from "../storage/index.ts";
-import { parseThresholdsFromEnv } from "../cli/context-thresholds.ts";
 import {
+  isContextCheckDisabled,
+  parseThresholdsFromEnv,
+} from "../cli/context-thresholds.ts";
+import {
+  deleteRuntimeFiles,
   ensureStopHookWrapper,
   readClaudeSessionId,
   writeRuntimeEnv,
@@ -52,18 +56,24 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
     const claudePid = process.ppid;
     const claudeSessionId = readClaudeSessionId(claudePid);
     if (claudeSessionId) {
-      const windowOverrideRaw = process.env.PANTHEON_CONTEXT_WINDOW;
-      const windowOverride = windowOverrideRaw && Number.isFinite(Number(windowOverrideRaw))
-        ? Number(windowOverrideRaw)
-        : null;
-      writeRuntimeEnv({
-        claude_session_id: claudeSessionId,
-        claude_pid: claudePid,
-        cwd_at_boot: process.cwd(),
-        context_thresholds: parseThresholdsFromEnv(),
-        context_window_override: windowOverride,
-        written_at: Date.now(),
-      });
+      if (isContextCheckDisabled()) {
+        // Kill-switch: clear any stale runtime file from a prior run
+        // so the wrapper's fast-path returns `{}` without spawning bun.
+        deleteRuntimeFiles(claudeSessionId);
+      } else {
+        const windowOverrideRaw = process.env.PANTHEON_CONTEXT_WINDOW;
+        const windowOverride = windowOverrideRaw && Number.isFinite(Number(windowOverrideRaw))
+          ? Number(windowOverrideRaw)
+          : null;
+        writeRuntimeEnv({
+          claude_session_id: claudeSessionId,
+          claude_pid: claudePid,
+          cwd_at_boot: process.cwd(),
+          context_thresholds: parseThresholdsFromEnv(),
+          context_window_override: windowOverride,
+          written_at: Date.now(),
+        });
+      }
     }
     ensureStopHookWrapper();
   } catch {
