@@ -839,8 +839,10 @@ export const TOOLS: readonly ToolDef[] = [
       "owns the kind vocabulary and payload shape. Receivers see `[kind:X]` in the watcher line; the full " +
       "structured payload is retrieved with `mcp__pantheon__get_message`. " +
       "An optional `text` provides watcher-line content (defaults to `[kind]`). " +
-      "An optional `schema_id` references a registered JSON schema; when wired, the handler validates the " +
-      "payload against it (currently accepted-and-recorded but not enforced — schema-registry coming next). " +
+      "An optional `schema_id` references a registered JSON schema (see `register_schema`); when set, the " +
+      "handler validates the payload against the registered schema before accepting. Unknown schema_id " +
+      "errors `schema_not_found`; payloads that fail validation error `schema_validation_failed` with a " +
+      "list of `{path, message}` errors. " +
       "Same scope/target/reply_to semantics as `send_message`. Same offline-DM contract: scope='dm' with an " +
       "offline target is rejected with `recipient_offline`. Reserved kinds (system_kind values like `join`/`leave`) " +
       "are rejected. Payload soft cap 64 KB — store bulk in memory `details` and reference its id in the payload.",
@@ -988,13 +990,82 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "get_message",
     description:
-      "Fetch the full text of a single chat message by id. Recovery path for watcher events that arrived as `[oversized message …]` stubs — pantheon source-truncates messages above its watcher emit threshold so they fit inside CC's Monitor-event harness cap, and ships the full body through this tool on demand. The `message_id` is in the stub event the watcher emitted. Returns the full row (text + metadata); errors `not_found` for unknown ids.",
+      "Fetch the full text of a single chat message by id. Recovery path for watcher events that arrived as `[oversized message …]` stubs — pantheon source-truncates messages above its watcher emit threshold so they fit inside CC's Monitor-event harness cap, and ships the full body through this tool on demand. The `message_id` is in the stub event the watcher emitted. Returns the full row (text + metadata, plus `user_kind` + parsed `payload` for structured messages); errors `not_found` for unknown ids.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
       required: ["message_id"],
       properties: {
         message_id: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "register_schema",
+    description:
+      "Register a JSON Schema for typed chat messages, keyed by `schema_id`. " +
+      "Consumers (agents, skills) populate the registry at startup; `send_structured({ schema_id })` " +
+      "validates payloads against the registered schema before accepting. " +
+      "Pantheon stores the body verbatim and validates a small JSON Schema subset: " +
+      "`type` / `required` / `properties` / `items` / `enum` / `additionalProperties` / " +
+      "`minLength` / `maxLength` / `minimum` / `maximum` / `pattern`. Anything else is accepted " +
+      "but ignored at validate-time. Re-registering an existing id replaces the body; pass " +
+      "`exclusive: true` to refuse replacement (errors `schema_already_exists`). " +
+      "Convention: namespace ids as `<consumer>/<kind>@v<N>`, e.g. `takt-starter/pushback@v1`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["schema_id", "schema"],
+      properties: {
+        schema_id: {
+          type: "string",
+          description: "Stable id, e.g. 'takt-starter/pushback@v1'. Used by send_structured.",
+        },
+        schema: {
+          type: "object",
+          description: "JSON Schema body. Stored verbatim.",
+        },
+        description: { type: "string" },
+        exclusive: {
+          type: "boolean",
+          description: "When true, refuse to replace an existing id.",
+        },
+      },
+    },
+  },
+  {
+    name: "unregister_schema",
+    description:
+      "Remove a registered schema by id. Idempotent — `removed: false` when the id wasn't registered. Existing structured messages that referenced this schema_id continue to work; only future `send_structured` calls with this id will start failing schema_not_found.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["schema_id"],
+      properties: {
+        schema_id: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "list_schemas",
+    description:
+      "Index of registered schemas. Returns `{schema_id, description?, created_at, updated_at}` per entry — no schema bodies. Pull a single body via `get_schema`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+    },
+  },
+  {
+    name: "get_schema",
+    description:
+      "Fetch a registered schema body by id. Errors `schema_not_found` for unknown ids.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["schema_id"],
+      properties: {
+        schema_id: { type: "string" },
       },
     },
   },

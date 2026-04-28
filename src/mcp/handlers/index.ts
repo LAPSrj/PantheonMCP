@@ -4,6 +4,7 @@ import * as memory from "./memory.ts";
 import * as lifecycle from "./lifecycle.ts";
 import * as spawn from "./spawn.ts";
 import * as chat from "./chat.ts";
+import * as schemas from "./schemas.ts";
 
 /** Single registry of every implemented handler keyed by tool name.
  * Tools with no handler entry surface as `unknown_tool` from dispatch. */
@@ -65,4 +66,10 @@ export const HANDLERS: Record<string, Handler> = {
   list_agents: chat.list_agents,
   find_role: chat.find_role,
   get_message: chat.get_message,
+
+  // Schema registry
+  register_schema: schemas.register_schema,
+  unregister_schema: schemas.unregister_schema,
+  list_schemas: schemas.list_schemas,
+  get_schema: schemas.get_schema,
 };

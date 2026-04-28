@@ -4,6 +4,10 @@ import {
   promoteInPlace,
   type PromoteFields,
 } from "../../chat/index.ts";
+import {
+  getSchema as getRegisteredSchema,
+  validatePayload,
+} from "../../schemas/index.ts";
 import { openChatDb } from "../../storage/index.ts";
 import {
   listPersonas,
@@ -445,6 +449,36 @@ export const send_structured: Handler = async (args, ctx) => {
   const target = asString(args.target);
   const replyTo = asString(args.reply_to);
   const schemaId = asString(args.schema_id);
+
+  // Schema validation: when the caller passes a schema_id, look it up
+  // in the registry and validate the payload. Unknown schema_id is a
+  // hard error — the caller meant to validate but wrote a typo (or
+  // hasn't registered the schema yet); silently skipping would be
+  // worse than the false-negative of refusing the send.
+  let schemaValidated = false;
+  if (schemaId !== undefined) {
+    const stored = getRegisteredSchema(ctx.paths, schemaId);
+    if (!stored) {
+      throw new ToolError(
+        "schema_not_found",
+        `Schema '${schemaId}' is not registered. Register it first with \`register_schema\`, or omit \`schema_id\` to send without validation.`,
+        { schema_id: schemaId },
+      );
+    }
+    const errors = validatePayload(payload, stored.schema);
+    if (errors.length > 0) {
+      throw new ToolError(
+        "schema_validation_failed",
+        `Payload failed validation against schema '${schemaId}': ${errors
+          .slice(0, 5)
+          .map((e) => `${e.path || "/"} — ${e.message}`)
+          .join("; ")}${errors.length > 5 ? ` (+${errors.length - 5} more)` : ""}`,
+        { schema_id: schemaId, errors },
+      );
+    }
+    schemaValidated = true;
+  }
+
   if (scope === "dm" && !target) {
     throw new ChatError("missing_target", "scope='dm' requires a target username.");
   }
@@ -476,7 +510,7 @@ export const send_structured: Handler = async (args, ctx) => {
     seq: msg.seq,
     kind,
     mentions: msg.mentions,
-    ...(schemaId !== undefined ? { schema_id: schemaId, schema_validated: false } : {}),
+    ...(schemaId !== undefined ? { schema_id: schemaId, schema_validated: schemaValidated } : {}),
   };
 };
 

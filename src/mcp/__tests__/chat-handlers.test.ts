@@ -966,16 +966,67 @@ test("send_structured: payload round-trips via get_message", async () => {
   db.close();
 });
 
-test("send_structured: schema_id is recorded but currently not enforced", async () => {
+test("send_structured: unknown schema_id errors with schema_not_found", async () => {
   await call("login", { username: "alpha", project: "X", transient: false });
   const r = await call("send_structured", {
     kind: "pushback",
     payload: { pattern: 14 },
-    schema_id: "takt-starter/pushback@v1",
+    schema_id: "ghost/notregistered@v1",
+  });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("schema_not_found");
+});
+
+test("send_structured: registered schema validates payload + sets schema_validated:true", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  ctx.chat!.add({ username: "beta", project: "X", transient: false });
+  await call("register_schema", {
+    schema_id: "test/pushback@v1",
+    schema: {
+      type: "object",
+      required: ["pattern", "evidence"],
+      properties: {
+        pattern: { type: "integer" },
+        evidence: {
+          type: "object",
+          required: ["file", "line"],
+          properties: {
+            file: { type: "string" },
+            line: { type: "integer", minimum: 1 },
+          },
+        },
+      },
+    },
+    description: "Pushback against a gaming pattern with evidence.",
+  });
+  const r = await call("send_structured", {
+    kind: "pushback",
+    payload: { pattern: 14, evidence: { file: "a.ts", line: 89 } },
+    schema_id: "test/pushback@v1",
   });
   expect(r.ok).toBe(true);
-  expect(r.payload.schema_id).toBe("takt-starter/pushback@v1");
-  // Validation is currently a stub; flag is surfaced so consumers can
-  // tell whether it ran. False until the registry layer is wired.
-  expect(r.payload.schema_validated).toBe(false);
+  expect(r.payload.schema_id).toBe("test/pushback@v1");
+  expect(r.payload.schema_validated).toBe(true);
+});
+
+test("send_structured: payload failing schema is rejected", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  await call("register_schema", {
+    schema_id: "test/pushback@v1",
+    schema: {
+      type: "object",
+      required: ["pattern", "evidence"],
+      properties: {
+        pattern: { type: "integer" },
+        evidence: { type: "object", required: ["file"] },
+      },
+    },
+  });
+  const r = await call("send_structured", {
+    kind: "pushback",
+    payload: { pattern: "not-an-int" },
+    schema_id: "test/pushback@v1",
+  });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("schema_validation_failed");
 });
