@@ -133,6 +133,10 @@ export async function spawnPersona(
   );
   launchArgs.push("--permission-mode", permissionMode);
 
+  // Model cascade: per-call arg > persona.model > no flag (machine default).
+  const model = resolveModel(args.model, persona);
+  if (model) launchArgs.push("--model", model);
+
   if (resume && persona.resume_session_id) {
     launchArgs.push("--resume", persona.resume_session_id);
   }
@@ -386,6 +390,12 @@ function resolvePermissionMode(
   return DEFAULT_PERMISSION_MODE;
 }
 
+function resolveModel(raw: unknown, persona: Persona): string | null {
+  if (typeof raw === "string" && raw.trim().length > 0) return raw.trim();
+  if (typeof persona.model === "string" && persona.model.trim().length > 0) return persona.model.trim();
+  return null;
+}
+
 export const summon: Handler = (args, ctx) => performSummon(args, ctx, { any_project: false });
 export const summon_any: Handler = (args, ctx) => performSummon(args, ctx, { any_project: true });
 
@@ -455,6 +465,7 @@ async function performConjure(
       prompt,
       target: args.target,
       rest_timeout: args.rest_timeout,
+      ...(asString(args.model) !== undefined ? { model: asString(args.model) } : {}),
     },
     ctx,
     persona,

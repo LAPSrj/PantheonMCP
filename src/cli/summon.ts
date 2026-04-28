@@ -55,6 +55,9 @@ interface ParsedArgs {
    * persona's REGISTRY identity stays canonical; only the bootstrap-
    * embedded chat login uses `<base><N>`. */
   chat_username_suffix?: string | "auto";
+  /** Per-call model override. Forwarded as `--model` to the spawned
+   * `claude`. Omit to use the persona default or machine default. */
+  model?: string;
 }
 
 export async function runSummon(options: RunSummonOptions): Promise<number> {
@@ -88,6 +91,7 @@ export async function runSummon(options: RunSummonOptions): Promise<number> {
   if (parsed.prompt !== undefined) handlerArgs.prompt = parsed.prompt;
   if (parsed.channels !== undefined) handlerArgs.channels = parsed.channels;
   if (parsed.remote_control !== undefined) handlerArgs.remote_control = parsed.remote_control;
+  if (parsed.model !== undefined) handlerArgs.model = parsed.model;
 
   // Resolve --chat-username-suffix BEFORE spawning so the bootstrap
   // text embeds the right chat handle. `auto` walks the presence DB
@@ -136,6 +140,7 @@ function parseArgs(argv: string[], stderr: NodeJS.WritableStream): ParsedArgs | 
   const channels: string[] = [];
   let remote_control: boolean | string | undefined;
   let chat_username_suffix: string | undefined;
+  let model: string | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -257,6 +262,15 @@ function parseArgs(argv: string[], stderr: NodeJS.WritableStream): ParsedArgs | 
         chat_username_suffix = v;
         break;
       }
+      case "--model": {
+        const v = argv[++i] ?? "";
+        if (v === "" || v.startsWith("--")) {
+          stderr.write("pantheon-summon: --model requires a value (e.g. claude-opus-4-7)\n");
+          return "error";
+        }
+        model = v;
+        break;
+      }
       default:
         if (a.startsWith("--")) {
           stderr.write(`pantheon-summon: unknown flag '${a}'\n`);
@@ -281,6 +295,7 @@ function parseArgs(argv: string[], stderr: NodeJS.WritableStream): ParsedArgs | 
   if (channels.length > 0) result.channels = channels;
   if (remote_control !== undefined) result.remote_control = remote_control;
   if (chat_username_suffix !== undefined) result.chat_username_suffix = chat_username_suffix;
+  if (model !== undefined) result.model = model;
   return result;
 }
 
@@ -345,6 +360,8 @@ Flags:
   --prompt <text>               Runtime prompt forwarded to the spawned agent
   --channels <plugin:name@mkt>  Forward as --channels to claude (repeatable; overrides persona.channels)
   --remote-control [name], --rc Forward as --remote-control to claude. Default name = persona.project.
+  --model <codename>            Override model for this spawn (e.g. claude-opus-4-7). Falls back to
+                                persona.model, then machine default.
   --chat-username-suffix <N|auto>
                                 Chat as <persona><N> instead of <persona>. Use when another session
                                 already holds the canonical handle. 'auto' picks the next free

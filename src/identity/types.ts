@@ -57,6 +57,10 @@ export interface Persona {
    *   4. hardcoded floor: `"acceptEdits"`
    * `null` (or absent) means "fall through to the cascade". */
   permission_mode?: PermissionMode | null;
+  /** Default Claude model for spawns of this persona. Forwarded as
+   * `--model <value>` to the spawned `claude`. Omitted means the
+   * machine default. Cascade: per-call arg > this field > no flag. */
+  model?: string | null;
 }
 
 export interface PersonaPatch {
@@ -73,6 +77,7 @@ export interface PersonaPatch {
   channels?: string[];
   remote_control?: boolean;
   permission_mode?: PermissionMode | null;
+  model?: string | null;
 }
 
 export type Platform = "wsl" | "windows" | "mac" | "linux";
@@ -133,6 +138,7 @@ export interface PersonaCreate {
   channels?: string[];
   remote_control?: boolean;
   permission_mode?: PermissionMode | null;
+  model?: string | null;
 }
 
 export class IdentityError extends Error {

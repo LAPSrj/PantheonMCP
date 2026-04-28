@@ -26,6 +26,12 @@ const PERMISSION_MODE_SCHEMA = {
     "Claude Code `--permission-mode` for spawned `claude` processes. `acceptEdits` (default) shows '⏵⏵ accept edits on' from the first turn. `plan` blocks all edits; `default` keeps interactive prompts; `bypassPermissions` skips ALL checks (use with care).",
 } as const;
 
+const MODEL_SCHEMA = {
+  type: "string",
+  description:
+    "Claude model codename forwarded as `--model` to the spawned `claude` (e.g. `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5-20251001`). Omit to use the machine default.",
+} as const;
+
 const SPAWN_TARGET_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -115,6 +121,7 @@ export const TOOLS: readonly ToolDef[] = [
             "When true, every summon forwards `--remote-control \"<persona.project>\"`. CLI flag (`--remote-control` / `--rc`) overrides per-call.",
         },
         permission_mode: PERMISSION_MODE_SCHEMA,
+        model: MODEL_SCHEMA,
         force: { type: "boolean", description: "Override cwd-mismatch + prefix-collision checks." },
         claim_after: {
           type: "boolean",
@@ -189,6 +196,11 @@ export const TOOLS: readonly ToolDef[] = [
           oneOf: [PERMISSION_MODE_SCHEMA, { type: "null" }],
           description:
             "Default permission mode for spawns of this persona. `null` clears the field (cascade falls back to env / floor).",
+        },
+        model: {
+          oneOf: [MODEL_SCHEMA, { type: "null" }],
+          description:
+            "Default model for spawns of this persona. `null` clears the field (cascade falls back to machine default).",
         },
       },
     },
@@ -532,6 +544,7 @@ export const TOOLS: readonly ToolDef[] = [
             "Per-call override for the persona's `remote_control` field. `true` uses the persona's project as the RC name; pass a string for an explicit name.",
         },
         permission_mode: PERMISSION_MODE_SCHEMA,
+        model: MODEL_SCHEMA,
         chat_username_suffix: {
           type: "string",
           description:
@@ -569,6 +582,7 @@ export const TOOLS: readonly ToolDef[] = [
             "Per-call override for the persona's `remote_control` field. `true` uses the persona's project as the RC name; pass a string for an explicit name.",
         },
         permission_mode: PERMISSION_MODE_SCHEMA,
+        model: MODEL_SCHEMA,
         chat_username_suffix: {
           type: "string",
           description:
@@ -608,6 +622,10 @@ export const TOOLS: readonly ToolDef[] = [
         permission_mode: {
           ...PERMISSION_MODE_SCHEMA,
           description: "Initial permission_mode persisted on the new persona (also used for this first spawn).",
+        },
+        model: {
+          ...MODEL_SCHEMA,
+          description: "Initial model persisted on the new persona (also used for this first spawn).",
         },
         chat_username_suffix: {
           type: "string",
@@ -650,6 +668,10 @@ export const TOOLS: readonly ToolDef[] = [
         permission_mode: {
           ...PERMISSION_MODE_SCHEMA,
           description: "Initial permission_mode persisted on the new persona (also used for this first spawn).",
+        },
+        model: {
+          ...MODEL_SCHEMA,
+          description: "Initial model persisted on the new persona (also used for this first spawn).",
         },
         chat_username_suffix: {
           type: "string",

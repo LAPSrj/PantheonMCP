@@ -227,6 +227,7 @@ export function createPersona(
     ...(input.channels !== undefined ? { channels: input.channels } : {}),
     ...(input.remote_control !== undefined ? { remote_control: input.remote_control } : {}),
     ...(input.permission_mode !== undefined ? { permission_mode: input.permission_mode } : {}),
+    ...(input.model !== undefined ? { model: input.model } : {}),
   };
   writePersona(paths, entry);
   return entry;
