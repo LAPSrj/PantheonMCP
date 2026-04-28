@@ -191,20 +191,24 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
   let statusDrawn = false;
   const rosterEnabled = parsed.roster && interactive;
 
-  const SAVE_CURSOR = "\x1b7";
-  const RESTORE_CURSOR = "\x1b8";
   const CLEAR_TO_END = "\x1b[J";
 
   const clearStatusArea = (): void => {
     if (!rosterEnabled || !statusDrawn) return;
-    stdout.write(RESTORE_CURSOR);
+    // Move up by the number of roster lines to reach where the roster
+    // started, then clear to end of screen. This is scroll-safe: unlike
+    // DECSC/DECRC (save/restore cursor), relative movement is unaffected
+    // by terminal scrolling that occurred since the roster was drawn.
+    if (statusLines.length > 0) {
+      stdout.write(`\x1b[${statusLines.length}A`);
+    }
+    stdout.write("\r");
     stdout.write(CLEAR_TO_END);
     statusDrawn = false;
   };
 
   const drawStatusArea = (): void => {
     if (rosterEnabled && statusLines.length > 0) {
-      stdout.write(SAVE_CURSOR);
       stdout.write(statusLines.join("\n") + "\n");
       statusDrawn = true;
     }
