@@ -180,6 +180,7 @@ export class ChatRouter {
       mode: options.mode ?? "all",
       connected_at: now,
       last_seen: now,
+      last_event_at: now,
       status_updated_at: now,
       promoted_at: null,
       supports_channels: options.supports_channels ?? false,
@@ -281,6 +282,40 @@ export class ChatRouter {
    * The digest is sent as `scope: "dm"` per recipient with
    * `system_kind: "status_digest"`. The renderer (`watcher.ts`)
    * forces `[no reply]` and a `· status_digest` label. */
+  /** Per-agent keepalive ping. The Anthropic prompt cache TTL on
+   * the 1-hour cache variant expires after 60 minutes of inactivity;
+   * agents whose chat is silent for that long pay a fresh-cache cost
+   * on their next turn. This sweep DMs every online subscriber whose
+   * last delivered event is older than `keepalive_ms`, regardless of
+   * delivery mode (cache-warming applies to everyone, not just `all`-
+   * mode peers). The keepalive is wrapped as `<silent-event>` by the
+   * watcher so the model doesn't reply — but its runtime still makes
+   * an API call to process the turn, which touches the cache.
+   *
+   * Self-consistent: the keepalive itself bumps the recipient's
+   * `last_event_at` via the dispatch loop, so the next sweep won't
+   * fire for that agent until `keepalive_ms` later. */
+  sweepKeepalive(
+    keepalive_ms: number,
+    now: number = this.clock(),
+  ): number {
+    if (keepalive_ms <= 0) return 0;
+    let dispatched = 0;
+    for (const sub of this.subscribers.values()) {
+      if (now - sub.last_event_at < keepalive_ms) continue;
+      this.addMessage({
+        from_agent_id: "system",
+        scope: "dm",
+        target: sub.username,
+        text: "keepalive ping — cache-warming heartbeat, no action needed.",
+        system: true,
+        system_kind: "keepalive",
+      });
+      dispatched++;
+    }
+    return dispatched;
+  }
+
   sweepStatusDigest(now: number = this.clock()): number {
     if (this.statusChangedAgents.size === 0) return 0;
     // Snapshot + clear so concurrent updates during render don't get
@@ -441,7 +476,13 @@ export class ChatRouter {
       if (suppressed.has(sub.agent_id)) continue;
       if (!this.isVisible(sub, msg)) continue;
       if (!this.isDeliverable(sub, msg)) continue;
-      sub.last_seen = this.clock();
+      const tickNow = this.clock();
+      sub.last_seen = tickNow;
+      // Keepalive sweep gating: bump only when the message would
+      // actually reach the recipient's watcher. setMode/heartbeat
+      // bump last_seen but NOT last_event_at, so the keepalive
+      // sweeper still pings idle agents who only do bookkeeping.
+      sub.last_event_at = tickNow;
       this.emitter.emit(`message:${sub.agent_id}`, msg);
     }
     this.emitter.emit("message:*", msg);
@@ -963,6 +1004,11 @@ export class ChatRouter {
             mode: r.mode,
             connected_at: r.connected_at,
             last_seen: r.last_heartbeat,
+            // Cross-process rows don't carry per-recipient delivery
+            // timestamps. Seed last_event_at from the heartbeat so a
+            // remote subscriber doesn't get spuriously keepalived
+            // immediately on the first sweep after this router boots.
+            last_event_at: r.last_heartbeat,
             status_updated_at: r.status_updated_at,
             promoted_at: r.promoted_at,
           });

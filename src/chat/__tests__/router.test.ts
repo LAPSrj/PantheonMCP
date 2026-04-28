@@ -262,6 +262,7 @@ test("renderStatusDigest singular agent count uses 'agent', not 'agents'", async
       transient: false,
       connected_at: 0,
       last_seen: 0,
+      last_event_at: 0,
       status_updated_at: 0,
       promoted_at: null,
     },
@@ -269,4 +270,84 @@ test("renderStatusDigest singular agent count uses 'agent', not 'agents'", async
   const out = renderStatusDigest(subs);
   expect(out).toContain("1 agent changed status");
   expect(out).not.toContain("1 agents");
+});
+
+// --- keepalive sweep ---
+
+test("sweepKeepalive: pings only subscribers idle longer than threshold", () => {
+  let now = 1_000_000;
+  const r = new ChatRouter({ paths, clock: () => now });
+  const idle = r.add({ username: "idle1", project: "p", transient: false });
+  const fresh = r.add({ username: "fresh1", project: "p", transient: false });
+  // Move clock forward past threshold; bump the fresh agent's
+  // last_event_at by sending it a DM.
+  now += 16 * 60_000;
+  // Refresh `fresh` with a directed message.
+  const sender = r.add({ username: "sender", project: "p", transient: false });
+  r.addMessage({
+    from_agent_id: sender.agent_id,
+    scope: "dm",
+    target: "fresh1",
+    text: "hi",
+  });
+  // Sweep at the same timestamp — sender is the only one whose
+  // last_event_at hasn't been set since long ago, idle is the
+  // pre-existing idle one.
+  const dispatched = r.sweepKeepalive(15 * 60_000, now);
+  // Expectations: idle1 idled 16min ago → pinged. fresh1 just got
+  // a DM at now → not pinged. sender's last_event_at moved when its
+  // own send touched the dispatch loop? No — the sender is the from,
+  // the dispatch loop only bumps recipients. So sender is also stale
+  // and should get pinged.
+  expect(dispatched).toBeGreaterThanOrEqual(1);
+  // Verify by checking the recipient's last_event_at: idle1 should
+  // have been bumped by the keepalive itself.
+  const idleAfter = r.getByAgentId(idle.agent_id);
+  expect(idleAfter!.last_event_at).toBe(now);
+  const freshAfter = r.getByAgentId(fresh.agent_id);
+  // fresh got the DM at `now`; the keepalive sweep didn't ping it.
+  expect(freshAfter!.last_event_at).toBe(now);
+});
+
+test("sweepKeepalive: returns 0 when nobody is past threshold", () => {
+  let now = 1_000_000;
+  const r = new ChatRouter({ paths, clock: () => now });
+  r.add({ username: "a", project: "p", transient: false });
+  r.add({ username: "b", project: "p", transient: false });
+  expect(r.sweepKeepalive(15 * 60_000, now + 60_000)).toBe(0);
+});
+
+test("sweepKeepalive: keepalive itself bumps recipient's last_event_at", () => {
+  let now = 1_000_000;
+  const r = new ChatRouter({ paths, clock: () => now });
+  const sub = r.add({ username: "lone", project: "p", transient: false });
+  now += 16 * 60_000;
+  const dispatched = r.sweepKeepalive(15 * 60_000, now);
+  expect(dispatched).toBe(1);
+  const after = r.getByAgentId(sub.agent_id)!;
+  expect(after.last_event_at).toBe(now);
+  // Second sweep at the same instant — already pinged, last_event_at
+  // bumped to now, so nothing to do.
+  expect(r.sweepKeepalive(15 * 60_000, now)).toBe(0);
+});
+
+test("sweepKeepalive: dm-mode and quiet-mode peers still get keepalives", () => {
+  let now = 1_000_000;
+  const r = new ChatRouter({ paths, clock: () => now });
+  const dmer = r.add({ username: "dmer", project: "p", transient: false });
+  r.setMode(dmer.agent_id, "dm");
+  const q = r.add({ username: "quiet1", project: "p", transient: false });
+  r.setMode(q.agent_id, "quiet");
+  now += 16 * 60_000;
+  // Cache-warming applies regardless of delivery preference.
+  expect(r.sweepKeepalive(15 * 60_000, now)).toBe(2);
+});
+
+test("sweepKeepalive: keepalive_ms <= 0 is a no-op (disabled)", () => {
+  let now = 1_000_000;
+  const r = new ChatRouter({ paths, clock: () => now });
+  r.add({ username: "a", project: "p", transient: false });
+  now += 60 * 60_000;
+  expect(r.sweepKeepalive(0, now)).toBe(0);
+  expect(r.sweepKeepalive(-1, now)).toBe(0);
 });

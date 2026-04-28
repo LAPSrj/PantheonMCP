@@ -26,6 +26,7 @@ function sub(over: Partial<Subscriber> & { agent_id: string; username: string })
     mode: "all",
     connected_at: 1,
     last_seen: 1,
+    last_event_at: 1,
     status_updated_at: 1,
     promoted_at: null,
     ...over,

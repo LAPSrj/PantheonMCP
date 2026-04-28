@@ -28,6 +28,13 @@ export interface Subscriber {
   /** ms timestamps. */
   connected_at: number;
   last_seen: number;
+  /** Time of the last event actually pushed to this subscriber's
+   * watcher stream — i.e. a message that passed visibility +
+   * deliverability checks for this recipient. Distinct from
+   * `last_seen` (which is bumped on agent-initiated activity like
+   * setMode / checkMessages too). The keepalive sweep uses this to
+   * decide whether the agent's prompt cache needs warming. */
+  last_event_at: number;
   status_updated_at: number;
   /** When the subscriber was promoted from guest to persona,
    * `promoted_at` records the moment. Otherwise null. */

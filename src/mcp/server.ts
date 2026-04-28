@@ -261,6 +261,7 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
   // every recurrent sweep.
   const statusDigestMs = resolveStatusDigestMs();
   let lastStatusDigestAt = Date.now();
+  const keepaliveMs = resolveKeepaliveMs();
   const pruneTimer = setInterval(() => {
     if (chatDb) {
       try {
@@ -289,6 +290,17 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
         // best-effort — never let a digest hiccup crash the daemon
       }
       lastStatusDigestAt = Date.now();
+    }
+    // Per-agent keepalive sweep: pings only subscribers whose
+    // last_event_at is older than keepaliveMs. Gating lives inside
+    // sweepKeepalive — calling on every 30s tick is cheap when
+    // nothing's eligible. Disabled when the env override is 0.
+    if (ctx.chat && keepaliveMs > 0) {
+      try {
+        ctx.chat.sweepKeepalive(keepaliveMs);
+      } catch {
+        // best-effort — keepalive failure must not crash the daemon
+      }
     }
   }, 30_000);
 
@@ -335,6 +347,24 @@ function resolveStatusDigestMs(): number {
   if (!raw) return DEFAULT_STATUS_DIGEST_MINUTES * 60_000;
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return DEFAULT_STATUS_DIGEST_MINUTES * 60_000;
+  return n * 60_000;
+}
+
+/** Cache-warming keepalive cadence. Pings every online subscriber
+ * whose stream has been silent longer than this threshold. The
+ * Anthropic 1-hour prompt cache TTL means a 60-min idle agent pays
+ * a fresh-cache cost on its next turn; 15 min default gives a 4×
+ * safety margin without flooding active rooms (per-recipient gate
+ * suppresses the ping if any other event recently landed).
+ *
+ * Override via `PANTHEON_KEEPALIVE_MINUTES` (positive number). Set
+ * to 0 to disable. */
+const DEFAULT_KEEPALIVE_MINUTES = 15;
+function resolveKeepaliveMs(): number {
+  const raw = process.env.PANTHEON_KEEPALIVE_MINUTES;
+  if (!raw) return DEFAULT_KEEPALIVE_MINUTES * 60_000;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_KEEPALIVE_MINUTES * 60_000;
   return n * 60_000;
 }
 

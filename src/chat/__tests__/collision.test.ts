@@ -21,6 +21,7 @@ function sub(over: Partial<Subscriber> & { username: string }): Subscriber {
     mode: "all",
     connected_at: 0,
     last_seen: 0,
+    last_event_at: 0,
     status_updated_at: 0,
     promoted_at: null,
     ...over,
