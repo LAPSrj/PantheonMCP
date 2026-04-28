@@ -14,6 +14,7 @@ import {
   type PermissionMode,
 } from "../../identity/index.ts";
 import { loadStore } from "../../memory/index.ts";
+import { buildResumeSummary } from "../../resume/index.ts";
 import {
   type Handler,
   ToolError,
@@ -110,7 +111,11 @@ export const claim: Handler = async (args, ctx) => {
   const username = asStringRequired(args.username, "username");
   const persona = transitionClaim(ctx.paths, ctx.session, username);
   const memory = loadStore(ctx.paths, persona.username);
-  return { persona, memory: { entries: memory.entries.length, version: memory.version } };
+  return {
+    persona,
+    memory: { entries: memory.entries.length, version: memory.version },
+    resume_summary: buildResumeSummary(ctx.paths, persona.username),
+  };
 };
 
 export const manifest: Handler = async (args, ctx) => {
@@ -122,6 +127,7 @@ export const manifest: Handler = async (args, ctx) => {
       claimed: persona,
       reason: "explicit-username",
       memory_entries: memory.entries.length,
+      resume_summary: buildResumeSummary(ctx.paths, persona.username),
     };
   }
   const cwd = asString(args.cwd) ?? process.cwd();
@@ -133,6 +139,7 @@ export const manifest: Handler = async (args, ctx) => {
       claimed: result.matched.persona,
       reason: result.matched.reason,
       memory_entries: memory.entries.length,
+      resume_summary: buildResumeSummary(ctx.paths, result.matched.persona.username),
     };
   }
   if ("ambiguous" in result) {

@@ -8,6 +8,7 @@ import {
   getSchema as getRegisteredSchema,
   validatePayload,
 } from "../../schemas/index.ts";
+import { buildResumeSummary } from "../../resume/index.ts";
 import { openChatDb } from "../../storage/index.ts";
 import {
   listPersonas,
@@ -263,6 +264,13 @@ export const login: Handler = async (args, ctx) => {
       `pantheon does the transition for you.\n\n` +
       note;
   }
+  // Resume summary for non-guest logins — gives the agent a compact
+  // view of session-relevant memory state on reconnect (audit B.5).
+  // Skipped for guests (no persona file → nothing to summarize).
+  const resumeSummary =
+    !subscriber.transient && claimedPersona
+      ? buildResumeSummary(ctx.paths, claimedPersona)
+      : null;
   return {
     ok: true,
     agent_id: subscriber.agent_id,
@@ -280,6 +288,9 @@ export const login: Handler = async (args, ctx) => {
         }
       : {}),
     ...(autoClaimed ? { auto_claimed: true } : {}),
+    ...(resumeSummary
+      ? { resume_summary: { ...resumeSummary, last_status: subscriber.status || null } }
+      : {}),
     note,
   };
 };

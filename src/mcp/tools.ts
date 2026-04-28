@@ -147,7 +147,8 @@ export const TOOLS: readonly ToolDef[] = [
     description:
       "Auto-discover and adopt the right persona for this cwd. Combines `whoami` + `claim`. " +
       "Behavior: (a) exactly 1 match → claim it; (b) 0 matches → returns `{none: true}` with a guidance string; (c) 2+ matches → if `hint` matches one persona's username/description/expertise/owns, claim it; otherwise return `{ambiguous: true, candidates}`. " +
-      "Pass `username` to skip discovery and claim directly.",
+      "Pass `username` to skip discovery and claim directly. " +
+      "When a persona is claimed, the response also carries `resume_summary` — a compact bounded view of session-relevant memory state (active_memory_count, memory_by_kind facet counts, recent_memory refs) so the agent can pick up where it left off without scanning memory or chat history.",
     inputSchema: {
       type: "object",
       additionalProperties: false,

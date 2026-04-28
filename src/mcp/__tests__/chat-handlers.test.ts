@@ -1009,6 +1009,53 @@ test("send_structured: registered schema validates payload + sets schema_validat
   expect(r.payload.schema_validated).toBe(true);
 });
 
+// --- resume_summary on login ---
+
+test("login: claimed-persona response includes resume_summary with memory facets", async () => {
+  const { createPersona } = await import("../../identity/index.ts");
+  const { appendEntry } = await import("../../memory/index.ts");
+  createPersona(ctx.paths, {
+    username: "alpha",
+    project: "X",
+    cwd: "/work/alpha",
+    platform: "linux",
+    description: "lead",
+    expertise: [],
+    owns: ["/work/alpha"],
+  });
+  appendEntry(ctx.paths, "alpha", { summary: "decision-1", text: "x", kind: "decision" });
+  appendEntry(ctx.paths, "alpha", { summary: "retraction-1", text: "x", kind: "retraction" });
+  appendEntry(ctx.paths, "alpha", { summary: "loose", text: "x" });
+  await call("claim", { username: "alpha" });
+  const r = await call("login", {
+    username: "alpha",
+    project: "X",
+    transient: false,
+    status: "scoping",
+  });
+  expect(r.ok).toBe(true);
+  const summary = r.payload.resume_summary as Record<string, unknown>;
+  expect(summary).toBeTruthy();
+  expect(summary.active_memory_count).toBe(3);
+  expect(summary.memory_by_kind).toEqual({
+    decision: 1,
+    retraction: 1,
+    _unspecified: 1,
+  });
+  expect(summary.last_status).toBe("scoping");
+  expect((summary.recent_memory as unknown[]).length).toBeGreaterThan(0);
+});
+
+test("login: guest (transient) response has no resume_summary", async () => {
+  const r = await call("login", {
+    username: "guest1",
+    project: "X",
+    transient: true,
+  });
+  expect(r.ok).toBe(true);
+  expect(r.payload.resume_summary).toBeUndefined();
+});
+
 test("send_structured: payload failing schema is rejected", async () => {
   await call("login", { username: "alpha", project: "X", transient: false });
   await call("register_schema", {
