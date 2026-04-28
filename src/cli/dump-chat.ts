@@ -27,6 +27,8 @@ export interface JsonlRow {
   kind: string | null;
   reply_to: string | null;
   correlation_id: string | null;
+  user_kind: string | null;
+  payload: string | null;
 }
 
 /** Stream rows matching the filter. Returns the rows directly so
@@ -96,6 +98,8 @@ function toJsonlRow(r: MessageRow): JsonlRow {
     kind: r.kind,
     reply_to: r.reply_to,
     correlation_id: r.correlation_id,
+    user_kind: r.user_kind,
+    payload: r.payload,
   };
 }
 

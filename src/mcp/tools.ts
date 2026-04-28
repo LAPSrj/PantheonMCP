@@ -818,7 +818,7 @@ export const TOOLS: readonly ToolDef[] = [
   },
   {
     name: "send_message",
-    description: "Post a chat message (project / dm / global scope). Stub until §11c.",
+    description: "Post a chat message (project / dm / global scope). For free-form prose. For typed/structured messages with a JSON payload (pushback, evidence, claim, etc.), use `send_structured` instead.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -828,6 +828,51 @@ export const TOOLS: readonly ToolDef[] = [
         scope: { type: "string", enum: ["project", "dm", "global"] },
         target: { type: "string" },
         reply_to: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "send_structured",
+    description:
+      "Post a typed chat message with a free-form `kind` and a JSON `payload`. " +
+      "Pantheon stays neutral on the value space — the consumer (e.g. an agent CLAUDE.md, a takt-starter skill) " +
+      "owns the kind vocabulary and payload shape. Receivers see `[kind:X]` in the watcher line; the full " +
+      "structured payload is retrieved with `mcp__pantheon__get_message`. " +
+      "An optional `text` provides watcher-line content (defaults to `[kind]`). " +
+      "An optional `schema_id` references a registered JSON schema; when wired, the handler validates the " +
+      "payload against it (currently accepted-and-recorded but not enforced — schema-registry coming next). " +
+      "Same scope/target/reply_to semantics as `send_message`. Same offline-DM contract: scope='dm' with an " +
+      "offline target is rejected with `recipient_offline`. Reserved kinds (system_kind values like `join`/`leave`) " +
+      "are rejected. Payload soft cap 64 KB — store bulk in memory `details` and reference its id in the payload.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["kind", "payload"],
+      properties: {
+        kind: {
+          type: "string",
+          description:
+            "Free-form caller-defined kind, e.g. 'pushback', 'evidence_cite', 'claim'. " +
+            "Cannot collide with reserved system kinds.",
+        },
+        payload: {
+          description:
+            "Arbitrary JSON value — object, array, string, number, boolean, or null.",
+        },
+        text: {
+          type: "string",
+          description:
+            "Optional watcher-line text. Defaults to `[kind]` so receivers always see something readable in chat.",
+        },
+        scope: { type: "string", enum: ["project", "dm", "global"] },
+        target: { type: "string" },
+        reply_to: { type: "string" },
+        schema_id: {
+          type: "string",
+          description:
+            "Optional schema id from the registered schema registry. When the registry is wired, " +
+            "the handler validates `payload` against this schema before accepting.",
+        },
       },
     },
   },

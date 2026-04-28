@@ -309,3 +309,32 @@ test("persistMessage assigns SQLite-managed seq even across two connections", as
     dbB.close();
   }
 });
+
+test("formatBatch: structured message renders [kind:X] suffix and persists payload", () => {
+  persistMessage(
+    db,
+    msg({
+      id: "s1",
+      seq: 1,
+      from_agent_id: "peer",
+      scope: "project",
+      project: "pantheon",
+      text: "[pushback]",
+      user_kind: "pushback",
+      payload: { pattern: 14, evidence: { file: "a.ts", line: 89 } },
+    }),
+  );
+  const events = tailOnce({ db, receiver: me, since_seq: 0 });
+  expect(events).toHaveLength(1);
+  expect(events[0]!.line).toContain("[kind:pushback]");
+  expect(events[0]!.line).toContain("[pushback]");
+
+  const row = db
+    .query("SELECT user_kind, payload FROM messages WHERE id = ?")
+    .get("s1") as { user_kind: string; payload: string };
+  expect(row.user_kind).toBe("pushback");
+  expect(JSON.parse(row.payload)).toEqual({
+    pattern: 14,
+    evidence: { file: "a.ts", line: 89 },
+  });
+});

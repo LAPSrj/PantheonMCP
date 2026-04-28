@@ -106,9 +106,20 @@ export interface MessageInput {
    * watcher stream and its read cursor advances past the message.
    * Used by the ask/answer dedupe path. */
   not_for?: string;
+  /** Caller-typed message kind for structured chat (D.6 audit reshape).
+   * Free-form string set by `send_structured`; pantheon stores it
+   * alongside the optional `payload` and renders `[kind:X]` in the
+   * watcher line so receivers see the type at a glance. Distinct from
+   * `system_kind` (reserved for SystemKind values on system messages). */
+  user_kind?: string;
+  /** Structured payload for typed messages. Stored as JSON in SQLite.
+   * Receivers retrieve via `get_message` (parsed back to an object).
+   * Schema validation against a registered schema_id is opt-in and
+   * happens at the handler layer; the router stores whatever it gets. */
+  payload?: unknown;
 }
 
-export interface Message extends Required<Omit<MessageInput, "target" | "project" | "reply_to" | "ask_id" | "in_reply_to_ask" | "system" | "system_kind" | "from_username_inline" | "not_for">> {
+export interface Message extends Required<Omit<MessageInput, "target" | "project" | "reply_to" | "ask_id" | "in_reply_to_ask" | "system" | "system_kind" | "from_username_inline" | "not_for" | "user_kind" | "payload">> {
   id: string;
   seq: number;
   ts: number;
@@ -126,6 +137,8 @@ export interface Message extends Required<Omit<MessageInput, "target" | "project
   system?: boolean;
   system_kind?: SystemKind;
   from_username_inline?: string | null;
+  user_kind?: string;
+  payload?: unknown;
 }
 
 export interface PublicAgent {

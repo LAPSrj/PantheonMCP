@@ -5,7 +5,7 @@ import fs from "node:fs";
 /** Bumped when the schema changes. Each `vN` migration runs once and is
  * recorded in `schema_version`. Migrations are idempotent: re-opening an
  * up-to-date DB applies nothing. */
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 5;
 
 /** Migrations indexed by the version they bring the schema to. So
  * `MIGRATIONS[1]` brings a fresh DB from version 0 to version 1. */
@@ -86,6 +86,20 @@ const MIGRATIONS: Record<number, (db: Database) => void> = {
     db.exec(
       `ALTER TABLE subscribers ADD COLUMN chat_cursor INTEGER NOT NULL DEFAULT 0;`,
     );
+  },
+  5: (db) => {
+    // Structured-message support (D.6 in nyus-improvement-audit):
+    // pantheon-as-neutral-infra exposes a free-form `user_kind` for
+    // caller-typed messages plus a `payload` JSON string for the
+    // typed body. `kind` (existing) keeps serving system_kind only;
+    // splitting the columns avoids namespace collisions between
+    // SystemKind values and user-provided kinds.
+    db.exec(`
+      ALTER TABLE messages ADD COLUMN user_kind TEXT;
+      ALTER TABLE messages ADD COLUMN payload TEXT;
+      CREATE INDEX idx_messages_user_kind ON messages(user_kind, ts DESC)
+        WHERE user_kind IS NOT NULL;
+    `);
   },
 };
 

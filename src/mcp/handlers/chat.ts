@@ -368,6 +368,118 @@ export const send_message: Handler = async (args, ctx) => {
   };
 };
 
+/** Caller-typed structured chat send (D.6 audit reshape).
+ *
+ * Posts a message with a free-form `kind` plus an arbitrary JSON
+ * `payload`. Kind + payload are stored alongside the message text so
+ * receivers see the kind tag in the watcher line and can pull the
+ * full structured payload via `get_message`.
+ *
+ * Pantheon stays neutral on the value space: kinds and payload shapes
+ * are owned by the consumer (e.g. a takt-starter agent registers its
+ * own kinds like `pushback` / `evidence_cite`). Optional `schema_id`
+ * references a registered JSON schema; validation is opt-in and
+ * happens at the schema-registry layer when wired (currently
+ * unimplemented — schema_id is accepted but ignored). */
+export const send_structured: Handler = async (args, ctx) => {
+  const router = requireRouter(ctx);
+  const agentId = requireAgentId(ctx);
+  const kind = asStringRequired(args.kind, "kind");
+  if (!kind.trim()) {
+    throw new ToolError("invalid_kind", "`kind` must be a non-empty string.");
+  }
+  // SystemKind values are reserved for system messages — refuse to
+  // let a caller smuggle a system_kind into the user-message channel.
+  const reserved = new Set([
+    "join", "leave", "rename", "project_change", "status_update",
+    "status_digest", "keepalive", "promotion", "handle_recycled",
+    "profile_update",
+  ]);
+  if (reserved.has(kind)) {
+    throw new ToolError(
+      "reserved_kind",
+      `'${kind}' is a reserved system kind. Pick a different name for your structured message kind.`,
+      { reserved: Array.from(reserved) },
+    );
+  }
+  const payload = args.payload;
+  if (payload === undefined) {
+    throw new ToolError(
+      "missing_payload",
+      "`payload` is required. Pass an object (or array, string, number, boolean, null) — pantheon stores it verbatim.",
+    );
+  }
+  // Reject payloads that don't survive a round-trip — undefined values
+  // inside an object, functions, etc. Doing the JSON.stringify here
+  // also bounds the on-disk size up front rather than at persist time.
+  let payloadJson: string;
+  try {
+    payloadJson = JSON.stringify(payload);
+  } catch (err) {
+    throw new ToolError(
+      "invalid_payload",
+      `Payload could not be serialized to JSON: ${(err as Error).message}`,
+    );
+  }
+  if (payloadJson === undefined) {
+    throw new ToolError(
+      "invalid_payload",
+      "Payload serialized to undefined (likely a bare function or symbol). Pass JSON-compatible data.",
+    );
+  }
+  // 64 KB soft cap — keeps a single structured message from blowing
+  // out the watcher buffer or chat-history table. Larger blobs belong
+  // in memory `details` (5 MB) and a chat message that references the
+  // memory id.
+  const PAYLOAD_MAX_BYTES = 64 * 1024;
+  if (Buffer.byteLength(payloadJson, "utf8") > PAYLOAD_MAX_BYTES) {
+    throw new ToolError(
+      "payload_too_large",
+      `Payload exceeds ${PAYLOAD_MAX_BYTES} bytes. Store the bulk in memory \`details\` and reference its id in the payload.`,
+      { max_bytes: PAYLOAD_MAX_BYTES },
+    );
+  }
+
+  const text = asString(args.text) ?? `[${kind}]`;
+  const scope = (asString(args.scope) ?? "project") as "project" | "dm" | "global";
+  const target = asString(args.target);
+  const replyTo = asString(args.reply_to);
+  const schemaId = asString(args.schema_id);
+  if (scope === "dm" && !target) {
+    throw new ChatError("missing_target", "scope='dm' requires a target username.");
+  }
+  // Same offline-DM contract as `send_message`: refuse rather than
+  // silently persist a message the recipient will never see.
+  if (scope === "dm" && target) {
+    const online = router.onlineUsernames();
+    if (!online.has(target.toLowerCase())) {
+      throw new ChatError(
+        "recipient_offline",
+        `Cannot DM '${target}' — they are not currently in chat. Pantheon has no offline-DM queue; the message was NOT persisted. Retry once they connect, or use scope='project'/'global' to broadcast.`,
+        { target },
+      );
+    }
+  }
+
+  const msg = router.addMessage({
+    from_agent_id: agentId,
+    scope,
+    text,
+    user_kind: kind,
+    payload,
+    ...(target !== undefined ? { target } : {}),
+    ...(replyTo !== undefined ? { reply_to: replyTo } : {}),
+  });
+  return {
+    ok: true,
+    message_id: msg.id,
+    seq: msg.seq,
+    kind,
+    mentions: msg.mentions,
+    ...(schemaId !== undefined ? { schema_id: schemaId, schema_validated: false } : {}),
+  };
+};
+
 export const ask: Handler = async (args, ctx) => {
   const router = requireRouter(ctx);
   const agentId = requireAgentId(ctx);
@@ -625,6 +737,17 @@ export const get_message: Handler = async (args, ctx) => {
         { message_id: messageId },
       );
     }
+    let parsedPayload: unknown = null;
+    if (row.payload !== null && row.payload !== undefined) {
+      try {
+        parsedPayload = JSON.parse(row.payload);
+      } catch {
+        // Stored payload is not valid JSON — surface the raw string
+        // rather than dropping it. Should not happen via the supported
+        // write path (send_structured stringifies before insert).
+        parsedPayload = row.payload;
+      }
+    }
     return {
       ok: true,
       id: row.id,
@@ -640,6 +763,8 @@ export const get_message: Handler = async (args, ctx) => {
       kind: row.kind,
       reply_to: row.reply_to,
       correlation_id: row.correlation_id,
+      user_kind: row.user_kind,
+      payload: parsedPayload,
     };
   } finally {
     db.close();

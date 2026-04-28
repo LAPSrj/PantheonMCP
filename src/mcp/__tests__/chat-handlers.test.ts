@@ -865,3 +865,117 @@ test("update_profile: non-profile fields (mode, launch_args, channels) do NOT em
   const taken = ctx.chat!.takeMessages(peer.agent_id);
   expect(taken.messages.some((m) => m.system_kind === "profile_update")).toBe(false);
 });
+
+// --- send_structured ---
+
+test("send_structured persists kind + payload, delivers to project peers", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const peer = ctx.chat!.add({ username: "beta", project: "X", transient: false });
+  const r = await call("send_structured", {
+    kind: "pushback",
+    payload: { pattern: 14, evidence: { file: "a.ts", line: 89 } },
+    text: "pushback on a.ts:89",
+  });
+  expect(r.ok).toBe(true);
+  expect(r.payload.kind).toBe("pushback");
+  expect(typeof r.payload.message_id).toBe("string");
+
+  const taken = ctx.chat!.takeMessages(peer.agent_id);
+  const found = taken.messages.find((m) => m.user_kind === "pushback");
+  expect(found).toBeTruthy();
+  expect(found?.text).toBe("pushback on a.ts:89");
+  expect(found?.payload).toEqual({ pattern: 14, evidence: { file: "a.ts", line: 89 } });
+});
+
+test("send_structured: text defaults to [kind] when omitted", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const peer = ctx.chat!.add({ username: "beta", project: "X", transient: false });
+  await call("send_structured", { kind: "claim", payload: { x: 1 } });
+  const taken = ctx.chat!.takeMessages(peer.agent_id);
+  expect(taken.messages.find((m) => m.user_kind === "claim")?.text).toBe("[claim]");
+});
+
+test("send_structured: missing payload errors", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const r = await call("send_structured", { kind: "x" });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("missing_payload");
+});
+
+test("send_structured: empty kind errors", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const r = await call("send_structured", { kind: "   ", payload: {} });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("invalid_kind");
+});
+
+test("send_structured: reserved system kinds rejected", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const r = await call("send_structured", { kind: "join", payload: { x: 1 } });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("reserved_kind");
+});
+
+test("send_structured: payload over 64 KB rejected", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const big = "x".repeat(65 * 1024);
+  const r = await call("send_structured", { kind: "blob", payload: { data: big } });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("payload_too_large");
+});
+
+test("send_structured: DM to offline target fails recipient_offline", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const r = await call("send_structured", {
+    kind: "claim",
+    payload: { x: 1 },
+    scope: "dm",
+    target: "ghost",
+  });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("recipient_offline");
+});
+
+test("send_structured: payload round-trips via get_message", async () => {
+  // Wire a db-backed router so persistence happens through the normal
+  // path (not the manual insert the get_message test uses for plain
+  // text messages — we want to verify user_kind+payload survive the
+  // real persistMessage→queryMessage round-trip).
+  const { openChatDb } = await import("../../storage/index.ts");
+  const db = openChatDb(ctx.paths.chatDbPath);
+  ctx.chat = new ChatRouter({ paths: ctx.paths, db });
+  await call("login", { username: "alpha", project: "X", transient: false });
+  ctx.chat.add({ username: "beta", project: "X", transient: false });
+  const sent = await call("send_structured", {
+    kind: "evidence_cite",
+    payload: { file: "x.ts", lines: [10, 20], severity: "high" },
+    text: "see citation",
+  });
+  expect(sent.ok).toBe(true);
+  const fetched = await call("get_message", {
+    message_id: sent.payload.message_id as string,
+  });
+  expect(fetched.ok).toBe(true);
+  expect(fetched.payload.user_kind).toBe("evidence_cite");
+  expect(fetched.payload.payload).toEqual({
+    file: "x.ts",
+    lines: [10, 20],
+    severity: "high",
+  });
+  expect(fetched.payload.text).toBe("see citation");
+  db.close();
+});
+
+test("send_structured: schema_id is recorded but currently not enforced", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const r = await call("send_structured", {
+    kind: "pushback",
+    payload: { pattern: 14 },
+    schema_id: "takt-starter/pushback@v1",
+  });
+  expect(r.ok).toBe(true);
+  expect(r.payload.schema_id).toBe("takt-starter/pushback@v1");
+  // Validation is currently a stub; flag is surfaced so consumers can
+  // tell whether it ran. False until the registry layer is wired.
+  expect(r.payload.schema_validated).toBe(false);
+});

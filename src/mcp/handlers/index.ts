@@ -56,6 +56,7 @@ export const HANDLERS: Record<string, Handler> = {
   login: chat.login,
   logout: chat.logout,
   send_message: chat.send_message,
+  send_structured: chat.send_structured,
   ask: chat.ask,
   answer: chat.answer,
   set_mode: chat.set_mode,

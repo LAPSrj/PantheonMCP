@@ -24,8 +24,8 @@ export function persistMessage(db: Database, msg: Message): number {
       `INSERT INTO messages (
          id, seq, ts, scope, project, target_username,
          from_agent_id, from_transient, from_username_inline,
-         text, kind, reply_to, correlation_id
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         text, kind, reply_to, correlation_id, user_kind, payload
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         msg.id,
         assignedSeq,
@@ -47,6 +47,8 @@ export function persistMessage(db: Database, msg: Message): number {
         msg.system_kind ?? null,
         msg.reply_to ?? null,
         msg.ask_id ?? msg.in_reply_to_ask ?? null,
+        msg.user_kind ?? null,
+        msg.payload !== undefined ? JSON.stringify(msg.payload) : null,
       ],
     );
     for (const mention of msg.mentions) {
@@ -114,7 +116,9 @@ export function getMessageById(db: Database, id: string): MessageRow | null {
 }
 
 /** Raw row shape — kind/from_transient as stored. Renderers convert
- * back to `Message` shape when needed. */
+ * back to `Message` shape when needed. `payload` arrives as the raw
+ * JSON string (or null); callers parse it with `JSON.parse` before
+ * surfacing to consumers. */
 export interface MessageRow {
   id: string;
   seq: number;
@@ -129,4 +133,6 @@ export interface MessageRow {
   kind: string | null;
   reply_to: string | null;
   correlation_id: string | null;
+  user_kind: string | null;
+  payload: string | null;
 }

@@ -387,7 +387,12 @@ function formatDirected(row: MessageRow, receiver: ReceiverState): WatcherEvent 
     row.scope === "dm" ? ` →${row.target_username ?? "?"}` : "";
   const replySuffix = row.reply_to ? ` ↩${row.reply_to.slice(0, 8)}` : "";
   const correlationSuffix = row.correlation_id ? ` [ask=${row.correlation_id.slice(0, 8)}]` : "";
-  const line = `${tag} ${dateStr} ${sender}${targetSuffix}${replySuffix}${correlationSuffix}: ${body}`;
+  // Structured-message tag: when send_structured was used, surface the
+  // caller-typed kind in the line so receivers see what kind of message
+  // arrived without having to call get_message. The full payload is on
+  // the row at row.payload (JSON string); receivers fetch via get_message.
+  const kindSuffix = row.user_kind ? ` [kind:${row.user_kind}]` : "";
+  const line = `${tag} ${dateStr} ${sender}${targetSuffix}${replySuffix}${correlationSuffix}${kindSuffix}: ${body}`;
   return { line, message_ids: [row.id], last_seq: row.seq };
 }
 

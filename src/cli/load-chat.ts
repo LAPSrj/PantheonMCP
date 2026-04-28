@@ -82,8 +82,8 @@ export function loadChat(options: LoadChatOptions): LoadChatResult {
           `INSERT INTO messages (
              id, seq, ts, scope, project, target_username,
              from_agent_id, from_transient, from_username_inline,
-             text, kind, reply_to, correlation_id
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             text, kind, reply_to, correlation_id, user_kind, payload
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             row.id,
             next.s,
@@ -98,6 +98,8 @@ export function loadChat(options: LoadChatOptions): LoadChatResult {
             row.kind,
             row.reply_to,
             row.correlation_id,
+            row.user_kind,
+            row.payload,
           ],
         );
       })();
@@ -146,6 +148,8 @@ function validateJsonlRow(value: unknown): ValidationResult {
       kind: (v.kind as string | null) ?? null,
       reply_to: (v.reply_to as string | null) ?? null,
       correlation_id: (v.correlation_id as string | null) ?? null,
+      user_kind: (v.user_kind as string | null) ?? null,
+      payload: (v.payload as string | null) ?? null,
     },
   };
 }

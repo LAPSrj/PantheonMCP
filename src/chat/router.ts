@@ -396,6 +396,8 @@ export class ChatRouter {
         : {}),
       ...(input.system !== undefined ? { system: input.system } : {}),
       ...(input.system_kind !== undefined ? { system_kind: input.system_kind } : {}),
+      ...(input.user_kind !== undefined ? { user_kind: input.user_kind } : {}),
+      ...(input.payload !== undefined ? { payload: input.payload } : {}),
       from_username_inline: fromUsernameInline,
     };
 
