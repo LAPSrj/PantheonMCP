@@ -116,6 +116,65 @@ test("cross-process collision: claimed_persona owner still blocked when peer is 
   ).toThrow(/username_taken|subscriber_taken/);
 });
 
+test("sweepInMemoryOrphans drops in-memory subscribers whose presence row was pruned", () => {
+  // Simulate a long-running MCP process whose in-memory subscriber
+  // map outlived the subscriber's SQLite presence row (the original
+  // stuck-canonical-handle bug shape: one /compact left an orphan
+  // entry in router.subscribers because the chat handler swapped
+  // chat_agent_id without calling `remove`).
+  let now = 1_000_000;
+  const router = new ChatRouter({ paths, db: dbA, clock: () => now });
+  const sub = router.add({
+    username: "ghost",
+    project: "p",
+    transient: false,
+  });
+  // Subscriber is fresh — sweep is a no-op.
+  expect(router.sweepInMemoryOrphans()).toBe(0);
+  expect(router.getByUsername("ghost")?.agent_id).toBe(sub.agent_id);
+
+  // Manually delete the SQLite presence row to simulate a heartbeat
+  // dying off + the 60s prune window having passed (pruneStale ran).
+  // The in-memory subscriber is now an orphan.
+  dbA.run("DELETE FROM subscribers WHERE agent_id = ?", [sub.agent_id]);
+  expect(router.sweepInMemoryOrphans()).toBe(1);
+  // In-memory map is also empty now — the canonical handle is reclaimable.
+  expect(router.getByUsername("ghost")).toBeNull();
+});
+
+test("sweepInMemoryOrphans is a no-op for fresh subscribers", () => {
+  let now = 1_000_000;
+  const router = new ChatRouter({ paths, db: dbA, clock: () => now });
+  router.add({ username: "alive", project: "p", transient: false });
+  // Time has not advanced past the prune grace; presence row is fresh.
+  expect(router.sweepInMemoryOrphans()).toBe(0);
+  expect(router.getByUsername("alive")).not.toBeNull();
+});
+
+test("sweepInMemoryOrphans uses prune_grace_ms to decide staleness", () => {
+  let now = 1_000_000;
+  const router = new ChatRouter({ paths, db: dbA, clock: () => now });
+  router.add({ username: "creep", project: "p", transient: false });
+  // Advance the clock past the 60s default; the SQLite row's
+  // last_heartbeat (set at add-time = now=1_000_000) is now stale.
+  now += 90_000;
+  // The SQLite row hasn't been pruned by pruneStale yet, but
+  // sweepInMemoryOrphans's filter (last_heartbeat > now - grace) will
+  // miss it. We treat that as orphaned-equivalent.
+  expect(router.sweepInMemoryOrphans()).toBe(1);
+  expect(router.getByUsername("creep")).toBeNull();
+});
+
+test("sweepInMemoryOrphans is a no-op when no db is wired", () => {
+  // Test routers without persistence (in-memory-only) don't need the
+  // sweep — there's no SQLite row to compare against. The method
+  // returns 0 without touching the in-memory map.
+  const router = new ChatRouter({ paths });
+  router.add({ username: "transient", project: "p", transient: false });
+  expect(router.sweepInMemoryOrphans()).toBe(0);
+  expect(router.getByUsername("transient")).not.toBeNull();
+});
+
 test("cross-process suffix-walk skips peer-owned handles", () => {
   // `nextAvailableIncarnation("alice")` must skip `alice2` if a peer
   // is already chatting as `alice2`, returning `alice3`.

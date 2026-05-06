@@ -270,6 +270,17 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
         // best-effort
       }
     }
+    // In-memory orphan sweep: drop router.subscribers entries whose
+    // SQLite presence row has been pruned. Belt-and-braces with the
+    // same-session re-login idempotence guard in the chat handler:
+    // the guard prevents new orphans, this sweep cleans up any that
+    // exist (pre-fix leftovers, or future leak paths). Runs on the
+    // same 30s cadence as the SQLite prune so the two stay in lockstep.
+    try {
+      ctx.chat?.sweepInMemoryOrphans();
+    } catch {
+      // best-effort — never let a sweep crash the daemon
+    }
     try {
       ctx.chat?.tombstones.prune();
     } catch {

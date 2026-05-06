@@ -368,6 +368,51 @@ export class ChatRouter {
     return sub;
   }
 
+  /** Defensive sweep: drop in-memory subscribers whose SQLite presence
+   * row has been pruned (heartbeat older than `prune_grace_ms`).
+   *
+   * The same-session re-login idempotence guard (chat handler) prevents
+   * NEW orphans from being created. This sweep cleans up subscribers
+   * that lost their heartbeat for any other reason — pre-fix /compact
+   * leftovers, or any future leak path where `chat_agent_id` moves
+   * away from a subscriber without `remove` being called.
+   *
+   * Without this, `router.subscribers` can grow unbounded across the
+   * lifetime of a long-running MCP process, and `checkAvailability`
+   * keeps treating dead-by-heartbeat sessions as live peers.
+   *
+   * No-op when no db is wired (test routers without persistence).
+   * Returns the number of in-memory subscribers reaped. */
+  sweepInMemoryOrphans(
+    options: { prune_grace_ms?: number; now?: number } = {},
+  ): number {
+    if (!this.db) return 0;
+    const now = options.now ?? this.clock();
+    const grace = options.prune_grace_ms ?? DEFAULT_PRUNE_GRACE_MS;
+    const cutoff = now - grace;
+    let reaped = 0;
+    // Snapshot agent_ids first so we can mutate during iteration.
+    const ids = Array.from(this.subscribers.keys());
+    for (const id of ids) {
+      try {
+        const row = this.db
+          .query("SELECT 1 AS x FROM subscribers WHERE agent_id = ? AND last_heartbeat > ?")
+          .get(id, cutoff) as { x: number } | undefined;
+        if (!row) {
+          // No fresh row → presence has been pruned (or never written).
+          // Drop the in-memory entry. `remove` handles tombstone +
+          // ask cleanup + best-effort presence-remove (idempotent
+          // when the row is already gone).
+          this.remove(id);
+          reaped++;
+        }
+      } catch {
+        // best-effort — never let a sweep error crash the daemon
+      }
+    }
+    return reaped;
+  }
+
   /** Bump this subscriber's `last_heartbeat` in the SQLite presence
    * table. Called every 5-10s by the MCP server's heartbeat scheduler.
    * No-op when no DB is wired (in-memory-only test routers). */
