@@ -45,6 +45,93 @@ export const login: Handler = async (args, ctx) => {
   const promote = asObject(args.promote);
   const router = requireRouter(ctx);
 
+  // Same-session re-login idempotence guard. Without this, /compact (or
+  // any bootstrap-reminder loop that re-fires `login` from a session
+  // already holding a chat subscriber) walks the in-memory subscriber
+  // map, sees its OWN row, hits `subscriber_taken`, and auto-suffixes
+  // against itself — producing the stuck-canonical-handle accumulator
+  // pattern (`<base>2`, `<base>3`, ...) where every collision is the
+  // session colliding with its prior incarnation in the same MCP
+  // process. The cross-MCP-process auto-suffix path (legitimate) still
+  // fires below; this guard is strictly local to this MCP session.
+  const existingAgentId = ctx.chat_agent_id;
+  if (existingAgentId) {
+    const existing = router.getByAgentId(existingAgentId);
+    if (existing) {
+      if (existing.username.toLowerCase() !== username.toLowerCase()) {
+        throw new ToolError(
+          "already_logged_in",
+          `This MCP session is already logged in as '${existing.username}'. Call \`logout\` first if you really intend to switch identities — login does not silently rename.`,
+          {
+            current_username: existing.username,
+            current_agent_id: existingAgentId,
+            requested: username,
+          },
+        );
+      }
+      // Same handle, same session — return the existing subscriber.
+      // Apply the caller-supplied status if it changed (mirrors
+      // update_status's effect; bypasses the topic cooldown since
+      // bootstrap-reminder re-logins arrive without an implicit
+      // cadence).
+      if (status && status !== existing.status) {
+        try {
+          router.update(existingAgentId, { status });
+          router.markStatusChanged(existingAgentId);
+        } catch {
+          // best-effort — never fail an idempotent re-login on a
+          // status-update hiccup.
+        }
+      }
+      const supportsChannels = asBoolean(args.supports_channels) ?? false;
+      const claimed = ctx.session.claimedUsername;
+      const resumeSummary =
+        !existing.transient && claimed
+          ? buildResumeSummary(ctx.paths, claimed)
+          : null;
+      const noteTemplate = supportsChannels ? "login-note-channels" : "login-note";
+      let note: string;
+      try {
+        note = getResponseTemplate(noteTemplate, {
+          agent_id: existing.agent_id,
+          username: existing.username,
+          project: existing.project,
+        });
+      } catch {
+        note = supportsChannels
+          ? `Logged in as ${existing.username}. Channels ARE enabled — peer messages arrive inline as <channel source="pantheon" ...>...</channel> tags. No watcher needed.`
+          : `Logged in as ${existing.username}. ` +
+            `Run pantheon-fetch --agent-id ${existing.agent_id} --loop to start the watcher.`;
+      }
+      // Idempotence prelude: tell the agent this was a no-op so it
+      // doesn't spawn a redundant Monitor watcher (the existing one
+      // is still attached to the same agent_id).
+      note =
+        `Already logged in as '${existing.username}' on this MCP session — re-login is a no-op (same agent_id, same chat subscriber). ` +
+        `Your existing chat watcher is still attached; do NOT spawn a second one.\n\n` +
+        note;
+      return {
+        ok: true,
+        agent_id: existing.agent_id,
+        username: existing.username,
+        project: existing.project,
+        transient: existing.transient,
+        channels_enabled: existing.supports_channels,
+        promoted: false,
+        already_logged_in: true,
+        ...(resumeSummary
+          ? { resume_summary: { ...resumeSummary, last_status: existing.status || null } }
+          : {}),
+        note,
+      };
+    }
+    // ctx.chat_agent_id was set but no longer points to a live
+    // subscriber (e.g. another path removed it). Clear the dangling
+    // pointer and fall through to the normal add path so a fresh
+    // subscriber is created cleanly.
+    ctx.setChatAgentId(null);
+  }
+
   // §10 / §11c persona-owner-allowed: when the caller has already
   // claimed this handle as a persona, the chat-add must accept it
   // (otherwise registered personas can never join chat under their

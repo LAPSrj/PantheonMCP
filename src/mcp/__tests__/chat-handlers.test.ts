@@ -303,6 +303,59 @@ test("auto-suffix: persona-owner whose canonical handle is taken auto-renames to
   expect(payload.note).toContain("Logged in as 'semaphoremole2'");
 });
 
+test("re-login on the SAME MCP session is idempotent — does NOT auto-suffix", async () => {
+  // Repro for the stuck-canonical-handle bug: when /compact (or any
+  // bootstrap-reminder loop) re-fires `login` from a session that
+  // already has a chat subscriber, the handler must return the
+  // existing subscriber rather than allocating a sibling-incarnation
+  // slot against its own in-memory row.
+  await registerAndClaim(ctx, "carlita", "p");
+  const first = await call("login", { username: "carlita", project: "p" });
+  expect(first.ok).toBe(true);
+  expect(first.payload.username).toBe("carlita");
+  const firstAgentId = first.payload.agent_id as string;
+
+  // Same MCP session calls login again with the same username.
+  const second = await call("login", { username: "carlita", project: "p" });
+  expect(second.ok).toBe(true);
+  // Same handle, same agent_id — no auto-suffix, no second subscriber.
+  expect(second.payload.username).toBe("carlita");
+  expect(second.payload.auto_suffixed).toBeUndefined();
+  expect(second.payload.agent_id).toBe(firstAgentId);
+  // ctx.chat_agent_id is preserved (no second subscriber created).
+  expect(ctx.chat_agent_id).toBe(firstAgentId);
+  // Router still has exactly one subscriber for this username.
+  const subs = Array.from(ctx.chat!.allSubscribers()).filter(
+    (s) => s.username === "carlita",
+  );
+  expect(subs).toHaveLength(1);
+});
+
+test("re-login on the SAME MCP session: status string, when provided, is applied to the existing subscriber", async () => {
+  await registerAndClaim(ctx, "carlita", "p");
+  await call("login", { username: "carlita", project: "p", status: "phase 1" });
+  const sub1 = ctx.chat!.getByUsername("carlita");
+  expect(sub1?.status).toBe("phase 1");
+
+  await call("login", { username: "carlita", project: "p", status: "phase 2" });
+  const sub2 = ctx.chat!.getByUsername("carlita");
+  expect(sub2?.status).toBe("phase 2");
+  // Still exactly one subscriber under that handle.
+  const all = Array.from(ctx.chat!.allSubscribers()).filter(
+    (s) => s.username === "carlita",
+  );
+  expect(all).toHaveLength(1);
+});
+
+test("re-login on the SAME MCP session with a DIFFERENT username is rejected with already_logged_in", async () => {
+  await registerAndClaim(ctx, "carlita", "p");
+  await call("login", { username: "carlita", project: "p" });
+  const r = await call("login", { username: "different_handle", project: "p" });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("already_logged_in");
+  expect(r.payload.current_username).toBe("carlita");
+});
+
 test("auto-suffix: walks past taken slots", async () => {
   await registerAndClaim(ctx, "alice", "p");
   await call("login", { username: "alice", project: "p" });
