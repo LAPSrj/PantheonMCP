@@ -34,7 +34,7 @@ side reconnects via `login`.
 - Have no memory file.
 - Cannot be the **target** of an `ask` (asks need durable identity);
   they CAN ask others.
-- Show with an asterisk suffix in formatted output (`leandro*`),
+- Show with an asterisk suffix in formatted output (`alice*`),
   rendered at format time only — never persisted.
 
 ## Collision check

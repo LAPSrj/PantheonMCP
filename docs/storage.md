@@ -1,7 +1,6 @@
 # Storage
 
-Pantheon uses a hybrid persistence model per the §15 design (see
-`/home/leandro/liaison/persona-mcp-brainstorm.md`):
+Pantheon uses a hybrid persistence model:
 
 - **Personas + memory** — per-agent JSON files, hand-editable. Atomic
   rename on write; mtime-guarded mutate-then-rename for memory writes
@@ -73,8 +72,9 @@ which:
    then `StorageError("mutate_conflict")`.
 
 Single-instance use never trips a retry; the cost is one extra `stat`
-per write. The pattern descends from
-`/home/leandro/summon-mcp-incarnations-plan.md` §2.1.
+per write. Sibling incarnations of the same persona share a memory
+file; the mtime guard prevents a slow writer from clobbering a
+faster one's just-committed entries.
 
 ### Reader tolerance
 
@@ -106,7 +106,7 @@ superset of summon-mcp's `AgentEntry` plus pantheon-specific fields
       "details": "Optional unbounded prose, ≤5MB, only via get_memory_details.",
       "kind": "decision",
       "core": true,
-      "summoner_username": "leandro",
+      "summoner_username": "alice",
       "status": "active"
     }
   ]

@@ -40,15 +40,12 @@ imported by Leandro's private one-shot before pantheon goes live.
 | `reserved_username`        | Lower-cased name is one of `admin`, `system`, `pantheon`. |
 | `digit_suffix_reserved`    | Name ends in digits — that suffix space is reserved for sibling incarnations. |
 
-The digit-suffix rule descends from the incarnations plan
-(`/home/leandro/summon-mcp-incarnations-plan.md` §1.1). Going forward,
-every digit-suffixed handle is by definition an incarnation
-(`<base><N>`), so a new persona named `swoopfinch2` would alias the
-second incarnation of `swoopfinch` — the registry refuses up front.
-Legacy digit-suffixed personas that pre-existed in summon-mcp are NOT
-grandfathered here because pantheon has no inherited data; they
-either get renamed during Leandro's import script or are imported as
-canonical (matching summon-mcp's grandfather rule for legacy entries).
+The digit-suffix rule reserves that suffix space for sibling
+incarnations: every digit-suffixed handle is by definition an
+incarnation (`<base><N>`), so a new persona named `swoopfinch2` would
+alias the second incarnation of `swoopfinch` — the registry refuses
+up front. Pantheon has no inherited data, so there are no legacy
+exceptions; canonical handles are always digit-free.
 
 ## Prefix collision
 
