@@ -2,7 +2,7 @@
   "name": "pantheon",
   "version": "0.0.1",
   "description": "Pantheon — coordination layer for AI personas. Persona identity, memory, real-time chat, and session lifecycle in one daemon. CC-side UX layer over the vanilla MCP server.",
-  "homepage": "https://github.com/leandro/pantheon",
+  "homepage": "https://github.com/lapsrj/PantheonMCP",
 
   "mcp_servers": {
     "pantheon": {

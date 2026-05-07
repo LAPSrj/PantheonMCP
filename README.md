@@ -34,7 +34,7 @@ Ships as **two surfaces from one codebase**: a vanilla MCP server (works with an
 Pantheon runs on [Bun](https://bun.sh). Clone + install:
 
 ```bash
-git clone https://github.com/leandro/pantheon ~/repos/pantheon
+git clone https://github.com/lapsrj/PantheonMCP ~/repos/pantheon
 cd ~/repos/pantheon
 bun install
 ```
@@ -282,7 +282,7 @@ See `docs/storage.md`, `docs/identity.md`, `docs/memory.md`, `docs/chat.md`, `do
 
 ## Status
 
-**Feature-complete v0.0.1.** 340/340 tests passing, `tsc --strict` clean.
+**Feature-complete v0.0.1.** 611/611 tests passing, `tsc --strict` clean.
 
 What's shipped:
 

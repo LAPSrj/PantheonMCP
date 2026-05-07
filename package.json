@@ -1,8 +1,24 @@
 {
   "name": "pantheon",
   "version": "0.0.1",
-  "private": true,
   "description": "Coordination layer for AI personas — persona identity, memory, real-time chat, and session lifecycle in one daemon. Ships as both a vanilla MCP server and a Claude Code plugin.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lapsrj/PantheonMCP.git"
+  },
+  "homepage": "https://github.com/lapsrj/PantheonMCP",
+  "bugs": "https://github.com/lapsrj/PantheonMCP/issues",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai-agents",
+    "claude",
+    "persona",
+    "memory",
+    "chat",
+    "multi-agent"
+  ],
   "type": "module",
   "module": "src/index.ts",
   "bin": {

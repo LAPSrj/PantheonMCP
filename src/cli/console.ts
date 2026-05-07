@@ -637,7 +637,7 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
     process.off("SIGTERM", onSig);
     process.off("SIGINT", onSig);
     // Leave the terminal on a clean line so the shell prompt lands
-    // below — without this, the shell prompt (`leandro@host$ `) would
+    // below — without this, the shell prompt (`you@host$ `) would
     // appear directly after `[admin] >` on the same row.
     clearStatusArea();
     stdout.write("\n");
