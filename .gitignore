@@ -8,3 +8,11 @@ bun.lockb
 .idea/
 .vscode/
 *.tmp.*
+
+# Per-developer Claude Code project settings — author-private.
+.claude/
+
+# SQLite database files (in case the daemon is run from the repo root).
+*.db
+*.db-wal
+*.db-shm
