@@ -792,6 +792,92 @@ export const TOOLS: readonly ToolDef[] = [
     },
   },
 
+  // --- Cross-session lifecycle control (force-rest / force-exit) ---
+  // Companion to `block_self_exit` on the summon family: when the
+  // spawned agent has self-exit blocked, these are the only paths to
+  // ending its session (besides watchdog timeout). No auth gate —
+  // tool-name-as-gate semantics, parallel to `summon_any`.
+  {
+    name: "force_rest",
+    description:
+      "Ask another session in the same project to enter `rest`. Writes a row to the shared lifecycle table; the target's pantheon server consumes it on its next 30s prune tick and runs its rest pipeline (transitions to resting, stamps the persona's last_rested_at). Provide EXACTLY ONE of `target_username` or `target_agent_id`. The target need not have `block_self_exit` set — this works on any live target. Targets must be online (have a live presence row); offline targets return `target_offline`. Cross-project? Use `force_rest_any`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        target_username: {
+          type: "string",
+          description:
+            "Recipient username. Resolved to a live agent_id via the SQLite presence table. Pass EITHER this OR `target_agent_id`, not both.",
+        },
+        target_agent_id: {
+          type: "string",
+          description:
+            "Recipient chat agent_id. Use when handles auto-suffix and you need exactness. Pass EITHER this OR `target_username`, not both.",
+        },
+        reason: {
+          type: "string",
+          description:
+            "Optional human-readable reason persisted on the request row + surfaced in the target's stamped rest_reason.",
+        },
+      },
+    },
+  },
+  {
+    name: "force_exit",
+    description:
+      "Ask another session in the same project to call `exit` (close its tab). Writes a row to the shared lifecycle table; the target's pantheon server consumes it on its next 30s prune tick and schedules the SIGTERM. Provide EXACTLY ONE of `target_username` or `target_agent_id`. Targets must be online; offline targets return `target_offline`. Cross-project? Use `force_exit_any`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        target_username: {
+          type: "string",
+          description:
+            "Recipient username. Resolved to a live agent_id via the SQLite presence table. Pass EITHER this OR `target_agent_id`, not both.",
+        },
+        target_agent_id: {
+          type: "string",
+          description:
+            "Recipient chat agent_id. Use when handles auto-suffix and you need exactness. Pass EITHER this OR `target_username`, not both.",
+        },
+        reason: {
+          type: "string",
+          description:
+            "Optional human-readable reason persisted on the request row.",
+        },
+      },
+    },
+  },
+  {
+    name: "force_rest_any",
+    description:
+      "Cross-project variant of `force_rest` — bypasses the same-project guard. Same semantics otherwise (resolves target, writes the row, target consumes on its prune tick).",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        target_username: { type: "string" },
+        target_agent_id: { type: "string" },
+        reason: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "force_exit_any",
+    description:
+      "Cross-project variant of `force_exit` — bypasses the same-project guard. Same semantics otherwise (resolves target, writes the row, target consumes on its prune tick).",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        target_username: { type: "string" },
+        target_agent_id: { type: "string" },
+        reason: { type: "string" },
+      },
+    },
+  },
+
   // Legacy aliases (deprecated; one-release window).
   {
     name: "allow_idle",

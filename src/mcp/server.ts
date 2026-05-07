@@ -11,6 +11,8 @@ import {
 } from "../watchdog/index.ts";
 import { stampRested, transitionClaim } from "../identity/index.ts";
 import { ChatRouter, pruneStale } from "../chat/index.ts";
+import { pruneStaleRestRequests } from "../lifecycle/index.ts";
+import { consumeForceLifecycleRequests } from "./handlers/lifecycle.ts";
 import { expireHandoffs } from "../memory/index.ts";
 import { openChatDb, resolvePaths } from "../storage/index.ts";
 import {
@@ -271,6 +273,24 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
       } catch {
         // best-effort
       }
+      // Force-lifecycle TTL: drop unconsumed rest_requests rows older
+      // than ~5 min (caller died, target never came online, or other
+      // long-tail). Consumed rows stay as an audit trail.
+      try {
+        pruneStaleRestRequests(chatDb);
+      } catch {
+        // best-effort
+      }
+    }
+    // Force-rest / force-exit consumer: claim any pending requests
+    // addressed to this session's chat agent_id. When kind=rest the
+    // session transitions to resting + persona is stamped; when
+    // kind=exit the SIGTERM is scheduled. Bypasses block_self_exit
+    // (force-* is the override).
+    try {
+      consumeForceLifecycleRequests(ctx);
+    } catch {
+      // best-effort — don't crash the daemon on a malformed row
     }
     // In-memory orphan sweep: drop router.subscribers entries whose
     // SQLite presence row has been pruned. Belt-and-braces with the

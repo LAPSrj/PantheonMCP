@@ -136,6 +136,14 @@ export class ChatRouter {
     this.emitter.setMaxListeners(1000);
   }
 
+  /** Expose the underlying SQLite handle (read-only access). Used by
+   * the lifecycle layer to read presence + write rest_requests rows
+   * on the same connection without re-opening the file. `null` for
+   * routers constructed without a db (in-process tests). */
+  chatDb(): Database | null {
+    return this.db;
+  }
+
   // -------------------------------------------------------------------- //
   // Subscriber lifecycle
   // -------------------------------------------------------------------- //

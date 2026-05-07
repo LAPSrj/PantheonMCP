@@ -1,5 +1,11 @@
+import { listActive } from "../../chat/index.ts";
 import { stampRested, transitionRestEnter } from "../../identity/index.ts";
 import { recordExit } from "../../launcher/index.ts";
+import {
+  consumePendingRestRequests,
+  writeRestRequest,
+  type RestRequestKind,
+} from "../../lifecycle/index.ts";
 import { appendEntry, buildHandoffSeed } from "../../memory/index.ts";
 import {
   DEFAULT_REST_TIMEOUT_SECONDS,
@@ -185,6 +191,204 @@ export const exit: Handler = async (args, ctx) => {
     note: "SIGTERM scheduled. Watchdog cleared. Goodbye.",
   };
 };
+
+// --- Cross-session force_rest / force_exit ---
+
+interface ForceLifecycleResolved {
+  agent_id: string;
+  username: string;
+  project: string;
+}
+
+/** Resolve target_username OR target_agent_id to a live presence row.
+ * Throws ToolError on bad args / offline target. */
+function resolveForceTarget(
+  args: Record<string, unknown>,
+  ctx: HandlerContext,
+): { resolved: ForceLifecycleResolved; chatDb: NonNullable<ReturnType<NonNullable<HandlerContext["chat"]>["chatDb"]>> } {
+  const target_username = asString(args.target_username);
+  const target_agent_id = asString(args.target_agent_id);
+  // Exactly-one check: XOR.
+  const haveUsername = target_username !== undefined && target_username.length > 0;
+  const haveAgentId = target_agent_id !== undefined && target_agent_id.length > 0;
+  if (haveUsername === haveAgentId) {
+    throw new ToolError(
+      "invalid_argument",
+      "Provide exactly one of `target_username` or `target_agent_id` (not both, not neither).",
+    );
+  }
+  if (!ctx.chat) {
+    throw new ToolError(
+      "chat_unavailable",
+      "force_rest / force_exit require a chat router (no router wired in this context).",
+    );
+  }
+  const chatDb = ctx.chat.chatDb();
+  if (!chatDb) {
+    throw new ToolError(
+      "chat_unavailable",
+      "force_rest / force_exit require a SQLite-backed chat router (in-memory router has no IPC channel).",
+    );
+  }
+  const rows = listActive(chatDb);
+  let row: ForceLifecycleResolved | undefined;
+  if (haveAgentId) {
+    const found = rows.find((r) => r.agent_id === target_agent_id);
+    if (found) {
+      row = { agent_id: found.agent_id, username: found.username, project: found.project };
+    }
+  } else {
+    const found = rows.find((r) => r.username === target_username);
+    if (found) {
+      row = { agent_id: found.agent_id, username: found.username, project: found.project };
+    }
+  }
+  if (!row) {
+    throw new ToolError(
+      "target_offline",
+      haveAgentId
+        ? `No live agent with agent_id '${target_agent_id}'. Targets must be online to receive a force_${"rest" /* placeholder */} request.`
+        : `No live agent with username '${target_username}'. Targets must be online to receive a force-lifecycle request.`,
+    );
+  }
+  return { resolved: row, chatDb };
+}
+
+async function performForceLifecycle(
+  args: Record<string, unknown>,
+  ctx: HandlerContext,
+  kind: RestRequestKind,
+  options: { any_project: boolean },
+): Promise<Record<string, unknown>> {
+  const { resolved, chatDb } = resolveForceTarget(args, ctx);
+
+  // Same-project guard for the non-_any variants. The caller's project
+  // comes from their own chat subscriber row; if they're not logged
+  // in, refuse — same-project guard is undefined without a caller
+  // project.
+  if (!options.any_project) {
+    const callerSub = ctx.chat_agent_id
+      ? ctx.chat?.getByAgentId(ctx.chat_agent_id) ?? null
+      : null;
+    if (!callerSub) {
+      throw new ToolError(
+        "not_logged_in",
+        "Caller must be logged in to chat (same-project guard needs caller's project). Login first or use the `_any` variant.",
+      );
+    }
+    if (callerSub.project !== resolved.project) {
+      throw new ToolError(
+        "cross_project_blocked",
+        `Target '${resolved.username}' is in project '${resolved.project}', caller is in '${callerSub.project}'. Use force_${kind}_any to bypass.`,
+      );
+    }
+  }
+
+  const reason = asString(args.reason) ?? null;
+  const fromAgentId = ctx.chat_agent_id ?? null;
+  const id = writeRestRequest(chatDb, {
+    target_agent_id: resolved.agent_id,
+    from_agent_id: fromAgentId,
+    kind,
+    reason,
+  });
+
+  return {
+    ok: true,
+    request_id: id,
+    target_agent_id: resolved.agent_id,
+    target_username: resolved.username,
+    target_project: resolved.project,
+    kind,
+    note: `Wrote force-${kind} request for ${resolved.username} (${resolved.agent_id}). The target's pantheon server consumes pending rows on its next 30s prune tick.`,
+  };
+}
+
+export const force_rest: Handler = async (args, ctx) =>
+  performForceLifecycle(args, ctx, "rest", { any_project: false });
+
+export const force_exit: Handler = async (args, ctx) =>
+  performForceLifecycle(args, ctx, "exit", { any_project: false });
+
+export const force_rest_any: Handler = async (args, ctx) =>
+  performForceLifecycle(args, ctx, "rest", { any_project: true });
+
+export const force_exit_any: Handler = async (args, ctx) =>
+  performForceLifecycle(args, ctx, "exit", { any_project: true });
+
+// --- Force-rest consumer (called from the prune tick) ---
+
+/** Apply the rest pipeline directly — bypasses the self-rest
+ * preconditions (block_self_exit, allow_rest_authorized, summoned).
+ * The force-* request IS the authorization. */
+function applyForceRest(ctx: HandlerContext, reason: string): void {
+  const claimed = ctx.session.claimedUsername;
+  if (!claimed) return; // can't rest without a claimed persona
+  try {
+    transitionRestEnter(ctx.session);
+  } catch {
+    // session already resting — idempotent no-op.
+  }
+  try {
+    stampRested(ctx.paths, claimed, reason, ctx.claude_session_id ?? null);
+  } catch {
+    // best-effort
+  }
+}
+
+/** Apply the exit pipeline directly. Schedules SIGTERM with the
+ * default delay; bypasses the block_self_exit gate (force-exit IS
+ * the override). */
+function applyForceExit(ctx: HandlerContext): void {
+  try {
+    ctx.watchdog.unregister(ctx.session.id);
+  } catch {
+    // best-effort
+  }
+  if (ctx.spawn_metadata) {
+    try {
+      recordExit(ctx.paths, ctx.spawn_metadata.window_name);
+    } catch {
+      // best-effort
+    }
+  }
+  ctx.scheduleExit(2, "force_exit");
+}
+
+/** Consume any pending force_rest / force_exit requests addressed to
+ * this session's chat agent_id and apply them. Called from the
+ * server's 30s prune tick. No-op when not logged in to chat or when
+ * the chat router has no SQLite backing. */
+export function consumeForceLifecycleRequests(ctx: HandlerContext): {
+  consumed: number;
+  rested: boolean;
+  exiting: boolean;
+} {
+  const result = { consumed: 0, rested: false, exiting: false };
+  const agentId = ctx.chat_agent_id;
+  if (!agentId || !ctx.chat) return result;
+  const db = ctx.chat.chatDb();
+  if (!db) return result;
+  const requests = consumePendingRestRequests(db, agentId);
+  if (requests.length === 0) return result;
+  result.consumed = requests.length;
+  for (const req of requests) {
+    const reasonText =
+      `force_${req.kind}` +
+      (req.from_agent_id ? `_from_${req.from_agent_id}` : "") +
+      (req.reason ? `: ${req.reason}` : "");
+    if (req.kind === "rest") {
+      applyForceRest(ctx, reasonText);
+      result.rested = true;
+    } else if (req.kind === "exit") {
+      applyForceExit(ctx);
+      result.exiting = true;
+      // Once we've scheduled an exit, further requests are moot.
+      break;
+    }
+  }
+  return result;
+}
 
 // --- Legacy `idle` aliases (deprecated; one-release migration window) ---
 

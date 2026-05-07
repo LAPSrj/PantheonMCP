@@ -42,6 +42,11 @@ export const HANDLERS: Record<string, Handler> = {
   rest: lifecycle.rest,
   extend_rest: lifecycle.extend_rest,
   exit: lifecycle.exit,
+  // Cross-session force_rest / force_exit (companion to block_self_exit).
+  force_rest: lifecycle.force_rest,
+  force_exit: lifecycle.force_exit,
+  force_rest_any: lifecycle.force_rest_any,
+  force_exit_any: lifecycle.force_exit_any,
   // Legacy aliases (deprecated; one-release migration window).
   allow_idle: lifecycle.allow_idle,
   idle: lifecycle.idle,
