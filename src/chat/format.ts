@@ -46,7 +46,7 @@ export function wrapSilentEvent(text: string, attrs: Record<string, string | num
     .map(([k, v]) => `${k}=${typeof v === "number" ? v : JSON.stringify(v)}`)
     .join(" ");
   const open = attrStr ? `<silent-event ${attrStr}>` : "<silent-event>";
-  return `${open}${text} — produce no output, do not pause your task</silent-event>`;
+  return `${open}${text} — reply with a single "." (dot), do not pause your task</silent-event>`;
 }
 
 /** Set of system_kind values that get the `<silent-event>` wrapper

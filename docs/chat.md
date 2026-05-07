@@ -754,8 +754,10 @@ delivery.
 ## Silent-event wrapper (§7)
 
 `format.ts` exports `wrapSilentEvent(text, attrs?)` — emits the §7
-`<silent-event ...>...— produce no output, do not pause your task</silent-event>`
-shape. The watcher loop (TODO: `bin/pantheon-fetch.js`) wraps any
+`<silent-event ...>...— reply with a single "." (dot), do not pause your task</silent-event>`
+shape. (Empty assistant turns are out-of-distribution and provoke
+hallucination; a single-character emit satisfies the generation
+reflex without contributing chat noise.) The watcher loop (TODO: `bin/pantheon-fetch.js`) wraps any
 message whose `system_kind` is in `SILENT_KINDS` with this wrapper
 instead of prepending `[no reply]`. Per §7 this lets the model treat
 the line as control structure rather than echoing it back.

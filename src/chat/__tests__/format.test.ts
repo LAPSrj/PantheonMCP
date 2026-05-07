@@ -80,7 +80,7 @@ test("wrapSilentEvent emits the XML wrapper with a no-output directive", () => {
   expect(out).toContain("<silent-event");
   expect(out).toContain('kind="join"');
   expect(out).toContain("count=1");
-  expect(out).toContain("produce no output");
+  expect(out).toContain('reply with a single "." (dot)');
   expect(out).toContain("</silent-event>");
 });
 
