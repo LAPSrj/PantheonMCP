@@ -1,3 +1,6 @@
+import crypto from "node:crypto";
+import os from "node:os";
+import path from "node:path";
 import {
   DEFAULT_PERMISSION_MODE,
   IdentityError,
@@ -183,6 +186,25 @@ export async function spawnPersona(
     predictedTabIndex = predictNextTabIndex(ctx.paths, windowName);
   }
 
+  // Per-spawn graceful-exit sentinel. The spawned MCP server's exit
+  // scheduler (server.ts:makeRealExitScheduler) writes this file
+  // immediately before SIGTERM-ing the parent CC process. The wt
+  // adapter's bash launch script reads it: when the inner process
+  // exits 143 AND the sentinel exists, the script remaps to exit 0 so
+  // wt's `closeOnExit: graceful` actually closes the tab. External
+  // SIGTERMs (OOM, manual `kill`, system shutdown) leave the sentinel
+  // absent and the tab stays open with the visible 143, which is the
+  // intended diagnostic behavior.
+  //
+  // Always set; non-wt adapters and native-Windows wt simply ignore
+  // it. Tmpfile leak is bounded — the wrapper rm's it on the success
+  // path; pantheon's stop hooks / future cleanup pass can sweep
+  // `os.tmpdir()/pantheon-exit-*` if it ever drifts.
+  const exitSentinelPath = path.join(
+    os.tmpdir(),
+    `pantheon-exit-${process.pid}-${crypto.randomUUID()}`,
+  );
+
   const execEnv: Record<string, string> = {
     PANTHEON_SUMMONED: "1",
     PANTHEON_USERNAME: persona.username,
@@ -195,6 +217,7 @@ export async function spawnPersona(
     PANTHEON_REST_TIMEOUT: String(restTimeout),
     PANTHEON_WINDOW_NAME: windowName,
     PANTHEON_TAB_INDEX: String(predictedTabIndex),
+    PANTHEON_EXIT_SENTINEL: exitSentinelPath,
   };
   // Color export so the spawned MCP can echo it via session_info.
   if (persona.color) execEnv.PANTHEON_COLOR = persona.color;

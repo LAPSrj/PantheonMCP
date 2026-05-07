@@ -120,6 +120,9 @@ test("summon: composes registry → plan → spawn → recordSpawn → stamps", 
   expect(call0.env?.PANTHEON_SUMMONED).toBe("1");
   expect(call0.env?.PANTHEON_USERNAME).toBe("moth-whistle");
   expect(call0.env?.PANTHEON_REST_TIMEOUT).toBe("3600");
+  // Per-spawn graceful-exit sentinel: path under tmpdir, unique per
+  // spawn, consumed by makeRealExitScheduler + the wt bash wrapper.
+  expect(call0.env?.PANTHEON_EXIT_SENTINEL).toMatch(/pantheon-exit-\d+-/);
   expect(call0.cwd).toBe("/work/moth");
 
   // Window registry recorded the spawn under the default name.

@@ -173,10 +173,33 @@ function writeWslLaunchScript(args: SpawnArgs): string {
   lines.push(
     `cd ${quoteBash(args.cwd)} || { echo "pantheon: cwd missing: ${args.cwd}" >&2; sleep 5; exit 1; }`,
   );
+  // Run claude as a child (NOT `exec`) so bash sticks around to read
+  // its exit code. SIGTERM from pantheon's `exit()` scheduler kills
+  // claude with 143; wt.exe's `closeOnExit: graceful` (the default)
+  // only auto-closes the tab on exit 0, so without this remap the
+  // tab stays open with "process exited with code 143 — press Enter
+  // to restart". The sentinel gate (PANTHEON_EXIT_SENTINEL written
+  // by server.ts's exit scheduler immediately before the SIGTERM)
+  // ensures we ONLY remap pantheon-initiated SIGTERMs — external
+  // OOM/manual-kill SIGTERMs leave the sentinel absent and the tab
+  // stays open with the visible 143, which is the intended
+  // diagnostic. The trailing rm cleans up the sentinel on the
+  // happy path so /tmp doesn't accumulate.
   const execLine = [args.exec_command, ...args.exec_args]
     .map(quoteBash)
     .join(" ");
-  lines.push(`exec ${execLine}`);
+  lines.push(execLine);
+  lines.push(`__pantheon_ec=$?`);
+  lines.push(
+    `if [ "$__pantheon_ec" -eq 143 ] && [ -n "\${PANTHEON_EXIT_SENTINEL:-}" ] && [ -f "$PANTHEON_EXIT_SENTINEL" ]; then`,
+  );
+  lines.push(`  rm -f -- "$PANTHEON_EXIT_SENTINEL"`);
+  lines.push(`  exit 0`);
+  lines.push(`fi`);
+  lines.push(
+    `[ -n "\${PANTHEON_EXIT_SENTINEL:-}" ] && rm -f -- "$PANTHEON_EXIT_SENTINEL"`,
+  );
+  lines.push(`exit "$__pantheon_ec"`);
   const body = lines.join("\n") + "\n";
 
   fs.mkdirSync(dir, { recursive: true });

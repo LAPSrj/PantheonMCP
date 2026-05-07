@@ -180,7 +180,15 @@ test("WT adapter (WSL target): drops -d <cwd>, wraps in wsl.exe + bash -l <scrip
     expect(body).toContain("#!/usr/bin/env bash");
     expect(body).toContain(`rm -f -- "$0"`);
     expect(body).toContain("cd '/home/leandro/builder/nyus'");
-    expect(body).toContain("exec 'claude' '--print' 'go'");
+    // Sentinel-gated graceful-exit wrapper: claude runs as a child
+    // (no `exec`) so bash can read $? and remap 143 → 0 when pantheon
+    // wrote the sentinel. External SIGTERMs without the sentinel
+    // surface the real 143 and keep the tab open.
+    expect(body).toContain("'claude' '--print' 'go'");
+    expect(body).not.toContain("exec 'claude'");
+    expect(body).toContain(`__pantheon_ec=$?`);
+    expect(body).toContain(`PANTHEON_EXIT_SENTINEL`);
+    expect(body).toContain(`exit "$__pantheon_ec"`);
     expect(body).toContain("export PANTHEON_USERNAME='swoopfinch'");
     expect(body).toContain("export PANTHEON_REST_TIMEOUT='3600'");
   } finally {
