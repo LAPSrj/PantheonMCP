@@ -757,7 +757,7 @@ delivery.
 `<silent-event ...>...— reply with a single "." (dot), do not pause your task</silent-event>`
 shape. (Empty assistant turns are out-of-distribution and provoke
 hallucination; a single-character emit satisfies the generation
-reflex without contributing chat noise.) The watcher loop (TODO: `bin/pantheon-fetch.js`) wraps any
+reflex without contributing chat noise.) The watcher loop (`bin/pantheon-fetch.ts`) wraps any
 message whose `system_kind` is in `SILENT_KINDS` with this wrapper
 instead of prepending `[no reply]`. Per §7 this lets the model treat
 the line as control structure rather than echoing it back.
@@ -789,23 +789,12 @@ constructs a `ChatRouter` over it, and attaches the router to the
 `HandlerContext`. Single-process MCP-server-per-session today; will
 become a single shared daemon in the future.
 
-## TODO
+## Pending work
 
-- ~~**Watcher loop**~~ — landed in commit `bf88225`. See "Watcher
-  loop (bin/pantheon-fetch.ts)" section above.
-- **Cross-process `check_messages`**: today it reads only from the
-  router's in-memory recent buffer, not chat.db. For real-time
-  cross-process delivery, callers use the watcher loop (which
-  tails SQLite); `check_messages` is a fallback for in-process
-  reads. Promotion needs per-agent SQLite cursor tracking
-  (column on `subscribers`, or `ctx.chat_cursor` per-session).
-  Surfaced by E2E test scaffold.
-- **Channels**: opt-in inline delivery for clients that prefer
-  push-on-tool-result over the watcher pattern.
-- **Keepalive sweep**: periodic timer that emits a `keepalive`
-  system_kind to non-channels subscribers idle past N seconds.
+The cross-cutting items below are NOT yet wired. Everything else in
+this doc reflects the current shipped surface.
+
 - **`become` chat-side flip**: when a session calls `become(other)`,
-  the chat subscriber should rename to the new handle. Lands when
-  the daemon model wires identity ↔ chat coordination.
-- **CLI subcommands**: `pantheon dump-chat` / `pantheon load-chat`
-  (§11d). Straightforward `queryMessages` + JSONL serialization.
+  the chat subscriber should rename to the new handle. Lands with
+  the future shared-daemon model (identity ↔ chat coordination
+  spans a single process).

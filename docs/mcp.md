@@ -267,13 +267,10 @@ parity, plus the new fields:
 }
 ```
 
-## TODOs
+## Pending work
 
-- Wire chat handlers when §11c chat router lands. Chat handlers will
-  also emit `<silent-event>` XML wrapper on ambient events (§7).
-- Add per-session JSON file for restart-tolerant proxy state once
-  the daemon model is wired (currently single-process MCP server).
-- `pantheon doctor` / `pantheon dump-chat` / `pantheon load-chat`
-  CLI subcommands (§11d).
-- Cross-platform spawn routing (WSL ↔ Windows) — defer until a real
-  use case appears.
+- **Restart-tolerant proxy state**: today every MCP-client process
+  spawns its own pantheon child, so per-session in-process state is
+  bounded by the client's lifetime. A future shared-daemon model
+  would need a per-session JSON file so the daemon can survive a
+  CC restart without losing each session's claim/transition state.

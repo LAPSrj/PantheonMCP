@@ -161,15 +161,18 @@ The watchdog accepts an injected `Scheduler` interface
 advance virtual time deterministically — no real wall-clock waits.
 The `realScheduler` wraps `globalThis.setTimeout` for production.
 
-## Wiring map (TODO when MCP layer lands)
+## Wiring map
 
-- `src/mcp/handlers/summon.ts` reads `rest_timeout` from the request,
-  validates it, and calls `Watchdog.register(...)`.
+- `src/mcp/handlers/spawn.ts` reads `rest_timeout` from the summon
+  request, validates it, and calls `Watchdog.register(...)`.
 - Every tool handler whose name is in `RESET_TRIGGER_TOOLS` calls
   `Watchdog.touch(sessionId)` after the handler succeeds.
 - The vanilla-MCP dispatcher calls `Watchdog.touch(sessionId)` on
   every incoming request as a belt-and-braces measure.
-- `unregister` (or daemon-side disconnect detection) calls
+- `unregister` (or disconnect detection) calls
   `Watchdog.unregister(sessionId)`.
-- Plugin's CC PreToolUse hook calls into a daemon endpoint that calls
-  `Watchdog.touch(sessionId)`.
+- The plugin's `PreToolUse` hook writes a marker file at
+  `<stateDir>/sessions/$PPID/last_tool_use_at`; the MCP server's
+  `hook-poller` watches the mtime and calls `Watchdog.touch(...)`
+  on advance, giving plugin-mode the richer per-tool-use signal that
+  vanilla MCP can't see.

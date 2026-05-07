@@ -221,12 +221,20 @@ Per §9b, the plugin only ships what vanilla MCP can't do alone:
 Vanilla MCP carries the full feature surface (per §9b). Plugin
 extras are pure ergonomics.
 
-## TODO
+## Pending work
 
-- Wire the watchdog-reset hook end-to-end (daemon-side marker-file
-  polling). Lands cleanly when the §15 singleton daemon ships.
-- Stabilize the `/color` hook against CC's actual color-exposure
-  contract. Currently parses `~/.claude/sessions/*.json` as a
-  fallback; needs CC blessing.
-- Build the context-pct nudge once CC exposes the percentage.
-- Real WT/kitty/wezterm tab-title integration (Windows-only path).
+The watchdog-reset hook is wired end-to-end (the marker-file polling
+lives in `src/mcp/hook-poller.ts`). The remaining three plugin hooks
+ship as documented stubs because each needs upstream signals that
+Claude Code's hook surface does not currently expose:
+
+- **`/color` binding**: CC's `/color` command does not yet emit the
+  chosen value to hooks. The placeholder script is wired into
+  `PostToolUse` so it runs at the right time; the body is a no-op
+  pending CC's color exposure.
+- **Auto-context-pct nudge**: needs CC to surface the per-conversation
+  context-percent number to hooks. The surrogate in
+  `src/mcp/context-pressure.ts` is the vanilla-MCP fallback today.
+- **Tab-title-from-status**: needs a daemon-side listener watching
+  status changes + per-session tab-id tracking. Will land naturally
+  with the future shared-daemon model.

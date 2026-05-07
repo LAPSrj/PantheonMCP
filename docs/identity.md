@@ -209,16 +209,17 @@ Daemon kill -9 mid-claim leaves session state empty on next boot;
 the proxy must re-call `claim()` (or `manifest()`). This is the
 correct §15 behavior — claims are runtime-only.
 
-## TODO when downstream layers land
+## How identity composes with the rest of the stack
 
-- **Chat router (§11c)**: compose `prefixCollision` with subscriber-map
-  reads + tombstone reads to form the full `isHandleAvailable`.
-- **MCP tool surface (§11b)**: thin wrappers around the transition
-  functions; should NOT re-implement state machine rules.
-- **Watchdog (§14)**: `transitionRestEnter` is wired; the per-session
-  timer + reset triggers belong in `src/watchdog/`.
-- **Memory (§4)**: `personas/<handle>/memory.json`. Distinct from
-  identity but shares the `mutateJsonAtomic` helper.
+- **Chat router**: composes `prefixCollision` with its own subscriber-map
+  reads + tombstone reads to form the full `isHandleAvailable` check.
+- **MCP tool surface**: thin handlers in `src/mcp/handlers/identity.ts`
+  wrap the transition functions; the state machine rules live here,
+  not in the handlers.
+- **Watchdog**: `transitionRestEnter` records the rest event; the
+  per-session timer + reset triggers live in `src/watchdog/`.
+- **Memory**: `personas/<handle>/memory.json`. Distinct file from the
+  persona registration but shares the `mutateJsonAtomic` helper.
 - **Conjure**: writes a `provisional: true` persona; the field is
   cleared by the first `update_profile` that supplies all three of
   `description` / `expertise` / `owns`.

@@ -354,12 +354,13 @@ which uses the `(mtimeNs, ino, size)` fingerprint guard from
 shared memory file get conflict-detection retry; per-attempt cost is
 one extra `stat`. Single-instance use never trips a retry.
 
-## TODOs for downstream layers
+## How memory composes downstream
 
-- **MCP handlers**: thin tool wrappers should call into these
-  functions and translate `MemoryError` codes into MCP error
-  payloads. Don't re-implement the validation rules.
-- **Auto-context-percent nudge** (§6 HIGH): runs over `loadStore` +
-  byte sums; can live in `src/memory/context.ts` when wired.
-- **Memory snapshots / search across personas** (§6 LOW): cheap
-  follow-on; build on `loadStore`.
+- **MCP handlers**: thin tool wrappers in `src/mcp/handlers/memory.ts`
+  call into these functions and translate `MemoryError` codes into
+  MCP error payloads. Validation rules live here, not in the handlers.
+- **Context-pressure surrogate**: the dispatcher tracks tool-use
+  pressure since the last memory write and surfaces a hint when
+  pressure crosses thresholds — see `src/mcp/context-pressure.ts`.
+- **Snapshots and cross-persona search**: shipped via
+  `snapshot_memory` / `restore_memory` and `find_memory`.

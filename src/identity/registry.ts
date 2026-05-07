@@ -118,12 +118,12 @@ export function deletePersona(
 /** Run a 3-4 char prefix-collision check against the persistent
  * registry. Returns the colliding username or `null`.
  *
- * NOTE: §11c specifies the full collision check spans THREE sources:
- *   1. Persona registry (this function — done here)
- *   2. Connected chat agents (subscriber map — TODO when chat router lands)
- *   3. Active tombstones (chat router — TODO when chat router lands)
+ * NOTE: the full collision check spans THREE sources:
+ *   1. Persona registry (this function)
+ *   2. Connected chat agents (subscriber map — chat router)
+ *   3. Active tombstones (chat router)
  *
- * The chat router's `isHandleAvailable` will compose this with its
+ * The chat router's `isHandleAvailable` composes this with its own
  * subscriber-map + tombstone reads. Don't add a chat-router peek
  * here; keep registry concerns isolated.
  */

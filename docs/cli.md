@@ -206,11 +206,9 @@ runtime adds a constraint, the validator should mirror it (or
 the runtime check itself should be liftable into a shared
 helper).
 
-## TODO
+## Pending work
 
-- Once the §15 daemon model lands, `doctor` gains a daemon-pid /
+- A future shared-daemon model will give `doctor` a daemon-pid /
   socket discoverability check (and exit 3 when the user expects
-  a daemon and it's not running).
-- `pantheon migrate` is **explicitly out of scope** — Leandro's
-  private one-shot import script handles legacy summon-mcp +
-  chat-mcp data; pantheon ships clean.
+  a daemon and it's not running). Today every MCP-client process
+  spawns its own pantheon child, so there is no daemon to discover.

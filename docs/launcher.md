@@ -300,10 +300,9 @@ persisted geometry for the spawn handler's policy decision.
 ## Stderr probe
 
 Plans for split-pane spawns set `requires_stderr_probe: true`. The
-dispatcher (TODO when summon handlers wire) captures stderr for ~200ms
-after spawn before calling `unref` on the child, so silent failures
-("pane too small to split", etc.) surface as a warning in the summon
-response.
+summon handler captures stderr for ~200ms after spawn before calling
+`unref` on the child, so silent failures ("pane too small to split",
+etc.) surface as a warning in the summon response.
 
 ## Auto-trust `~/.claude.json`
 
@@ -358,8 +357,8 @@ The best-effort failures (registry / stamps) are deliberate: the tab
 is already open by the time these run. Aborting the spawn would mean
 killing a tab the user can already see, which is worse than leaving
 the registry slightly out of sync. The `stamp_warnings` array makes
-the drift visible to the caller; `pantheon doctor` (TODO) will
-surface accumulated drift across runs.
+the drift visible to the caller; `pantheon doctor` surfaces
+accumulated drift across runs.
 
 The `recordExit` decrement is the counterbalancing pressure: every
 session that exits via the `exit` tool decrements the registry,
@@ -368,15 +367,12 @@ Sessions killed externally (closed via the X button, terminal
 crash, etc.) leave drift; the next spawn into the same window
 appends to history without reconciling against external state.
 
-## TODO
+## Pending work
 
-- Implement wezterm / iterm2 / gnome / terminal_app adapters as
-  follow-ons. The dispatcher needs no changes; just drop a real
-  module into `adapters/<name>.ts` and update `adapters/index.ts`.
-- Wire `summon` family handlers (`src/mcp/handlers/spawn.ts`) to call
-  `resolveSpawnPlan` + `child_process.spawn` + 200ms stderr probe +
-  `recordSpawn`. That's the next chunk after this one lands.
-- Cross-platform routing (WSL ↔ Windows): when target persona's
-  platform differs from the host's, the spawn argv needs a
-  `wsl.exe -d <distro> -- ...` wrapper. Defer until a real
-  cross-platform summon use case appears.
+- **wezterm / iterm2 / gnome / terminal_app adapters** are stubs
+  today — they declare the adapter shape so the dispatcher detects
+  them, but `buildSpawnPlan` throws `adapter_not_implemented` and
+  the dispatcher falls through to `generic`. To finish one, drop a
+  real module into `adapters/<name>.ts` and add it to the dispatch
+  table in `adapters/index.ts`. The dispatcher itself needs no
+  changes.
