@@ -2,9 +2,15 @@ import { IdentityError } from "../identity/index.ts";
 import { MemoryError } from "../memory/index.ts";
 import { WatchdogError, isResetTrigger } from "../watchdog/index.ts";
 import { ChatError } from "../chat/index.ts";
+import { validatePayload, type JsonSchema } from "../schemas/index.ts";
 import { computePressure, isSaveTool, pressureHint } from "./context-pressure.ts";
 import { HANDLERS } from "./handlers/index.ts";
+import { TOOLS } from "./tools.ts";
 import { ToolError, type HandlerContext, type MCPCallResult } from "./types.ts";
+
+const TOOL_SCHEMAS: Record<string, JsonSchema> = Object.fromEntries(
+  TOOLS.map((t) => [t.name, t.inputSchema as JsonSchema]),
+);
 
 /** Central tool dispatcher. Resolves the handler, runs it, maps domain
  * errors into MCP error payloads, and (per §14) touches the watchdog
@@ -26,6 +32,28 @@ export async function dispatch(
       error: "unknown_tool",
       message: `Unknown tool: '${toolName}'.`,
     });
+  }
+  // Reject unknown args + missing required fields against the tool's
+  // declared inputSchema. Catches typo classes like `to` vs `target`
+  // on send_message at the boundary instead of falling through to a
+  // silent default. Schema is the same source the MCP client sees in
+  // tools/list — strict at the contract level. The validator subset
+  // only enforces type / required / properties / additionalProperties /
+  // enum / min-max length / pattern; oneOf and other non-subset
+  // keywords are silently ignored (no false-rejections).
+  const schema = TOOL_SCHEMAS[toolName];
+  if (schema) {
+    const errs = validatePayload(args, schema);
+    if (errs.length > 0) {
+      return errorResult({
+        error: "invalid_args",
+        message: `Tool '${toolName}' rejected: ${errs
+          .slice(0, 5)
+          .map((e) => `${e.path || "/"} — ${e.message}`)
+          .join("; ")}${errs.length > 5 ? ` (+${errs.length - 5} more)` : ""}`,
+        path_errors: errs,
+      });
+    }
   }
   try {
     const data = await handler(args, ctx);

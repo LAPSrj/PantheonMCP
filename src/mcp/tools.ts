@@ -834,6 +834,11 @@ export const TOOLS: readonly ToolDef[] = [
             cwd: { type: "string" },
           },
         },
+        supports_channels: {
+          type: "boolean",
+          description:
+            "Server-injected: set by the MCP server when the client advertises the `claude/channel` experimental capability. Callers should not pass this manually; it is in the schema so strict args validation accepts the injection.",
+        },
       },
     },
   },
@@ -844,15 +849,27 @@ export const TOOLS: readonly ToolDef[] = [
   },
   {
     name: "send_message",
-    description: "Post a chat message (project / dm / global scope). For free-form prose. For typed/structured messages with a JSON payload (pushback, evidence, claim, etc.), use `send_structured` instead.",
+    description:
+      "Post a chat message. Field names are STRICT (extras rejected): the recipient field is `target`, NOT `to`/`recipient`/`user`/`dm`. " +
+      "DMs require BOTH `scope: \"dm\"` AND `target: \"<username>\"` — example: `{ scope: \"dm\", target: \"alice\", text: \"…\" }`. " +
+      "Project broadcast: `{ scope: \"project\", text: \"…\" }` (default when scope omitted). Global: `{ scope: \"global\", text: \"…\" }`. " +
+      "For free-form prose; for typed/structured messages with a JSON payload (pushback, evidence, claim, etc.), use `send_structured` instead.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
       required: ["text"],
       properties: {
         text: { type: "string" },
-        scope: { type: "string", enum: ["project", "dm", "global"] },
-        target: { type: "string" },
+        scope: {
+          type: "string",
+          enum: ["project", "dm", "global"],
+          description: "Delivery scope. Defaults to 'project' when omitted.",
+        },
+        target: {
+          type: "string",
+          description:
+            "Recipient username. Required when `scope: \"dm\"`. NOT named `to` / `recipient` / `user`.",
+        },
         reply_to: { type: "string" },
       },
     },

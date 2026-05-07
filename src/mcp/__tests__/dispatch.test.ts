@@ -164,3 +164,45 @@ test("dispatch touches the watchdog for reset-trigger tools after success", asyn
   const afterTrigger = ctx.watchdog.inspect("test-session")?.last_activity_at;
   expect(afterTrigger).toBeGreaterThan(after!);
 });
+
+// --- strict args validation (to-vs-target regression) ---
+
+test("dispatch rejects unknown args via strict additionalProperties (send_message: `to` is not an alias for `target`)", async () => {
+  const r = await dispatch("send_message", { to: "alice", text: "hi" }, ctx);
+  expect(r.isError).toBe(true);
+  const payload = parseResult(r) as Record<string, unknown>;
+  expect(payload.error).toBe("invalid_args");
+  const pathErrors = payload.path_errors as Array<{ path: string; message: string }>;
+  expect(pathErrors.some((e) => e.path === "/to")).toBe(true);
+});
+
+test("dispatch rejects every common DM-field misnomer at the boundary (recipient/dm/user/agent)", async () => {
+  for (const bad of ["recipient", "user", "dm", "agent"]) {
+    const r = await dispatch("send_message", { [bad]: "alice", text: "hi" }, ctx);
+    expect(r.isError).toBe(true);
+    const payload = parseResult(r) as Record<string, unknown>;
+    expect(payload.error).toBe("invalid_args");
+  }
+});
+
+test("dispatch enforces required fields via inputSchema (send_message without text)", async () => {
+  const r = await dispatch("send_message", { scope: "dm", target: "alice" }, ctx);
+  expect(r.isError).toBe(true);
+  const payload = parseResult(r) as Record<string, unknown>;
+  expect(payload.error).toBe("invalid_args");
+  const pathErrors = payload.path_errors as Array<{ path: string; message: string }>;
+  expect(pathErrors.some((e) => e.path === "/text")).toBe(true);
+});
+
+test("dispatch accepts well-formed DM args (validation passes; handler reports chat_unavailable since no router is wired)", async () => {
+  const r = await dispatch(
+    "send_message",
+    { scope: "dm", target: "alice", text: "hi" },
+    ctx,
+  );
+  expect(r.isError).toBe(true);
+  const payload = parseResult(r) as Record<string, unknown>;
+  // Past validation, the no-router fixture surfaces chat_unavailable
+  // — proving the schema check passed and the handler ran.
+  expect(payload.error).toBe("chat_unavailable");
+});

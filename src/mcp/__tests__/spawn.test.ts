@@ -245,10 +245,13 @@ test("permission_mode cascade: persona.permission_mode beats the env default", a
   expect(permissionModeFromArgs(lastSpawnArgs())).toBe("default");
 });
 
-test("permission_mode cascade: invalid per-call value falls through to persona", async () => {
+test("permission_mode cascade: invalid per-call value rejected at dispatch (strict args validation)", async () => {
   fixturePersona({ permission_mode: "plan" });
-  await call("summon", { username: "moth-whistle", permission_mode: "garbage" });
-  expect(permissionModeFromArgs(lastSpawnArgs())).toBe("plan");
+  const r = await call("summon", { username: "moth-whistle", permission_mode: "garbage" });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("invalid_args");
+  // No spawn happened — bad enum value rejected at the boundary.
+  expect(recorder.length).toBe(0);
 });
 
 test("permission_mode: --permission-mode flag is always present in argv", async () => {

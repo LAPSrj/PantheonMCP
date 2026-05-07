@@ -948,11 +948,13 @@ test("send_structured: text defaults to [kind] when omitted", async () => {
   expect(taken.messages.find((m) => m.user_kind === "claim")?.text).toBe("[claim]");
 });
 
-test("send_structured: missing payload errors", async () => {
+test("send_structured: missing payload errors at dispatch (invalid_args from required-field check)", async () => {
   await call("login", { username: "alpha", project: "X", transient: false });
   const r = await call("send_structured", { kind: "x" });
   expect(r.ok).toBe(false);
-  expect(r.payload.error).toBe("missing_payload");
+  expect(r.payload.error).toBe("invalid_args");
+  const pathErrors = r.payload.path_errors as Array<{ path: string; message: string }>;
+  expect(pathErrors.some((e) => e.path === "/payload")).toBe(true);
 });
 
 test("send_structured: empty kind errors", async () => {
