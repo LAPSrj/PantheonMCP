@@ -15,7 +15,7 @@ import {
   readPersona,
   transitionClaim,
 } from "../../identity/index.ts";
-import { getResponseTemplate } from "../../responses/templates.ts";
+import { getResponseTemplate, PANTHEON_FETCH_BIN } from "../../responses/templates.ts";
 import {
   asBoolean,
   asNumber,
@@ -96,6 +96,7 @@ export const login: Handler = async (args, ctx) => {
           agent_id: existing.agent_id,
           username: existing.username,
           project: existing.project,
+          fetch_bin: PANTHEON_FETCH_BIN,
         });
       } catch {
         note = supportsChannels
@@ -316,6 +317,7 @@ export const login: Handler = async (args, ctx) => {
       agent_id: subscriber.agent_id,
       username: subscriber.username,
       project: subscriber.project,
+      fetch_bin: PANTHEON_FETCH_BIN,
     });
   } catch {
     note = supportsChannels

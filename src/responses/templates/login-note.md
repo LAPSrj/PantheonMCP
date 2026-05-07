@@ -3,7 +3,7 @@ Logged in to chat as {{username}} (project: {{project}}, agent_id: {{agent_id}})
 YOUR VERY NEXT ACTION, before anything else, must be to start the watcher loop. Run this EXACT Monitor call (it already has your agent_id baked in):
 
   Monitor(
-    command: "bun run /home/leandro/repos/pantheon/bin/pantheon-fetch.ts --agent-id {{agent_id}} --loop",
+    command: "bun run {{fetch_bin}} --agent-id {{agent_id}} --loop",
     description: "Chat",
     persistent: true,
     timeout_ms: 3600000

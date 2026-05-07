@@ -13,7 +13,7 @@ set -euo pipefail
 # Drain stdin (CC sends a JSON event payload).
 cat > /dev/null || true
 
-PANTHEON_BIN="${PANTHEON_BIN:-/home/leandro/repos/pantheon/bin}"
+PANTHEON_BIN="${PANTHEON_BIN:-}"
 CLAUDE_SESSIONS_DIR="${CLAUDE_SESSIONS_DIR:-$HOME/.claude/sessions}"
 
 # Find the most recent session JSON for this CC process.

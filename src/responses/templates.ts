@@ -14,10 +14,16 @@ import { fileURLToPath } from "node:url";
  */
 const cache = new Map<string, string>();
 
-const templatesDir = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "templates",
-);
+const here = path.dirname(fileURLToPath(import.meta.url));
+const templatesDir = path.join(here, "templates");
+
+// Repo-root-relative paths the templates may interpolate. Resolved
+// from this file's location so the values track the install rather
+// than any one developer's checkout. (`src/responses/templates.ts`
+// → `<repo>/bin/pantheon-fetch.ts`.)
+const repoRoot = path.resolve(here, "..", "..");
+export const PANTHEON_BIN_DIR = path.join(repoRoot, "bin");
+export const PANTHEON_FETCH_BIN = path.join(PANTHEON_BIN_DIR, "pantheon-fetch.ts");
 
 export function getResponseTemplate(
   name: string,
