@@ -5,7 +5,7 @@ import fs from "node:fs";
 /** Bumped when the schema changes. Each `vN` migration runs once and is
  * recorded in `schema_version`. Migrations are idempotent: re-opening an
  * up-to-date DB applies nothing. */
-export const CURRENT_SCHEMA_VERSION = 5;
+export const CURRENT_SCHEMA_VERSION = 6;
 
 /** Migrations indexed by the version they bring the schema to. So
  * `MIGRATIONS[1]` brings a fresh DB from version 0 to version 1. */
@@ -99,6 +99,33 @@ const MIGRATIONS: Record<number, (db: Database) => void> = {
       ALTER TABLE messages ADD COLUMN payload TEXT;
       CREATE INDEX idx_messages_user_kind ON messages(user_kind, ts DESC)
         WHERE user_kind IS NOT NULL;
+    `);
+  },
+  6: (db) => {
+    // Cross-process force-rest / force-exit IPC. A summoner's MCP
+    // process writes a row here addressed to a target agent_id; the
+    // target's pantheon-server consumes pending rows on its 30s
+    // prune tick and runs the rest / exit pipeline. Companion to
+    // PANTHEON_BLOCK_SELF_EXIT — when the spawned agent has
+    // self-exit blocked, the only paths to ending its session are
+    // (a) the watchdog rest_timeout firing, or (b) a force_rest /
+    // force_exit row landing here.
+    //
+    // Rows are DELETE-RETURNING'd on consume — the table holds only
+    // pending requests, never history. TTL-pruned in the same prune
+    // sweep: rows older than a few minutes get deleted (caller died
+    // or never came online; target never came online or died).
+    db.exec(`
+      CREATE TABLE rest_requests (
+        id TEXT PRIMARY KEY,
+        target_agent_id TEXT NOT NULL,
+        from_agent_id TEXT,
+        reason TEXT,
+        kind TEXT NOT NULL CHECK (kind IN ('rest','exit')),
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX idx_rest_requests_target ON rest_requests(target_agent_id);
+      CREATE INDEX idx_rest_requests_created ON rest_requests(created_at);
     `);
   },
 };
