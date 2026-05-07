@@ -49,6 +49,17 @@ const CONFIRM_NEW_PROFILE_SCHEMA = {
     "without it, an unknown profile name triggers an explicit error rather than silent creation.",
 } as const;
 
+const BLOCK_SELF_EXIT_SCHEMA = {
+  type: "boolean",
+  description:
+    "Per-call: when true, the spawned agent CANNOT call `rest`, `exit`, or `logout` on itself — " +
+    "those handlers return `self_exit_blocked` and require the caller (or any peer) to use " +
+    "`force_rest` / `force_exit` to release the session. Default false. " +
+    "The watchdog `rest_timeout` still fires regardless (intentional safety valve so a dead " +
+    "supervisor can't pin a target forever). Use for long-running supervised agents, agents " +
+    "under audit, and phase-6 builders where the caller manages lifecycle.",
+} as const;
+
 const SPAWN_TARGET_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -565,6 +576,7 @@ export const TOOLS: readonly ToolDef[] = [
         model: MODEL_SCHEMA,
         profile: PROFILE_SCHEMA,
         confirm_new_profile: CONFIRM_NEW_PROFILE_SCHEMA,
+        block_self_exit: BLOCK_SELF_EXIT_SCHEMA,
         chat_username_suffix: {
           type: "string",
           description:
@@ -605,6 +617,7 @@ export const TOOLS: readonly ToolDef[] = [
         model: MODEL_SCHEMA,
         profile: PROFILE_SCHEMA,
         confirm_new_profile: CONFIRM_NEW_PROFILE_SCHEMA,
+        block_self_exit: BLOCK_SELF_EXIT_SCHEMA,
         chat_username_suffix: {
           type: "string",
           description:
@@ -651,6 +664,7 @@ export const TOOLS: readonly ToolDef[] = [
         },
         profile: PROFILE_SCHEMA,
         confirm_new_profile: CONFIRM_NEW_PROFILE_SCHEMA,
+        block_self_exit: BLOCK_SELF_EXIT_SCHEMA,
         chat_username_suffix: {
           type: "string",
           description:
@@ -699,6 +713,7 @@ export const TOOLS: readonly ToolDef[] = [
         },
         profile: PROFILE_SCHEMA,
         confirm_new_profile: CONFIRM_NEW_PROFILE_SCHEMA,
+        block_self_exit: BLOCK_SELF_EXIT_SCHEMA,
         chat_username_suffix: {
           type: "string",
           description:

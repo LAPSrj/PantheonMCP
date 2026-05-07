@@ -230,6 +230,13 @@ export async function spawnPersona(
   };
   // Color export so the spawned MCP can echo it via session_info.
   if (persona.color) execEnv.PANTHEON_COLOR = persona.color;
+  // Self-exit gate. When set, the spawned agent's `rest`, `exit`,
+  // and `logout` handlers reject with `self_exit_blocked`. The only
+  // ways to end the session are then (a) watchdog rest_timeout
+  // firing, or (b) any peer calling `force_rest` / `force_exit`
+  // (which writes a rest_requests row that the spawned process's
+  // prune tick consumes). Default off.
+  if (asBoolean(args.block_self_exit)) execEnv.PANTHEON_BLOCK_SELF_EXIT = "1";
 
   // WSL targets need the wt adapter to wrap exec in `wsl.exe -d
   // <distro> -- bash -lc 'cd <cwd> && exec ...'` (see wt.ts notes
@@ -500,6 +507,7 @@ async function performConjure(
       ...(asString(args.model) !== undefined ? { model: asString(args.model) } : {}),
       ...(asString(args.profile) !== undefined ? { profile: asString(args.profile) } : {}),
       ...(asBoolean(args.confirm_new_profile) !== undefined ? { confirm_new_profile: asBoolean(args.confirm_new_profile) } : {}),
+      ...(asBoolean(args.block_self_exit) !== undefined ? { block_self_exit: asBoolean(args.block_self_exit) } : {}),
     },
     ctx,
     persona,

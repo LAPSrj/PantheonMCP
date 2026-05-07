@@ -137,6 +137,24 @@ test("summon: composes registry → plan → spawn → recordSpawn → stamps", 
   expect(stamped?.last_summoned_at).not.toBeNull();
 });
 
+test("summon: block_self_exit=true sets PANTHEON_BLOCK_SELF_EXIT=1 in child env", async () => {
+  fixturePersona();
+  await call("summon", { username: "moth-whistle", block_self_exit: true });
+  expect(recorder[0]!.env?.PANTHEON_BLOCK_SELF_EXIT).toBe("1");
+});
+
+test("summon: block_self_exit defaults to off (env var unset)", async () => {
+  fixturePersona();
+  await call("summon", { username: "moth-whistle" });
+  expect(recorder[0]!.env?.PANTHEON_BLOCK_SELF_EXIT).toBeUndefined();
+});
+
+test("summon: block_self_exit=false explicitly omits the env var", async () => {
+  fixturePersona();
+  await call("summon", { username: "moth-whistle", block_self_exit: false });
+  expect(recorder[0]!.env?.PANTHEON_BLOCK_SELF_EXIT).toBeUndefined();
+});
+
 test("summon: resume + saved session id appends --resume <id>", async () => {
   const persona = fixturePersona();
   // Simulate a previous summon having stored a resume id.
