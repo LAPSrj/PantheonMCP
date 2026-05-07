@@ -17,6 +17,13 @@ export interface HandlerContext {
   /** When `true`, this session was spawned by another agent's `summon` —
    * surfaces in `summoner_username` for memory entries appended here. */
   summoner_username: string | null;
+  /** When `true`, the spawned agent CANNOT call `rest` / `exit` /
+   * `logout` on itself — those handlers return `self_exit_blocked`.
+   * Set from the `PANTHEON_BLOCK_SELF_EXIT` env var at boot, which
+   * the summoner sets via `summon({ block_self_exit: true })`.
+   * Watchdog timeouts and peer `force_rest` / `force_exit` still
+   * fire (intentional safety valves). */
+  block_self_exit: boolean;
   /** Platform detected at MCP boot. Used as a default for `register` /
    * `conjure` if the caller doesn't provide one. */
   platform: "wsl" | "windows" | "mac" | "linux";

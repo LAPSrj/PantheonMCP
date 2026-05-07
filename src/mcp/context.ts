@@ -16,6 +16,9 @@ export interface CreateContextOptions {
   watchdog?: Watchdog;
   /** Set when SUMMON_USERNAME (or pantheon equivalent) is in env. */
   summoner_username?: string | null;
+  /** Read from PANTHEON_BLOCK_SELF_EXIT at boot. When true, the
+   * spawned agent's rest/exit/logout handlers reject. */
+  block_self_exit?: boolean;
   parent_pid?: number;
   platform?: "wsl" | "windows" | "mac" | "linux";
   /** Default no-op; the stdio server wires the real SIGTERM-based exit. */
@@ -56,6 +59,7 @@ export function createContext(options: CreateContextOptions = {}): HandlerContex
     session,
     watchdog,
     summoner_username: options.summoner_username ?? null,
+    block_self_exit: options.block_self_exit ?? false,
     parent_pid: options.parent_pid ?? process.ppid,
     platform: options.platform ?? detectPlatform(),
     scheduleExit:

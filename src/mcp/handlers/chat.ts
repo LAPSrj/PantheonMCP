@@ -385,6 +385,17 @@ export const login: Handler = async (args, ctx) => {
 };
 
 export const logout: Handler = async (_args, ctx) => {
+  if (ctx.block_self_exit) {
+    const summoner = ctx.summoner_username ?? "your summoner";
+    return {
+      error: "self_exit_blocked",
+      message:
+        "`logout` blocked: this session was summoned with block_self_exit=true. " +
+        `Only ${summoner} (or any peer via force_rest) can release you. ` +
+        "Closing chat unilaterally would also defeat supervision.",
+      summoner_username: ctx.summoner_username,
+    };
+  }
   const router = requireRouter(ctx);
   const agentId = ctx.chat_agent_id;
   if (!agentId) {

@@ -94,11 +94,13 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
 
   const router = new ChatRouter({ paths, db: chatDb });
 
+  const blockSelfExit = process.env.PANTHEON_BLOCK_SELF_EXIT === "1";
   const ctx =
     options.context ??
     createContext({
       paths,
       summoner_username: summoner,
+      block_self_exit: blockSelfExit,
       scheduleExit: makeRealExitScheduler(process.ppid),
       spawn_metadata: spawnMetadata,
       chat: router,

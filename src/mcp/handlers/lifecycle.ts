@@ -12,8 +12,35 @@ import {
   asString,
   asStringRequired,
   type Handler,
+  type HandlerContext,
   ToolError,
 } from "../types.ts";
+
+/** Self-exit gate. Returns the structured rejection payload when the
+ * spawning summoner set `block_self_exit: true` (delivered as
+ * `PANTHEON_BLOCK_SELF_EXIT=1` in the spawned process's env, captured
+ * onto ctx at boot). When the gate is open, returns null and the
+ * caller proceeds.
+ *
+ * Watchdog-driven rest still fires (deadline callback bypasses this
+ * — it's the runtime, not the agent). Peer `force_rest` /
+ * `force_exit` write to the rest_requests table and the prune-tick
+ * consumer also bypasses this gate. */
+function selfExitBlocked(
+  ctx: HandlerContext,
+  who: "rest" | "exit" | "logout",
+): Record<string, unknown> | null {
+  if (!ctx.block_self_exit) return null;
+  const summoner = ctx.summoner_username ?? "your summoner";
+  return {
+    error: "self_exit_blocked",
+    message:
+      `\`${who}\` blocked: this session was summoned with block_self_exit=true. ` +
+      `Only ${summoner} (or any peer via force_${who === "logout" ? "rest" : who}) can release you. ` +
+      `Coordinate via chat. The watchdog rest_timeout will still fire if you go fully idle.`,
+    summoner_username: ctx.summoner_username,
+  };
+}
 
 export const allow_rest: Handler = async (_args, ctx) => {
   ctx.setAllowRest(true);
@@ -25,6 +52,8 @@ export const allow_rest: Handler = async (_args, ctx) => {
 };
 
 export const rest: Handler = async (args, ctx) => {
+  const blocked = selfExitBlocked(ctx, "rest");
+  if (blocked) return blocked;
   const summoned = ctx.summoner_username !== null;
   if (!summoned && !ctx.allow_rest_authorized) {
     throw new ToolError(
@@ -126,6 +155,8 @@ export const extend_rest: Handler = async (args, ctx) => {
 };
 
 export const exit: Handler = async (args, ctx) => {
+  const blocked = selfExitBlocked(ctx, "exit");
+  if (blocked) return blocked;
   const delay = asNumber(args.delay_seconds) ?? 2;
   // Teardown: clear the watchdog timer for this session so the daemon
   // doesn't fire onDeadline mid-shutdown.
