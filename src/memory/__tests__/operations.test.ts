@@ -54,12 +54,12 @@ test("appendEntry honors explicit summary, kind, core, summoner_username, detail
     details: "verbatim quote here",
     kind: "decision",
     core: true,
-    summoner_username: "leandro",
+    summoner_username: "alice",
   });
   expect(entry.summary).toBe("explicit summary");
   expect(entry.kind).toBe("decision");
   expect(entry.core).toBe(true);
-  expect(entry.summoner_username).toBe("leandro");
+  expect(entry.summoner_username).toBe("alice");
   expect(entry.details).toBe("verbatim quote here");
 });
 

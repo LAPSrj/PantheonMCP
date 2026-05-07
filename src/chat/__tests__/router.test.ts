@@ -40,7 +40,7 @@ test("add rejects collisions via ChatError", () => {
 });
 
 test("remove drops a guest and lays a tombstone; persona leaves no tombstone", () => {
-  const guest = router.add({ username: "leandro", project: "p", transient: true });
+  const guest = router.add({ username: "alice", project: "p", transient: true });
   const persona = router.add({
     username: "vellumpike",
     project: "p",
@@ -48,7 +48,7 @@ test("remove drops a guest and lays a tombstone; persona leaves no tombstone", (
   });
   router.remove(guest.agent_id);
   router.remove(persona.agent_id);
-  expect(router.tombstones.get("leandro")).not.toBeNull();
+  expect(router.tombstones.get("alice")).not.toBeNull();
   expect(router.tombstones.get("vellumpike")).toBeNull();
 });
 
@@ -167,7 +167,7 @@ test("ask refuses guests as targets", () => {
 // --- promote-in-place ---
 
 test("flipToPromoted clears transient flag on a guest", () => {
-  const g = router.add({ username: "leandro", project: "p", transient: true });
+  const g = router.add({ username: "alice", project: "p", transient: true });
   router.flipToPromoted(g.agent_id);
   expect(router.getByAgentId(g.agent_id)?.transient).toBe(false);
 });
@@ -175,11 +175,11 @@ test("flipToPromoted clears transient flag on a guest", () => {
 // --- handle_recycled broadcast ---
 
 test("consumeTombstoneAndBroadcast emits a project message + clears tombstone", () => {
-  // Seed a tombstone for "leandro".
-  router.tombstones.add("leandro", "old-agent");
-  const fresh = router.add({ username: "leandro", project: "p", transient: false });
-  router.consumeTombstoneAndBroadcast("leandro", fresh.agent_id);
-  expect(router.tombstones.get("leandro")).toBeNull();
+  // Seed a tombstone for "alice".
+  router.tombstones.add("alice", "old-agent");
+  const fresh = router.add({ username: "alice", project: "p", transient: false });
+  router.consumeTombstoneAndBroadcast("alice", fresh.agent_id);
+  expect(router.tombstones.get("alice")).toBeNull();
   // No subscriber other than `fresh` exists, so no one receives the
   // broadcast — but the message is recorded and was emitted.
 });

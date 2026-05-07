@@ -399,7 +399,7 @@ test("exit decrements the window registry when this session was summoned", async
   // Seed the registry as if this session was just spawned.
   const { recordSpawn, getWindowState } = await import("../../launcher/index.ts");
   recordSpawn(ctx.paths, "summon-vellumpike", {
-    summoner: "leandro",
+    summoner: "alice",
     persona: "vellumpike",
     tab_index: 0,
   });

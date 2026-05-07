@@ -204,9 +204,9 @@ test("transitionUnregister deletes registry entry FIRST, then clears claim", () 
 
 test("transitionLoginGuest succeeds when handle is not a registered persona", () => {
   const session = new Session("s-1");
-  transitionLoginGuest(paths, session, "leandro");
+  transitionLoginGuest(paths, session, "alice");
   expect(session.state.kind).toBe("guest");
-  expect(session.guestUsername).toBe("leandro");
+  expect(session.guestUsername).toBe("alice");
 });
 
 test("transitionLoginGuest rejects a handle that is a registered persona", () => {
@@ -236,7 +236,7 @@ test("transitionPromote flips guest → claimed_persona on success", () => {
 
 test("transitionPromote requires the promote handle to match the guest handle", () => {
   const session = new Session("s-1");
-  transitionLoginGuest(paths, session, "leandro");
+  transitionLoginGuest(paths, session, "alice");
   let err: unknown;
   try {
     transitionPromote(paths, session, input({ username: "vellumpike" }));
@@ -245,7 +245,7 @@ test("transitionPromote requires the promote handle to match the guest handle", 
   }
   expect(err).toBeInstanceOf(IdentityError);
   expect((err as IdentityError).code).toBe("invalid_username");
-  expect(session.guestUsername).toBe("leandro");
+  expect(session.guestUsername).toBe("alice");
 });
 
 test("transitionPromote translates collision to already_registered; guest stays guest", () => {

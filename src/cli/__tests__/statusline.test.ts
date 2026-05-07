@@ -49,7 +49,7 @@ test("formatStatusLine: groups by project, asterisks guests", () => {
     },
     {
       agent_id: "2",
-      username: "leandro",
+      username: "alice",
       project: "X",
       transient: true,
       mode: "all",
@@ -73,7 +73,7 @@ test("formatStatusLine: groups by project, asterisks guests", () => {
     },
   ]);
   expect(line).toContain("[pantheon 3]");
-  expect(line).toContain("X:alpha,leandro*");
+  expect(line).toContain("X:alpha,alice*");
   expect(line).toContain("Y:beta");
 });
 

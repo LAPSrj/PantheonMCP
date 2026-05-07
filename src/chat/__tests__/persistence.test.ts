@@ -59,7 +59,7 @@ test("from_transient + from_username_inline persist for guest messages", () => {
       scope: "project",
       project: "p",
       text: "hi from a guest",
-      from_username_inline: "leandro",
+      from_username_inline: "alice",
     }),
   );
   const row = db.query("SELECT * FROM messages WHERE id = ?").get("m-1") as {
@@ -67,7 +67,7 @@ test("from_transient + from_username_inline persist for guest messages", () => {
     from_username_inline: string;
   };
   expect(row.from_transient).toBe(1);
-  expect(row.from_username_inline).toBe("leandro");
+  expect(row.from_username_inline).toBe("alice");
 });
 
 test("queryMessages filters by scope/project/since_ts and sorts ts DESC", () => {

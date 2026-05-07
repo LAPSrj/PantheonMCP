@@ -144,7 +144,7 @@ test("WT adapter (WSL target): drops -d <cwd>, wraps in wsl.exe + bash -l <scrip
   try {
     const plan = resolveSpawnPlan(
       args({
-        cwd: "/home/leandro/builder/nyus",
+        cwd: "/tmp/test-cwd",
         exec_command: "claude",
         exec_args: ["--print", "go"],
         exec_env: { PANTHEON_USERNAME: "swoopfinch", PANTHEON_REST_TIMEOUT: "3600" },
@@ -154,7 +154,7 @@ test("WT adapter (WSL target): drops -d <cwd>, wraps in wsl.exe + bash -l <scrip
       { adapter: wt },
     );
     expect(plan.command).toBe("wt.exe");
-    // Crucially: NO `-d /home/leandro/builder/nyus` (would error 0x8007010b on wt.exe).
+    // Crucially: NO `-d /tmp/test-cwd` (would error 0x8007010b on wt.exe).
     const dIdx = plan.args.indexOf("-d");
     if (dIdx !== -1) {
       expect(plan.args[dIdx + 1]).toBe("Ubuntu-22.04");
@@ -179,7 +179,7 @@ test("WT adapter (WSL target): drops -d <cwd>, wraps in wsl.exe + bash -l <scrip
     const body = fs.readFileSync(scriptPath, "utf8");
     expect(body).toContain("#!/usr/bin/env bash");
     expect(body).toContain(`rm -f -- "$0"`);
-    expect(body).toContain("cd '/home/leandro/builder/nyus'");
+    expect(body).toContain("cd '/tmp/test-cwd'");
     // Sentinel-gated graceful-exit wrapper: claude runs as a child
     // (no `exec`) so bash can read $? and remap 143 → 0 when pantheon
     // wrote the sentinel. External SIGTERMs without the sentinel
@@ -205,7 +205,7 @@ test("WT adapter (split-pane WSL target): same script-file wrap, no -d, no inlin
   try {
     const plan = resolveSpawnPlan(
       args({
-        cwd: "/home/leandro/monitor/nyus",
+        cwd: "/tmp/test-cwd-split",
         wsl_distro: "Ubuntu-22.04",
         target: {
           mode: "split-pane",
@@ -225,7 +225,7 @@ test("WT adapter (split-pane WSL target): same script-file wrap, no -d, no inlin
     }
     const scriptPath = plan.args[plan.args.length - 1] as string;
     const body = fs.readFileSync(scriptPath, "utf8");
-    expect(body).toContain("cd '/home/leandro/monitor/nyus'");
+    expect(body).toContain("cd '/tmp/test-cwd-split'");
   } finally {
     if (prev === undefined) delete process.env.PANTHEON_WT_SCRIPT_DIR;
     else process.env.PANTHEON_WT_SCRIPT_DIR = prev;

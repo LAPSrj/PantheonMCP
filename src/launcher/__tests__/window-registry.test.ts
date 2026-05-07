@@ -30,11 +30,11 @@ test("loadRegistry returns empty registry when file absent", () => {
 
 test("recordSpawn appends to history and increments tabCount", () => {
   recordSpawn(paths, "summon-vellumpike", {
-    summoner: "leandro",
+    summoner: "alice",
     persona: "vellumpike",
   });
   recordSpawn(paths, "summon-vellumpike", {
-    summoner: "leandro",
+    summoner: "alice",
     persona: "vellumpike",
     tab_index: 1,
   });

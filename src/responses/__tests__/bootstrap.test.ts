@@ -6,7 +6,7 @@ function persona(over: Partial<Persona> = {}): Persona {
   return {
     username: "swoopfinch",
     project: "image-gallery",
-    cwd: "/home/leandro/builder/nyus",
+    cwd: "/tmp/test-cwd",
     platform: "wsl",
     wsl_distro: "Ubuntu-22.04",
     launch_command: "claude",
@@ -31,14 +31,14 @@ function persona(over: Partial<Persona> = {}): Persona {
 
 test("standard bootstrap names the persona, project, and cwd; instructs login + watcher + memory", () => {
   const out = buildSummonBootstrap(persona(), {
-    summoner_username: "leandro",
+    summoner_username: "alice",
     rest_timeout: 3600,
   });
   expect(out).toContain("**swoopfinch**");
-  expect(out).toContain("summoned by **leandro**");
+  expect(out).toContain("summoned by **alice**");
   // Identity section.
   expect(out).toContain("**Project:** image-gallery");
-  expect(out).toContain("/home/leandro/builder/nyus (wsl · Ubuntu-22.04)");
+  expect(out).toContain("/tmp/test-cwd (wsl · Ubuntu-22.04)");
   expect(out).toContain("**Description:** block builder");
   expect(out).toContain("typescript, react");
   // Bootstrap steps reference the unified pantheon namespace.
@@ -106,11 +106,11 @@ test("empty runtime prompt yields a placeholder so structure stays consistent", 
 test("provisional persona renders the conjure-bootstrap variant", () => {
   const out = buildSummonBootstrap(persona({ provisional: true }), {
     rest_timeout: 3600,
-    summoner_username: "leandro",
+    summoner_username: "alice",
     runtime_prompt: "you handle the gallery hero block",
   });
   expect(out).toContain("freshly-conjured agent");
-  expect(out).toContain("conjured by **leandro**");
+  expect(out).toContain("conjured by **alice**");
   expect(out).toContain("PROVISIONAL");
   expect(out).toContain("mcp__pantheon__update_profile");
   expect(out).toContain("mcp__pantheon__login");

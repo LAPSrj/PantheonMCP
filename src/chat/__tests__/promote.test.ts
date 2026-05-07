@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 test("promoteInPlace flips guest → claimed_persona", () => {
-  const guest = router.add({ username: "leandro", project: "ops", transient: true });
+  const guest = router.add({ username: "alice", project: "ops", transient: true });
   const persona = promoteInPlace({
     paths,
     router,
@@ -35,13 +35,13 @@ test("promoteInPlace flips guest → claimed_persona", () => {
     default_cwd: "/ops",
     platform: "linux",
   });
-  expect(persona.username).toBe("leandro");
+  expect(persona.username).toBe("alice");
   expect(persona.project).toBe("ops");
   // Subscriber's transient flag flipped.
   expect(router.getByAgentId(guest.agent_id)?.transient).toBe(false);
   expect(router.getByAgentId(guest.agent_id)?.promoted_at).not.toBeNull();
   // Registry now has the persona.
-  expect(readPersona(paths, "leandro")).not.toBeNull();
+  expect(readPersona(paths, "alice")).not.toBeNull();
 });
 
 test("promoteInPlace errors not_a_guest for an already-non-transient subscriber", () => {
@@ -71,7 +71,7 @@ test("promoteInPlace errors not_a_guest for an already-non-transient subscriber"
 });
 
 test("promoteInPlace errors promote_validation_failed when fields incomplete", () => {
-  const guest = router.add({ username: "leandro", project: "ops", transient: true });
+  const guest = router.add({ username: "alice", project: "ops", transient: true });
   let err: unknown;
   try {
     promoteInPlace({

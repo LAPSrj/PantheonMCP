@@ -96,9 +96,9 @@ test("renderSender returns asterisked guest handle from from_username_inline", (
     from_agent_id: "g",
     scope: "project",
     text: "x",
-    from_username_inline: "leandro",
+    from_username_inline: "alice",
   });
-  expect(renderSender(m, () => null)).toBe("leandro*");
+  expect(renderSender(m, () => null)).toBe("alice*");
 });
 
 test("renderSender resolves persona handle via lookup", () => {

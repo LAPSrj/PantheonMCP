@@ -14,7 +14,7 @@ afterEach(() => {
 test("promote-in-place: guest joins, promotes, agent_id preserved, broadcast fires", async () => {
   // Process A logs in as a guest.
   const guestLogin = await call(fix.procA, "login", {
-    username: "leandro",
+    username: "alice",
     project: "ops",
     transient: true,
   });
@@ -25,12 +25,12 @@ test("promote-in-place: guest joins, promotes, agent_id preserved, broadcast fir
   // Verify cross-process visibility (procB sees the guest before promote).
   const beforeList = await call(fix.procB, "list_agents");
   const before = (beforeList.payload.agents as Array<{ username: string; transient: boolean }>);
-  expect(before.find((a) => a.username === "leandro")?.transient).toBe(true);
+  expect(before.find((a) => a.username === "alice")?.transient).toBe(true);
 
   // Procedure: from procA, call login again with `promote` (current
   // session is already a guest; the handler routes through promoteInPlace).
   // Note: today's login handler calls router.add() which would collide
-  // since "leandro" is already taken by procA's own subscriber. To
+  // since "alice" is already taken by procA's own subscriber. To
   // exercise promoteInPlace directly, call the lower-level function.
   const { promoteInPlace, ChatError } = await import("../../chat/index.ts");
   const persona = promoteInPlace({
@@ -46,7 +46,7 @@ test("promote-in-place: guest joins, promotes, agent_id preserved, broadcast fir
     default_cwd: "/ops",
     platform: "linux",
   });
-  expect(persona.username).toBe("leandro");
+  expect(persona.username).toBe("alice");
 
   // agent_id is preserved on the chat side.
   const sub = fix.procA.ctx.chat!.getByAgentId(initialAgentId);
@@ -54,10 +54,10 @@ test("promote-in-place: guest joins, promotes, agent_id preserved, broadcast fir
   expect(sub?.transient).toBe(false);
   expect(sub?.promoted_at).not.toBeNull();
 
-  // Cross-process: procB's list_agents now sees leandro as non-transient.
+  // Cross-process: procB's list_agents now sees alice as non-transient.
   const afterList = await call(fix.procB, "list_agents");
   const after = (afterList.payload.agents as Array<{ username: string; transient: boolean }>);
-  expect(after.find((a) => a.username === "leandro")?.transient).toBe(false);
+  expect(after.find((a) => a.username === "alice")?.transient).toBe(false);
 
   // The promotion broadcast lands in chat.db — both routers can observe
   // via takeMessages on a peer. Add a peer in procB and check.
@@ -72,7 +72,7 @@ test("promote-in-place: guest joins, promotes, agent_id preserved, broadcast fir
   const msgs = queryMessages(fix.procB.db, { scope: "project" });
   expect(msgs.some((m) => m.kind === "promotion")).toBe(true);
 
-  // Verify we can route around: persona "leandro" can now be ask'd
+  // Verify we can route around: persona "alice" can now be ask'd
   // (guests can't be ask targets; personas can — except across
   // routers, see harness comment about pendingAsks). Skip cross-router
   // ask here; just verify cross-process presence.

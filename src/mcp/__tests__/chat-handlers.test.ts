@@ -42,20 +42,20 @@ async function call(tool: string, args: Record<string, unknown> = {}) {
 
 test("login as a guest succeeds and sets chat_agent_id on the context", async () => {
   const r = await call("login", {
-    username: "leandro",
+    username: "alice",
     project: "ops",
     transient: true,
     status: "exploring",
   });
   expect(r.ok).toBe(true);
   expect(r.payload.transient).toBe(true);
-  expect(r.payload.username).toBe("leandro");
+  expect(r.payload.username).toBe("alice");
   expect(typeof r.payload.agent_id).toBe("string");
   expect(ctx.chat_agent_id).toBe(r.payload.agent_id as string);
 });
 
 test("login + logout clears chat_agent_id", async () => {
-  await call("login", { username: "leandro", project: "ops", transient: true });
+  await call("login", { username: "alice", project: "ops", transient: true });
   expect(ctx.chat_agent_id).not.toBeNull();
   const r = await call("logout");
   expect(r.ok).toBe(true);
@@ -466,7 +466,7 @@ test("auto-suffix: join system message marks the rename for peers", async () => 
 
 test("login with promote flips guest → claimed_persona via promoteInPlace", async () => {
   const r = await call("login", {
-    username: "leandro",
+    username: "alice",
     project: "ops",
     transient: true,
     promote: {
@@ -482,9 +482,9 @@ test("login with promote flips guest → claimed_persona via promoteInPlace", as
   // The response surfaces `promoted: true` rather than re-asserting
   // the initial transient flag (which has already been overwritten
   // by the in-place flip).
-  expect(r.payload.username).toBe("leandro");
+  expect(r.payload.username).toBe("alice");
   // Subscriber state should now be non-transient.
-  expect(ctx.chat?.getByUsername("leandro")?.transient).toBe(false);
+  expect(ctx.chat?.getByUsername("alice")?.transient).toBe(false);
 });
 
 // --- send_message + scopes ---
