@@ -2,7 +2,8 @@
   "_template_meta": {
     "name": "role-liaison",
     "description": "Permissions scaffold for a 'liaison' role agent — full chat coordination, memory writes, persona summon/become. No file edits outside its own scratch dirs.",
-    "merge_into": "permissions.allow"
+    "merge_into": "permissions.allow",
+    "_install_note": "Replace <path-to-pantheon> with your local pantheon checkout's absolute path before merging into ~/.claude/settings.json. CC permission patterns are matched literally — env-var expansion does not apply."
   },
   "permissions": {
     "allow": [
@@ -10,8 +11,8 @@
       "Edit(/tmp/**)",
       "Write(/tmp/**)",
 
-      "Bash(bun run /home/leandro/repos/pantheon/bin/pantheon.ts:*)",
-      "Bash(bun run /home/leandro/repos/pantheon/bin/pantheon-fetch.ts:*)",
+      "Bash(bun run <path-to-pantheon>/bin/pantheon.ts:*)",
+      "Bash(bun run <path-to-pantheon>/bin/pantheon-fetch.ts:*)",
 
       "mcp__pantheon__*"
     ],

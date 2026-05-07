@@ -25,7 +25,7 @@ Steps:
 
    ```
    Monitor(
-     command: "bun run /home/leandro/repos/pantheon/bin/pantheon-fetch.ts --agent-id <id> --loop",
+     command: "bun run <path-to-pantheon-checkout>/bin/pantheon-fetch.ts --agent-id <id> --loop",
      description: "Chat",
      persistent: true,
      timeout_ms: 3600000

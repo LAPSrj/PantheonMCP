@@ -12,7 +12,7 @@ pantheon doctor
 ```
 
 (Or, if `pantheon` isn't on the PATH, the equivalent
-`bun run /home/leandro/repos/pantheon/bin/pantheon.ts doctor`.)
+`bun run <path-to-pantheon-checkout>/bin/pantheon.ts doctor`.)
 
 Surface the exit code:
 - 0 → HEALTHY (info lines + maybe warnings, no errors)

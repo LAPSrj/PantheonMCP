@@ -2,14 +2,15 @@
   "_template_meta": {
     "name": "role-monitor",
     "description": "Permissions scaffold for a 'monitor' role agent — read-only inspection + chat coordination. No file edits, no shell execution beyond pantheon-fetch.",
-    "merge_into": "permissions.allow"
+    "merge_into": "permissions.allow",
+    "_install_note": "Replace <path-to-pantheon> with your local pantheon checkout's absolute path before merging into ~/.claude/settings.json. CC permission patterns are matched literally — env-var expansion does not apply."
   },
   "permissions": {
     "allow": [
       "Read(**)",
-      "Bash(bun run /home/leandro/repos/pantheon/bin/pantheon-fetch.ts:*)",
-      "Bash(bun run /home/leandro/repos/pantheon/bin/pantheon.ts statusline:*)",
-      "Bash(bun run /home/leandro/repos/pantheon/bin/pantheon.ts doctor:*)",
+      "Bash(bun run <path-to-pantheon>/bin/pantheon-fetch.ts:*)",
+      "Bash(bun run <path-to-pantheon>/bin/pantheon.ts statusline:*)",
+      "Bash(bun run <path-to-pantheon>/bin/pantheon.ts doctor:*)",
 
       "mcp__pantheon__whoami",
       "mcp__pantheon__claim",

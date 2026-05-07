@@ -16,25 +16,27 @@ each piece by hand.
    cp -r plugin ~/.claude/plugins/pantheon
    ```
 
-2. Add the MCP server entry to your `~/.claude.json`:
+2. Add the MCP server entry to your `~/.claude.json` (replace
+   `/path/to/pantheon` with your checkout location):
 
    ```json
    {
      "mcpServers": {
        "pantheon": {
          "command": "bun",
-         "args": ["run", "/home/leandro/repos/pantheon/bin/pantheon.ts", "serve"]
+         "args": ["run", "/path/to/pantheon/bin/pantheon.ts", "serve"]
        }
      }
    }
    ```
 
-3. Add a statusline entry to your `~/.claude/settings.json`:
+3. Add a statusline entry to your `~/.claude/settings.json` (same
+   substitution):
 
    ```json
    {
      "statusline": {
-       "command": "bun run /home/leandro/repos/pantheon/bin/pantheon.ts statusline"
+       "command": "bun run /path/to/pantheon/bin/pantheon.ts statusline"
      }
    }
    ```
@@ -93,7 +95,7 @@ by reading `commands_dir` from `plugin.json`.
 one-liner like:
 
 ```
-[pantheon 3] pantheon:vellumpike,moth-whistle | ops:leandro*
+[pantheon 3] pantheon:scribe,moth-whistle | ops:alice*
 ```
 
 Numeric prefix is the count of online subscribers; groups are
