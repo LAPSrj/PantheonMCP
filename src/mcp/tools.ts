@@ -32,6 +32,23 @@ const MODEL_SCHEMA = {
     "Claude model codename forwarded as `--model` to the spawned `claude` (e.g. `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5-20251001`). Omit to use the machine default.",
 } as const;
 
+const PROFILE_SCHEMA = {
+  type: "string",
+  description:
+    "Per-call credential profile, forwarded as `--profile=<value>` to the spawned `claude`. " +
+    "Lets a summoner pick which credentials file the spawned agent will bind " +
+    "(e.g. 'work', 'personal'). Pantheon stays agnostic about what the flag means; " +
+    "meaningful only when paired with a profile-aware launcher.",
+} as const;
+
+const CONFIRM_NEW_PROFILE_SCHEMA = {
+  type: "boolean",
+  description:
+    "When set with `profile`, forwards `--confirm-new-profile` to the spawned `claude`. " +
+    "Required by the launcher to create a new profile directory on first use; " +
+    "without it, an unknown profile name triggers an explicit error rather than silent creation.",
+} as const;
+
 const SPAWN_TARGET_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -546,6 +563,8 @@ export const TOOLS: readonly ToolDef[] = [
         },
         permission_mode: PERMISSION_MODE_SCHEMA,
         model: MODEL_SCHEMA,
+        profile: PROFILE_SCHEMA,
+        confirm_new_profile: CONFIRM_NEW_PROFILE_SCHEMA,
         chat_username_suffix: {
           type: "string",
           description:
@@ -584,6 +603,8 @@ export const TOOLS: readonly ToolDef[] = [
         },
         permission_mode: PERMISSION_MODE_SCHEMA,
         model: MODEL_SCHEMA,
+        profile: PROFILE_SCHEMA,
+        confirm_new_profile: CONFIRM_NEW_PROFILE_SCHEMA,
         chat_username_suffix: {
           type: "string",
           description:
@@ -628,6 +649,8 @@ export const TOOLS: readonly ToolDef[] = [
           ...MODEL_SCHEMA,
           description: "Initial model persisted on the new persona (also used for this first spawn).",
         },
+        profile: PROFILE_SCHEMA,
+        confirm_new_profile: CONFIRM_NEW_PROFILE_SCHEMA,
         chat_username_suffix: {
           type: "string",
           description:
@@ -674,6 +697,8 @@ export const TOOLS: readonly ToolDef[] = [
           ...MODEL_SCHEMA,
           description: "Initial model persisted on the new persona (also used for this first spawn).",
         },
+        profile: PROFILE_SCHEMA,
+        confirm_new_profile: CONFIRM_NEW_PROFILE_SCHEMA,
         chat_username_suffix: {
           type: "string",
           description:

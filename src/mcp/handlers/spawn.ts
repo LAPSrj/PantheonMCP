@@ -106,6 +106,15 @@ export async function spawnPersona(
   const launchCommand = persona.launch_command || "claude";
   const launchArgs = [...(persona.launch_args ?? [])];
 
+  // Profile passthrough — per-call args.profile becomes
+  // `--profile=<value>` on the spawned `claude`. Pantheon doesn't
+  // interpret the value; the launcher binds the matching credentials.
+  // `confirm_new_profile` flows through as a bare `--confirm-new-profile`
+  // flag the launcher requires before creating a new profile dir.
+  const profile = asString(args.profile);
+  if (profile) launchArgs.push(`--profile=${profile}`);
+  if (asBoolean(args.confirm_new_profile)) launchArgs.push("--confirm-new-profile");
+
   // Channels passthrough — per-call args.channels (when supplied)
   // overrides persona.channels. Each value becomes one
   // `--channels <value>` flag on the spawned `claude`.
@@ -489,6 +498,8 @@ async function performConjure(
       target: args.target,
       rest_timeout: args.rest_timeout,
       ...(asString(args.model) !== undefined ? { model: asString(args.model) } : {}),
+      ...(asString(args.profile) !== undefined ? { profile: asString(args.profile) } : {}),
+      ...(asBoolean(args.confirm_new_profile) !== undefined ? { confirm_new_profile: asBoolean(args.confirm_new_profile) } : {}),
     },
     ctx,
     persona,
