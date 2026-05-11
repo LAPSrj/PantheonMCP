@@ -313,6 +313,15 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
       // best-effort — never let a sweep crash the daemon
     }
     try {
+      // Auto-reclaim canonical handle for any auto-suffixed
+      // subscriber in this process whose canonical is now free.
+      // Closing half of the remanifest flow (old session has exited,
+      // new is still `<persona>2`); also a general housekeeping pass.
+      ctx.chat?.reclaimCanonicalHandles();
+    } catch {
+      // best-effort
+    }
+    try {
       ctx.chat?.tombstones.prune();
     } catch {
       // best-effort

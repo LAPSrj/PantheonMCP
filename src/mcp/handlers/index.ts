@@ -7,6 +7,7 @@ import * as chat from "./chat.ts";
 import * as schemas from "./schemas.ts";
 import * as projectMemory from "./project-memory.ts";
 import * as history from "./history.ts";
+import * as remanifestMod from "./remanifest.ts";
 
 /** Single registry of every implemented handler keyed by tool name.
  * Tools with no handler entry surface as `unknown_tool` from dispatch. */
@@ -102,4 +103,7 @@ export const HANDLERS: Record<string, Handler> = {
 
   // Conversation-history search (CC JSONLs — NOT durable storage)
   search_history: history.search_history,
+
+  // Remanifest (spawn fresh incarnation of self; old exits when new logs in)
+  remanifest: remanifestMod.remanifest,
 };

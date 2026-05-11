@@ -163,11 +163,17 @@ export async function spawnPersona(
   // bootstrap; an empty runtime prompt yields a placeholder line so the
   // template's structure stays consistent.
   const chatSuffix = asString(args.chat_username_suffix);
+  // Remanifest passthrough — see `remanifest` handler. The prelude is
+  // rendered above the standard bootstrap text; the env var is what
+  // the new pantheon process reads to write the old's exit signal.
+  const remanifestHandoff = asString(args.remanifest_handoff);
+  const remanifestOf = asString(args.remanifest_of);
   const bootstrap = buildSummonBootstrap(persona, {
     runtime_prompt: prompt,
     summoner_username: summonerHandle ?? null,
     rest_timeout: restTimeout,
     ...(chatSuffix !== undefined ? { chat_username_suffix: chatSuffix } : {}),
+    ...(remanifestHandoff !== undefined ? { remanifest_handoff: remanifestHandoff } : {}),
   });
   launchArgs.push(bootstrap);
   const tabTitle = `${persona.username}${persona.session_name ? ` (${persona.summon_count + 1})` : ""}`;
@@ -237,6 +243,17 @@ export async function spawnPersona(
   // (which writes a rest_requests row that the spawned process's
   // prune tick consumes). Default off.
   if (asBoolean(args.block_self_exit)) execEnv.PANTHEON_BLOCK_SELF_EXIT = "1";
+  // Remanifest: when the OLD session is spawning the NEW one, set the
+  // old's chat agent_id so the new's first successful login writes a
+  // rest_requests(exit) row addressed to the old. The old's prune-tick
+  // consumes the row and closes its tab. Without an explicit env var,
+  // pantheon has no way to thread "kill the previous incarnation"
+  // across two processes that share nothing but the SQLite db.
+  if (remanifestOf) execEnv.PANTHEON_REMANIFEST_OF = remanifestOf;
+  // Also surface the handoff text in env so the bootstrap path
+  // (provisional / agent re-reading on a /compact) can re-render it
+  // even after the initial bootstrap is gone from CC's context.
+  if (remanifestHandoff) execEnv.PANTHEON_REMANIFEST_HANDOFF = remanifestHandoff;
 
   // WSL targets need the wt adapter to wrap exec in `wsl.exe -d
   // <distro> -- bash -lc 'cd <cwd> && exec ...'` (see wt.ts notes

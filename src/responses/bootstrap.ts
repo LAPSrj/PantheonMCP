@@ -18,6 +18,11 @@ export interface BootstrapOptions {
    * for cases where another session already holds the canonical
    * handle (testing, multi-tab work, observer instances). */
   chat_username_suffix?: string;
+  /** Optional handoff prelude rendered above the standard bootstrap.
+   * Set by `remanifest` — the calling agent passed text the new
+   * incarnation needs as first-turn context (what state to resume,
+   * what was about to happen, etc.). Verbatim; no escaping. */
+  remanifest_handoff?: string;
 }
 
 /** Build the bootstrap prompt prepended to every summoned agent's
@@ -72,7 +77,11 @@ export function buildSummonBootstrap(
     ? `\n## From the summoner\n\n${opts.runtime_prompt!.trim()}\n`
     : `\n## From the summoner\n\n(no runtime prompt — derive your task from project context)\n`;
 
-  return `You are **${persona.username}**, a specialist agent summoned via pantheon. ${summonedBy}
+  const remanifestPrelude = opts.remanifest_handoff
+    ? `\n\n## Remanifest handoff (from your previous incarnation)\n\n${opts.remanifest_handoff.trim()}\n\n_(You are a remanifested incarnation of \`${persona.username}\`. The previous session is closing as soon as you finish logging in — it asked me to hand you this context so you can pick up cleanly. Your chat handle may be auto-suffixed (e.g. \`${persona.username}2\`) while the old session's row is still in presence; once it clears, pantheon's prune-tick will rename you back to \`${persona.username}\` automatically.)_\n`
+    : "";
+
+  return `You are **${persona.username}**, a specialist agent summoned via pantheon. ${summonedBy}${remanifestPrelude}
 
 ## Bootstrap — do these BEFORE responding to the summoner
 

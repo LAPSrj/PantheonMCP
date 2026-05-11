@@ -351,3 +351,43 @@ test("sweepKeepalive: keepalive_ms <= 0 is a no-op (disabled)", () => {
   expect(r.sweepKeepalive(0, now)).toBe(0);
   expect(r.sweepKeepalive(-1, now)).toBe(0);
 });
+
+// --- reclaimCanonicalHandles (closing half of the remanifest flow) --- //
+
+test("reclaimCanonicalHandles renames a `<base>2` subscriber when canonical is free", () => {
+  // Simulate: canonical `vellumpike` is gone (no row); the suffixed
+  // `vellumpike2` is what survived. Reclaim should rename it back.
+  const sub = router.add({
+    username: "vellumpike2",
+    project: "pantheon",
+    transient: false,
+  });
+  const renamed = router.reclaimCanonicalHandles();
+  expect(renamed).toBe(1);
+  expect(router.getByUsername("vellumpike")?.agent_id).toBe(sub.agent_id);
+  expect(router.getByUsername("vellumpike2")).toBeNull();
+});
+
+test("reclaimCanonicalHandles does NOT rename when canonical is still held", () => {
+  router.add({ username: "vellumpike", project: "p", transient: false });
+  router.add({ username: "vellumpike2", project: "p", transient: false });
+  const renamed = router.reclaimCanonicalHandles();
+  expect(renamed).toBe(0);
+  expect(router.getByUsername("vellumpike")).toBeTruthy();
+  expect(router.getByUsername("vellumpike2")).toBeTruthy();
+});
+
+test("reclaimCanonicalHandles is a no-op when the only subscriber has no digit suffix", () => {
+  router.add({ username: "vellumpike", project: "p", transient: false });
+  expect(router.reclaimCanonicalHandles()).toBe(0);
+});
+
+test("reclaimCanonicalHandles handles multiple suffixed subscribers in one pass", () => {
+  // Two different personas, both currently auto-suffixed, both with
+  // canonical handles free. Both rename in a single pass.
+  router.add({ username: "alpha3", project: "p", transient: false });
+  router.add({ username: "beta7", project: "p", transient: false });
+  expect(router.reclaimCanonicalHandles()).toBe(2);
+  expect(router.getByUsername("alpha")).toBeTruthy();
+  expect(router.getByUsername("beta")).toBeTruthy();
+});

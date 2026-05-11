@@ -195,3 +195,27 @@ test("step 0 also appears in the provisional bootstrap (parity with summon path)
     `"pantheon MCP isn't connected after 15s — I can't bootstrap without it"`,
   );
 });
+
+test("remanifest handoff renders as a prelude above the bootstrap steps", () => {
+  const out = buildSummonBootstrap(persona(), {
+    rest_timeout: 3600,
+    remanifest_handoff:
+      "You were in the middle of investigating the chat-watcher session-expiry bug. Resume that.",
+  });
+  // Header for the prelude.
+  expect(out).toContain("Remanifest handoff");
+  // Body verbatim.
+  expect(out).toContain("chat-watcher session-expiry bug");
+  // Anticipated rename note for the agent.
+  expect(out).toContain("auto-suffixed");
+  // Prelude precedes the standard step 0.
+  const preludeIdx = out.indexOf("Remanifest handoff");
+  const step0Idx = out.indexOf("0. **Wait for your MCP servers");
+  expect(preludeIdx).toBeGreaterThanOrEqual(0);
+  expect(step0Idx).toBeGreaterThan(preludeIdx);
+});
+
+test("standard bootstrap without remanifest_handoff has no prelude block", () => {
+  const out = buildSummonBootstrap(persona(), { rest_timeout: 3600 });
+  expect(out).not.toContain("Remanifest handoff");
+});

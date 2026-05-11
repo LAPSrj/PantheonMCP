@@ -4,6 +4,7 @@ import {
   promoteInPlace,
   type PromoteFields,
 } from "../../chat/index.ts";
+import { writeRestRequest } from "../../lifecycle/index.ts";
 import {
   getSchema as getRegisteredSchema,
   validatePayload,
@@ -353,6 +354,34 @@ export const login: Handler = async (args, ctx) => {
       `pantheon does the transition for you.\n\n` +
       note;
   }
+  // Remanifest signal: if this process was spawned by an OLD session's
+  // `remanifest` call, PANTHEON_REMANIFEST_OF carries that old session's
+  // chat agent_id. Now that we (the NEW session) have successfully
+  // logged in, write a rest_requests(exit) row addressed to the old.
+  // The old's prune-tick will consume it and close its tab. We clear
+  // the env var so a re-login during the same MCP process (e.g.
+  // post-/compact) doesn't re-fire the signal.
+  let remanifest_signal_sent: string | null = null;
+  const remanifestOf = process.env.PANTHEON_REMANIFEST_OF;
+  if (remanifestOf && router.chatDb()) {
+    try {
+      writeRestRequest(router.chatDb()!, {
+        target_agent_id: remanifestOf,
+        from_agent_id: subscriber.agent_id,
+        kind: "exit",
+        reason: `remanifest_complete: ${subscriber.username} is up`,
+      });
+      remanifest_signal_sent = remanifestOf;
+    } catch {
+      // Best-effort — if the write fails the old session stays alive,
+      // which is a graceful failure mode (no orphan; user can close
+      // the old tab manually).
+    }
+    // One-shot: clear so any later login() in this process doesn't
+    // re-signal the (now possibly-gone) old session.
+    delete process.env.PANTHEON_REMANIFEST_OF;
+  }
+
   // Resume summary for non-guest logins — gives the agent a compact
   // view of session-relevant memory state on reconnect (audit B.5).
   // Skipped for guests (no persona file → nothing to summarize).
@@ -360,6 +389,11 @@ export const login: Handler = async (args, ctx) => {
     !subscriber.transient && claimedPersona
       ? buildResumeSummary(ctx.paths, claimedPersona)
       : null;
+
+  // Re-surface the handoff text in the login response when the agent's
+  // initial bootstrap is gone (e.g. post-/compact re-bootstrap). The
+  // env var is set by spawnPersona; we keep it set across logins.
+  const remanifestHandoffEnv = process.env.PANTHEON_REMANIFEST_HANDOFF;
   return {
     ok: true,
     agent_id: subscriber.agent_id,
@@ -380,6 +414,18 @@ export const login: Handler = async (args, ctx) => {
     ...(resumeSummary
       ? { resume_summary: { ...resumeSummary, last_status: subscriber.status || null } }
       : {}),
+    ...(remanifest_signal_sent
+      ? {
+          remanifest: {
+            signaled_exit_to: remanifest_signal_sent,
+            ...(remanifestHandoffEnv
+              ? { handoff: remanifestHandoffEnv }
+              : {}),
+          },
+        }
+      : remanifestHandoffEnv
+        ? { remanifest: { handoff: remanifestHandoffEnv } }
+        : {}),
     note,
   };
 };

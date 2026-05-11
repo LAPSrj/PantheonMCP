@@ -80,6 +80,20 @@ function modeTagForDigest(mode: Mode): string {
 
 const MENTION_RE = /@([a-zA-Z0-9_.\-]+)/g;
 
+const AUTO_SUFFIX_RE = /^(.+?)(\d+)$/;
+
+/** If `handle` looks like an auto-suffixed sibling-incarnation
+ * (`base<digits>`), return the canonical base. Returns null when
+ * the handle has no trailing digits (canonical-only handle). The
+ * `digit_suffix_reserved` rule in identity validation guarantees
+ * persona usernames never carry a trailing digit, so any digit
+ * suffix is auto-assigned and recyclable. */
+function stripAutoSuffix(handle: string): string | null {
+  const m = AUTO_SUFFIX_RE.exec(handle);
+  if (!m) return null;
+  return m[1] ?? null;
+}
+
 export function parseMentions(text: string): string[] {
   const out = new Set<string>();
   for (const m of text.matchAll(MENTION_RE)) out.add(m[1]!);
@@ -151,6 +165,68 @@ export class ChatRouter {
    * connected to this router. */
   getSubscriberProject(agent_id: string): string | null {
     return this.subscribers.get(agent_id)?.project ?? null;
+  }
+
+  /** Auto-reclaim canonical handle for any in-memory subscriber in
+   * THIS process that is currently auto-suffixed (e.g. `vellumpike2`)
+   * and whose canonical handle (e.g. `vellumpike`) is no longer in
+   * use by anyone in the merged in-memory + SQLite-presence view.
+   *
+   * This is the closing half of the remanifest flow: NEW session boots
+   * as `<persona>2` while OLD's row still exists; OLD exits; on the
+   * next prune tick the suffix is recycled back to canonical so
+   * peers see the new incarnation under its real name. Useful even
+   * outside remanifest — any time an auto-suffixed agent outlives
+   * the canonical holder, this pass tidies the room.
+   *
+   * Renames update both the in-memory subscriber map AND the SQLite
+   * presence row, then broadcast a `handle_reclaimed` system message
+   * to the project so peers and the admin console see the rename
+   * inline. Returns the number of subscribers renamed. */
+  reclaimCanonicalHandles(): number {
+    if (this.subscribers.size === 0) return 0;
+    let renamed = 0;
+    for (const sub of Array.from(this.subscribers.values())) {
+      const base = stripAutoSuffix(sub.username);
+      if (base === null) continue;
+      // The base is the canonical handle. If anyone else in the merged
+      // subscriber set holds it, we can't reclaim.
+      const merged = Array.from(this.allKnownSubscribers());
+      const canonicalTaken = merged.some(
+        (m) => m.username === base && m.agent_id !== sub.agent_id,
+      );
+      if (canonicalTaken) continue;
+      const oldName = sub.username;
+      // In-memory rename.
+      sub.username = base;
+      this.usernameIndex.delete(oldName.toLowerCase());
+      this.usernameIndex.set(base.toLowerCase(), sub.agent_id);
+      // SQLite-side rename.
+      if (this.db) {
+        try {
+          this.db.run(
+            `UPDATE subscribers SET username = ? WHERE agent_id = ?`,
+            [base, sub.agent_id],
+          );
+        } catch {
+          // Best-effort — if the row is gone (concurrent prune), the
+          // in-memory rename is still useful for the time the
+          // subscriber lives in this process.
+        }
+      }
+      // Broadcast so peers see the rename inline rather than
+      // silently observing the handle flip on next list_agents.
+      this.addMessage({
+        from_agent_id: "system",
+        scope: "project",
+        project: sub.project,
+        text: `${oldName} reclaimed canonical handle as ${base}.`,
+        system: true,
+        system_kind: "handle_recycled",
+      });
+      renamed++;
+    }
+    return renamed;
   }
 
   // -------------------------------------------------------------------- //
