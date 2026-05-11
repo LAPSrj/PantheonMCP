@@ -235,6 +235,41 @@ test("non-TTY stdin: /dm with missing text emits a usage hint, no message persis
   }
 });
 
+test("keepalive rows are silently skipped on backfill (not rendered to the human)", async () => {
+  // Seed presence + a keepalive row directly in chat.db. The console's
+  // tail-on-start path used to render these as
+  // "HH:MM:SS · keepalive — pinged N: <user>", which is infrastructure
+  // noise the human admin doesn't want. They should be skipped silently.
+  seedSubscriber(paths, "vellumpike", "pantheon");
+  const db = openChatDb(paths.chatDbPath);
+  try {
+    const router = new ChatRouter({ paths, db });
+    router.addMessage({
+      from_agent_id: "system",
+      scope: "dm",
+      target: "vellumpike",
+      text: "keepalive ping — cache-warming heartbeat, no action needed.",
+      system: true,
+      system_kind: "keepalive",
+    });
+  } finally {
+    db.close();
+  }
+
+  const stdout = new StringSink();
+  await runConsole({
+    args: ["--tail", "50", "--no-color", "--no-roster"],
+    stdin: Readable.from(["/quit\n"]),
+    stdout,
+    stderr: new StringSink(),
+    paths,
+  });
+  // Neither the "keepalive — pinged" summary line nor the raw body
+  // text should leak into the rendered output.
+  expect(stdout.buf).not.toContain("keepalive");
+  expect(stdout.buf).not.toContain("pinged");
+});
+
 test("non-TTY stdin: unknown slash command renders inline error but doesn't exit", async () => {
   const stdout = new StringSink();
   await runConsole({

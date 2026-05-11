@@ -226,50 +226,6 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
     printLine(format(cm) + "\n" + separator());
   };
 
-  // ---- Keepalive coalescing (parity with chat-mcp) --------------
-  // Keepalives fan out to every non-channels agent in the same daemon
-  // sweep, so they arrive in a burst (microseconds apart on push, or
-  // a single SQL batch on pull). Rendering each individually means
-  // the admin sees the same roster dump N times in a row. Coalesce:
-  // buffer targets for KEEPALIVE_COALESCE_MS, then emit one summary
-  // line "HH:MM:SS · keepalive — pinged N: alice, bob, ...".
-  const KEEPALIVE_COALESCE_MS = 500;
-  let keepaliveBuf: { ts: number; targets: string[] } | null = null;
-  let keepaliveTimer: ReturnType<typeof setTimeout> | null = null;
-
-  const renderKeepaliveSummary = (ts: number, targets: string[]): string => {
-    const when = new Date(ts).toLocaleTimeString("en-GB");
-    const time = paint("grey", when);
-    // Build each ANSI segment independently — nesting grey around an
-    // already-bolded count would reset to default fg for the rest of
-    // the line when the inner bold-reset fires.
-    const intro = paint("grey", "keepalive — pinged ");
-    const count = paint("bold", paint("grey", String(targets.length)));
-    const tail = paint("grey", `: ${targets.join(", ")}`);
-    return `${time} ${paint("grey", "·")} ${intro}${count}${tail}\n${separator()}`;
-  };
-
-  const flushKeepaliveBuf = (): void => {
-    if (!keepaliveBuf) return;
-    const { ts, targets } = keepaliveBuf;
-    keepaliveBuf = null;
-    if (keepaliveTimer) {
-      clearTimeout(keepaliveTimer);
-      keepaliveTimer = null;
-    }
-    printLine(renderKeepaliveSummary(ts, targets));
-  };
-
-  const handleKeepaliveLive = (row: MessageRow): void => {
-    const target = row.target_username ?? "?";
-    if (!keepaliveBuf) keepaliveBuf = { ts: row.ts, targets: [] };
-    if (!keepaliveBuf.targets.includes(target)) {
-      keepaliveBuf.targets.push(target);
-    }
-    if (keepaliveTimer) clearTimeout(keepaliveTimer);
-    keepaliveTimer = setTimeout(flushKeepaliveBuf, KEEPALIVE_COALESCE_MS);
-  };
-
   // ---- Roster rendering (parity with chat-mcp) -------------------
   // Group by project, sort projects alphabetically, sort users
   // case-insensitive within each project. Transient subscribers
@@ -370,35 +326,14 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
       .query("SELECT * FROM messages ORDER BY seq DESC LIMIT ?")
       .all(parsed.tail) as MessageRow[];
     const ascending = rows.reverse();
-    // Same-second keepalive bucketing: a single daemon sweep fans out
-    // to N agents all within the same ts, so the unfolded tail would
-    // render N copies of the same roster dump. Group consecutive
-    // keepalives sharing a 1-second bucket into one summary line.
-    let pendingKa: { ts: number; targets: string[] } | null = null;
-    const flushPendingKa = (): void => {
-      if (!pendingKa) return;
-      const { ts, targets } = pendingKa;
-      pendingKa = null;
-      stdout.write(renderKeepaliveSummary(ts, targets) + "\n");
-    };
     for (const row of ascending) {
       lastSeenSeq = Math.max(lastSeenSeq, row.seq);
-      if (row.kind === "keepalive") {
-        const bucket = Math.floor(row.ts / 1000);
-        const target = row.target_username ?? "?";
-        if (pendingKa && Math.floor(pendingKa.ts / 1000) === bucket) {
-          if (!pendingKa.targets.includes(target)) pendingKa.targets.push(target);
-        } else {
-          flushPendingKa();
-          pendingKa = { ts: row.ts, targets: [target] };
-        }
-        continue;
-      }
-      flushPendingKa();
+      // Keepalive rows are infrastructure noise — the human admin
+      // doesn't need to see them. Skip silently.
+      if (row.kind === "keepalive") continue;
       const cm = normalizeRow(row, presenceIndex);
       stdout.write(format(cm) + "\n" + separator() + "\n");
     }
-    flushPendingKa();
   } else {
     // Even with no backfill, anchor the live tail to "from now on" so
     // we don't replay old messages once the loop starts.
@@ -451,13 +386,8 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
       let touchedPresenceKind = false;
       for (const row of rows) {
         lastSeenSeq = row.seq;
-        if (row.kind === "keepalive") {
-          handleKeepaliveLive(row);
-          continue;
-        }
-        // Any non-keepalive row breaks the coalesce window — flush
-        // immediately so the summary lands above the next message.
-        flushKeepaliveBuf();
+        // Keepalive rows are infrastructure noise — skip silently.
+        if (row.kind === "keepalive") continue;
         if (
           row.kind &&
           row.kind !== "status_digest" &&
@@ -649,9 +579,6 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
     rl.once("close", () => resolve());
   });
   controller.abort();
-  // Flush any pending keepalive summary so the user sees what landed
-  // in the last debounce window before we exit.
-  flushKeepaliveBuf();
   if (interactive) {
     (stdout as NodeJS.WriteStream).off("resize", onResize);
   }
