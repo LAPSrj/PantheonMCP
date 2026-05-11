@@ -5,6 +5,7 @@ import * as lifecycle from "./lifecycle.ts";
 import * as spawn from "./spawn.ts";
 import * as chat from "./chat.ts";
 import * as schemas from "./schemas.ts";
+import * as projectMemory from "./project-memory.ts";
 
 /** Single registry of every implemented handler keyed by tool name.
  * Tools with no handler entry surface as `unknown_tool` from dispatch. */
@@ -77,4 +78,24 @@ export const HANDLERS: Record<string, Handler> = {
   unregister_schema: schemas.unregister_schema,
   list_schemas: schemas.list_schemas,
   get_schema: schemas.get_schema,
+
+  // Project memory (shared across all agents in a project)
+  append_project_memory: projectMemory.append_project_memory,
+  append_project_memory_any: projectMemory.append_project_memory_any,
+  update_project_memory: projectMemory.update_project_memory,
+  update_project_memory_any: projectMemory.update_project_memory_any,
+  forget_project_memory: projectMemory.forget_project_memory,
+  forget_project_memory_any: projectMemory.forget_project_memory_any,
+  fade_project_memory: projectMemory.fade_project_memory,
+  fade_project_memory_any: projectMemory.fade_project_memory_any,
+  restore_project_memory: projectMemory.restore_project_memory,
+  restore_project_memory_any: projectMemory.restore_project_memory_any,
+  get_project_memory: projectMemory.get_project_memory,
+  get_project_memory_any: projectMemory.get_project_memory_any,
+  recall_project_memory: projectMemory.recall_project_memory,
+  recall_project_memory_any: projectMemory.recall_project_memory_any,
+  list_project_memory: projectMemory.list_project_memory,
+  list_project_memory_any: projectMemory.list_project_memory_any,
+  get_project_memory_details: projectMemory.get_project_memory_details,
+  get_project_memory_details_any: projectMemory.get_project_memory_details_any,
 };

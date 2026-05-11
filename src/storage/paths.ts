@@ -93,6 +93,22 @@ export function personaDir(paths: Paths, handle: string): string {
   return path.join(paths.personasDir, handle);
 }
 
+/** Project-memory file path. Project memory is shared across all
+ * agents in a project — `<root>/projects/<project>/memory.json`.
+ * The project name is used verbatim as a directory component, so it
+ * must be a filesystem-safe string (callers validate before passing). */
+export function projectMemoryFilePath(paths: Paths, project: string): string {
+  return path.join(paths.root, "projects", project, "memory.json");
+}
+
+export function projectMemoryDir(paths: Paths, project: string): string {
+  return path.join(paths.root, "projects", project);
+}
+
+export function ensureProjectMemoryDir(paths: Paths, project: string): void {
+  fs.mkdirSync(projectMemoryDir(paths, project), { recursive: true });
+}
+
 export function ensureDataDirs(paths: Paths): void {
   fs.mkdirSync(paths.personasDir, { recursive: true });
 }

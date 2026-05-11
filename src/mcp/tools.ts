@@ -1213,4 +1213,244 @@ export const TOOLS: readonly ToolDef[] = [
       },
     },
   },
+
+  // --- Project memory (shared across all agents in a project) ---
+  // Bare variants act on the CALLER's project (resolved from chat login).
+  // `_any` variants take an explicit `project` arg — mirrors the
+  // summon / summon_any pattern. Forgotten entries are tombstoned
+  // forever — `restore_project_memory` flips them back to active.
+  {
+    name: "append_project_memory",
+    description:
+      "Append a project-memory entry visible to every agent in this project. Three-tier body (summary / text / details). Stamped with author_username for blame.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["text"],
+      properties: {
+        summary: { type: "string", description: "≤240ch headline; derived from text if omitted." },
+        text: { type: "string", description: "Load-bearing body. Counts toward project-Active budget." },
+        details: { type: "string", description: "Optional ≤5MB unbounded payload. Never inlined at startup." },
+        kind: { type: "string" },
+        core: { type: "boolean", description: "Render in Core tier (always full text, separate 6KB budget)." },
+        expires_at: { type: "number", description: "ms-epoch auto-fade timestamp." },
+      },
+    },
+  },
+  {
+    name: "append_project_memory_any",
+    description: "Same as append_project_memory but explicit cross-project. Requires `project`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["project", "text"],
+      properties: {
+        project: { type: "string" },
+        summary: { type: "string" },
+        text: { type: "string" },
+        details: { type: "string" },
+        kind: { type: "string" },
+        core: { type: "boolean" },
+        expires_at: { type: "number" },
+      },
+    },
+  },
+  {
+    name: "update_project_memory",
+    description:
+      "Patch a project-memory entry (summary / text / details / kind / core / status).",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id"],
+      properties: {
+        id: { type: "string" },
+        summary: { type: "string" },
+        text: { type: "string" },
+        details: { description: "Set to null to clear; string to replace." },
+        kind: { type: "string" },
+        core: { type: "boolean" },
+        status: { type: "string", enum: ["active", "faded", "forgotten"] },
+      },
+    },
+  },
+  {
+    name: "update_project_memory_any",
+    description: "Same as update_project_memory but cross-project. Requires `project`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["project", "id"],
+      properties: {
+        project: { type: "string" },
+        id: { type: "string" },
+        summary: { type: "string" },
+        text: { type: "string" },
+        details: {},
+        kind: { type: "string" },
+        core: { type: "boolean" },
+        status: { type: "string", enum: ["active", "faded", "forgotten"] },
+      },
+    },
+  },
+  {
+    name: "fade_project_memory",
+    description:
+      "Mark a project-memory entry as faded — renders summary-only.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id"],
+      properties: { id: { type: "string" } },
+    },
+  },
+  {
+    name: "fade_project_memory_any",
+    description: "Same as fade_project_memory but cross-project.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["project", "id"],
+      properties: { project: { type: "string" }, id: { type: "string" } },
+    },
+  },
+  {
+    name: "forget_project_memory",
+    description:
+      "Tombstone a project-memory entry. Hidden from default reads but kept FOREVER on disk — recoverable via restore_project_memory.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id"],
+      properties: { id: { type: "string" } },
+    },
+  },
+  {
+    name: "forget_project_memory_any",
+    description: "Same as forget_project_memory but cross-project.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["project", "id"],
+      properties: { project: { type: "string" }, id: { type: "string" } },
+    },
+  },
+  {
+    name: "restore_project_memory",
+    description:
+      "Flip a forgotten/faded project-memory entry back to active.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id"],
+      properties: { id: { type: "string" } },
+    },
+  },
+  {
+    name: "restore_project_memory_any",
+    description: "Same as restore_project_memory but cross-project.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["project", "id"],
+      properties: { project: { type: "string" }, id: { type: "string" } },
+    },
+  },
+  {
+    name: "get_project_memory",
+    description:
+      "Render the caller's project memory in Core / Active / Faded tiers (separate budgets from persona memory: 6KB Core / 4KB Active).",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+    },
+  },
+  {
+    name: "get_project_memory_any",
+    description: "Render another project's memory. Requires `project`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["project"],
+      properties: { project: { type: "string" } },
+    },
+  },
+  {
+    name: "recall_project_memory",
+    description:
+      "Return the full entry by id (summary + text + details + metadata). Distinct from get_project_memory_details, which returns ONLY the details field.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id"],
+      properties: { id: { type: "string" } },
+    },
+  },
+  {
+    name: "recall_project_memory_any",
+    description: "Same as recall_project_memory but cross-project.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["project", "id"],
+      properties: { project: { type: "string" }, id: { type: "string" } },
+    },
+  },
+  {
+    name: "list_project_memory",
+    description:
+      "Index-shape listing for project memory. Cheaper than get_project_memory — no body content.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        status: { type: "string", enum: ["active", "faded", "forgotten", "all"] },
+        core: { type: "boolean" },
+        kind: { type: "string" },
+        since: { type: "string", description: "ISO date lower bound." },
+        filter: { type: "string", description: "Case-insensitive substring against summary + text." },
+        author: { type: "string", description: "Filter by author_username." },
+      },
+    },
+  },
+  {
+    name: "list_project_memory_any",
+    description: "Same as list_project_memory but cross-project.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["project"],
+      properties: {
+        project: { type: "string" },
+        status: { type: "string", enum: ["active", "faded", "forgotten", "all"] },
+        core: { type: "boolean" },
+        kind: { type: "string" },
+        since: { type: "string" },
+        filter: { type: "string" },
+        author: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "get_project_memory_details",
+    description:
+      "Return ONLY the `details` field of a project-memory entry. Returns `details: null` when the entry has no details.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id"],
+      properties: { id: { type: "string" } },
+    },
+  },
+  {
+    name: "get_project_memory_details_any",
+    description: "Same as get_project_memory_details but cross-project.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["project", "id"],
+      properties: { project: { type: "string" }, id: { type: "string" } },
+    },
+  },
 ];
