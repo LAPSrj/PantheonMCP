@@ -58,8 +58,23 @@ export async function executeSpawnPlan(
   const executor = options.executor ?? realSpawnExecutor;
   const probeMs = options.stderr_probe_ms ?? 200;
 
+  // Strip PANTHEON_* from inherited env before merging plan.env.
+  // The spawn handler owns the pantheon-controlled env namespace
+  // (PANTHEON_USERNAME, PANTHEON_SUMMONED, PANTHEON_BLOCK_SELF_EXIT, ...)
+  // and sets each var it wants explicitly. Without this strip, vars
+  // the spawn handler sets only CONDITIONALLY (BLOCK_SELF_EXIT,
+  // REMANIFEST_OF, REMANIFEST_HANDOFF, COLOR) silently inherit from
+  // a summoned parent — so a parent summoned with block_self_exit:true
+  // would propagate that flag to every child it summons, even when
+  // the caller passed block_self_exit:false. Same risk for any future
+  // PANTHEON_* var: opt-in spawn-handler discipline must not be
+  // betrayed by env-spread.
+  const inheritedEnv: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (!k.startsWith("PANTHEON_")) inheritedEnv[k] = v;
+  }
   const child = executor.spawn(plan.command, plan.args, {
-    env: { ...process.env, ...plan.env } as Record<string, string>,
+    env: { ...inheritedEnv, ...plan.env } as Record<string, string>,
     ...(plan.cwd !== undefined ? { cwd: plan.cwd } : {}),
     detached: true,
     stdio: plan.requires_stderr_probe

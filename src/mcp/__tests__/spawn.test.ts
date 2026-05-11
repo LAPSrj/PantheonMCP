@@ -155,6 +155,41 @@ test("summon: block_self_exit=false explicitly omits the env var", async () => {
   expect(recorder[0]!.env?.PANTHEON_BLOCK_SELF_EXIT).toBeUndefined();
 });
 
+test("summon: PANTHEON_* parent-env pollution does NOT propagate to child (launcher strips)", async () => {
+  // The launcher strips PANTHEON_* from inherited env before merging
+  // plan.env, so a summoned parent (which itself has PANTHEON_USERNAME
+  // / PANTHEON_BLOCK_SELF_EXIT / PANTHEON_COLOR set) doesn't silently
+  // leak those vars into children whose spawn handler set them only
+  // conditionally (or not at all). Without this strip, a parent with
+  // block_self_exit:true would propagate that flag to every grandchild.
+  fixturePersona();
+  const stash: Record<string, string | undefined> = {
+    PANTHEON_BLOCK_SELF_EXIT: process.env.PANTHEON_BLOCK_SELF_EXIT,
+    PANTHEON_COLOR: process.env.PANTHEON_COLOR,
+    PANTHEON_REMANIFEST_OF: process.env.PANTHEON_REMANIFEST_OF,
+  };
+  process.env.PANTHEON_BLOCK_SELF_EXIT = "1";
+  process.env.PANTHEON_COLOR = "red";
+  process.env.PANTHEON_REMANIFEST_OF = "ghost-agent";
+  try {
+    await call("summon", { username: "moth-whistle" });
+    expect(recorder[0]!.env?.PANTHEON_BLOCK_SELF_EXIT).toBeUndefined();
+    expect(recorder[0]!.env?.PANTHEON_COLOR).toBeUndefined();
+    expect(recorder[0]!.env?.PANTHEON_REMANIFEST_OF).toBeUndefined();
+    // PANTHEON_* that the spawn handler DOES set explicitly should
+    // land in the child env (sanity: the strip didn't eat too much).
+    expect(recorder[0]!.env?.PANTHEON_USERNAME).toBe("moth-whistle");
+    expect(recorder[0]!.env?.PANTHEON_SUMMONED).toBe("1");
+    // Non-PANTHEON inherited vars should pass through normally.
+    expect(recorder[0]!.env?.PATH).toBeDefined();
+  } finally {
+    for (const [k, v] of Object.entries(stash)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+});
+
 test("summon: resume + saved session id appends --resume <id>", async () => {
   const persona = fixturePersona();
   // Simulate a previous summon having stored a resume id.
