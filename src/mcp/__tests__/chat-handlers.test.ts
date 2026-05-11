@@ -643,6 +643,64 @@ test("ask returns timeout when the target disconnects", async () => {
   expect(payload.status).toBe("timeout");
 });
 
+test("answer to a disconnected asker fails recipient_offline; no row persisted", async () => {
+  // Cross-process semantics: an asker fired an ask (persisted in
+  // chat.db), then disconnected (presence row pruned). When the target
+  // tries to answer, the answer would be a silent drop — pantheon
+  // refuses with recipient_offline, matching the send_message /
+  // send_structured / ask contract. Exercises the SQLite-backed code
+  // path (listActive freshness check) since the in-memory pendingAsks
+  // entry is cleaned by router.remove.
+  const { openChatDb } = await import("../../storage/index.ts");
+  const dbPath = path.join(tmpDir, "answer-offline.db");
+  const chatDb = openChatDb(dbPath);
+  try {
+    const { ChatRouter } = await import("../../chat/index.ts");
+    const router = new ChatRouter({ paths: ctx.paths, db: chatDb });
+
+    const asker = router.add({ username: "asker-offline", project: "p", transient: false });
+    const target = router.add({ username: "target-online", project: "p", transient: false });
+    // Persist an ASK row addressed to target, with correlation_id set.
+    const askId = "test-ask-id-correlate";
+    router.addMessage({
+      from_agent_id: asker.agent_id,
+      scope: "dm",
+      target: "target-online",
+      text: "still there?",
+      ask_id: askId,
+    });
+
+    // Asker disconnects — both in-memory + presence row gone.
+    router.remove(asker.agent_id);
+
+    // Target's answer should throw recipient_offline. Match on the
+    // ChatError.code field (not message string) so the contract Leandro
+    // pinned is what's asserted.
+    const { ChatError } = await import("../../chat/index.ts");
+    let caught: InstanceType<typeof ChatError> | null = null;
+    try {
+      router.answer({
+        from_agent_id: target.agent_id,
+        correlation_id: askId,
+        text: "yes",
+      });
+    } catch (err) {
+      if (err instanceof ChatError) caught = err;
+    }
+    expect(caught).not.toBeNull();
+    expect(caught!.code).toBe("recipient_offline");
+
+    // No answer row landed in chat.db: only the original ask should
+    // exist on this correlation_id.
+    const rows = chatDb
+      .query("SELECT COUNT(*) AS n FROM messages WHERE correlation_id = ?")
+      .get(askId) as { n: number };
+    expect(rows.n).toBe(1);
+  } finally {
+    chatDb.close();
+  }
+});
+
 // --- list_agents + find_role ---
 
 test("list_agents lists connected subscribers", async () => {

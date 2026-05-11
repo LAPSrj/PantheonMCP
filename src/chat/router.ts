@@ -879,20 +879,28 @@ export class ChatRouter {
       );
     }
 
-    // Resolve the asker's username so the answer DM targets them.
+    // Resolve the asker's username — and require liveness. Match the
+    // recipient_offline contract used by send_message / send_structured /
+    // ask: an answer to an asker who is no longer online is a silent
+    // drop unless they happen to backfill via cursor on reconnect, which
+    // pantheon does not promise. In-memory presence (same MCP process)
+    // implies liveness; cross-process requires a fresh-heartbeat check
+    // via listActive (NOT the raw subscribers table — that includes rows
+    // within the prune grace whose heartbeat has already gone stale).
     let askerUsername: string | null = null;
     const askerLocal = this.subscribers.get(askMeta.from_agent_id);
-    if (askerLocal) askerUsername = askerLocal.username;
-    if (!askerUsername && this.db) {
-      const row = this.db
-        .query("SELECT username FROM subscribers WHERE agent_id = ?")
-        .get(askMeta.from_agent_id) as { username: string } | undefined;
-      askerUsername = row?.username ?? null;
+    if (askerLocal) {
+      askerUsername = askerLocal.username;
+    } else if (this.db) {
+      const live = listActive(this.db, { now: this.clock() }).find(
+        (r) => r.agent_id === askMeta!.from_agent_id,
+      );
+      if (live) askerUsername = live.username;
     }
     if (!askerUsername) {
       throw new ChatError(
-        "answer_unknown",
-        `Asker for correlation_id '${args.correlation_id}' is no longer connected.`,
+        "recipient_offline",
+        `Cannot answer ask '${args.correlation_id}' — the asker is no longer connected. The answer was NOT persisted.`,
       );
     }
     return this.addMessage({
