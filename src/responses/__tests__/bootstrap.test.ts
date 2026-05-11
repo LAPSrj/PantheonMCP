@@ -160,3 +160,38 @@ test("non-WSL platform renders the platform line without the distro suffix", () 
   expect(out).toContain("(linux)");
   expect(out).not.toContain("Ubuntu-22.04");
 });
+
+test("step 0 instructs the agent to wait for MCP servers before acting (standard bootstrap)", () => {
+  const out = buildSummonBootstrap(persona(), { rest_timeout: 3600 });
+  // Headline step-0 anchor.
+  expect(out).toContain("0. **Wait for your MCP servers to come up.**");
+  // Names the harness signal channel so agents know what to look for.
+  expect(out).toContain("<system-reminder>");
+  // Concrete retry budget — keeps the wait bounded.
+  expect(out).toContain("retry up to 5 times");
+  // ToolSearch is the right tool to coax connecting MCPs into resolving.
+  expect(out).toContain("ToolSearch");
+  // Anti-hallucination guardrail.
+  expect(out).toContain("Never fabricate tool responses");
+  // Exhaustion path: surface verbatim + stop, don't loop silently.
+  expect(out).toContain(
+    `"pantheon MCP isn't connected after 15s — I can't bootstrap without it"`,
+  );
+  // Step 0 precedes step 1 in the rendered output.
+  const step0Idx = out.indexOf("0. **Wait for your MCP servers");
+  const step1Idx = out.indexOf("1. **Log into chat**");
+  expect(step0Idx).toBeGreaterThanOrEqual(0);
+  expect(step1Idx).toBeGreaterThan(step0Idx);
+});
+
+test("step 0 also appears in the provisional bootstrap (parity with summon path)", () => {
+  const out = buildSummonBootstrap(persona({ provisional: true }), {
+    rest_timeout: 3600,
+  });
+  expect(out).toContain("0. **Wait for your MCP servers to come up.**");
+  expect(out).toContain("retry up to 5 times");
+  expect(out).toContain("Never fabricate tool responses");
+  expect(out).toContain(
+    `"pantheon MCP isn't connected after 15s — I can't bootstrap without it"`,
+  );
+});

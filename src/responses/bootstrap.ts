@@ -78,9 +78,17 @@ export function buildSummonBootstrap(
 
 (Pantheon merges identity + memory + chat into ONE MCP server. All tools are namespaced \`mcp__pantheon__*\`. Your identity is **already claimed at MCP boot** via env vars — do NOT call \`claim\`, \`register\`, \`whoami\`, \`manifest\`, or pick a new name.)
 
+0. **Wait for your MCP servers to come up.** When Claude Code spawns this conversation, MCP servers may still be connecting — \`mcp__*\` tools you'd otherwise expect can be temporarily unavailable. The harness signals this via \`<system-reminder>\` messages naming each server's state ("still connecting" / "now available" / "no longer available").
+
+   If \`mcp__pantheon__*\` tools aren't visible (or any other MCP your task names): wait, don't improvise.
+   - Run \`Bash({ command: "sleep 3" })\` and re-try whatever you needed; retry up to 5 times (≈15s total).
+   - If a system-reminder says a server is "still connecting", call \`ToolSearch\` with a relevant keyword — it will wait for connecting servers to finish before returning.
+   - **Never fabricate tool responses or invent persona state** while a tool is missing. If pantheon isn't there, you don't know what \`login\` / \`get_memory\` would return — guessing breaks identity continuity.
+   - After 5 tries: surface to the human verbatim ("pantheon MCP isn't connected after 15s — I can't bootstrap without it") and stop. The user owns the recovery.
+
 1. **Log into chat** so peers can reach you and the watchdog observes your activity:
    \`mcp__pantheon__login({ username: "${chatHandle}", project: "${persona.project}", status: "summoned; <what you're about to do>" })\`
-   Use EXACTLY \`${chatHandle}\`. If the tool isn't visible yet, run \`Bash({ command: "sleep 3" })\` and retry up to 3 times.${suffixNote}
+   Use EXACTLY \`${chatHandle}\`.${suffixNote}
 
    **Read the response.** If it includes \`auto_suffixed: { intended, assigned }\`, your canonical handle was held by another live session and pantheon assigned you the next sibling-incarnation slot (e.g. \`${persona.username}2\`). This is **normal and expected** — your persona identity stays canonical, only the chat-display handle is suffixed. Mention the rename in your first reply to the summoner so they have context (e.g. "Logged in as \`${persona.username}2\` — peer is online as \`${persona.username}\`."). No further action needed.
 
@@ -148,9 +156,17 @@ Another agent created your registry entry with the basics — username, project,
 
 **Your first task — before responding to the summoner's prompt below:**
 
+0. **Wait for your MCP servers to come up.** When Claude Code spawns this conversation, MCP servers may still be connecting — \`mcp__*\` tools you'd otherwise expect can be temporarily unavailable. The harness signals this via \`<system-reminder>\` messages naming each server's state ("still connecting" / "now available" / "no longer available").
+
+   If \`mcp__pantheon__*\` tools aren't visible (or any other MCP your task names): wait, don't improvise.
+   - Run \`Bash({ command: "sleep 3" })\` and re-try whatever you needed; retry up to 5 times (≈15s total).
+   - If a system-reminder says a server is "still connecting", call \`ToolSearch\` with a relevant keyword — it will wait for connecting servers to finish before returning.
+   - **Never fabricate tool responses or invent persona state** while a tool is missing. If pantheon isn't there, you don't know what \`login\` / \`update_profile\` would return — guessing breaks identity continuity.
+   - After 5 tries: surface to the human verbatim ("pantheon MCP isn't connected after 15s — I can't bootstrap without it") and stop. The user owns the recovery.
+
 1. **Log into chat** so peers can reach you and the watchdog observes activity:
    \`mcp__pantheon__login({ username: "${persona.username}", project: "${persona.project}", status: "conjured; bootstrapping profile" })\`
-   Use EXACTLY \`${persona.username}\`. If the tool isn't visible yet, sleep 3s and retry up to 3 times. Then follow the EXACT \`Monitor(...)\` call in the login response's \`note\` field.
+   Use EXACTLY \`${persona.username}\`. Then follow the EXACT \`Monitor(...)\` call in the login response's \`note\` field.
 
 2. **Read the summoner's prompt** (at the bottom of this message) and the project context to figure out who you are.
 
