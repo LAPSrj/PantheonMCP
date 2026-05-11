@@ -1454,6 +1454,32 @@ export const TOOLS: readonly ToolDef[] = [
     },
   },
 
+  // --- Dream (librarian-driven memory cleanup) ---
+  {
+    name: "dream",
+    description:
+      "Run a librarian pass over memory: a Sonnet 4.6 subagent reviews your active + faded entries (forgotten skipped — forgotten for a reason) and proposes fade / forget / consolidate actions. Plan is auto-applied with an audit entry of kind=dream_log. scope='persona' (default) operates on your own memory; 'project' on the project memory; 'both' runs both. 24h cap per scope — pass `force: true` to override.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        scope: {
+          type: "string",
+          enum: ["persona", "project", "both"],
+          description: "Default 'persona'.",
+        },
+        force: {
+          type: "boolean",
+          description: "Bypass the once-per-24h cap.",
+        },
+        timeout_ms: {
+          type: "number",
+          description: "Librarian subprocess timeout. Default 60000.",
+        },
+      },
+    },
+  },
+
   // --- Remanifest (re-incarnate self with a handoff) ---
   {
     name: "remanifest",

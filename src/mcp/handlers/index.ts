@@ -8,6 +8,7 @@ import * as schemas from "./schemas.ts";
 import * as projectMemory from "./project-memory.ts";
 import * as history from "./history.ts";
 import * as remanifestMod from "./remanifest.ts";
+import * as dreamMod from "./dream.ts";
 
 /** Single registry of every implemented handler keyed by tool name.
  * Tools with no handler entry surface as `unknown_tool` from dispatch. */
@@ -106,4 +107,7 @@ export const HANDLERS: Record<string, Handler> = {
 
   // Remanifest (spawn fresh incarnation of self; old exits when new logs in)
   remanifest: remanifestMod.remanifest,
+
+  // Dream (librarian-driven memory cleanup; persona or project)
+  dream: dreamMod.dream,
 };
