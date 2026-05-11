@@ -217,15 +217,31 @@ export const update_profile: Handler = async (args, ctx) => {
     "color" in patch
   );
   if (profileFieldsChanged && ctx.chat) {
-    const changedKeys = ["description", "expertise", "owns", "color"].filter(
-      (k) => k in patch,
-    );
+    const valueLines: string[] = [];
+    if ("description" in patch) {
+      valueLines.push(`  description: ${patch.description}`);
+    }
+    if ("expertise" in patch) {
+      const exp = (patch.expertise as string[]) ?? [];
+      valueLines.push(`  expertise: ${exp.length === 0 ? "(empty)" : exp.join(", ")}`);
+    }
+    if ("owns" in patch) {
+      const owns = (patch.owns as string[]) ?? [];
+      valueLines.push(`  owns: ${owns.length === 0 ? "(empty)" : owns.join(", ")}`);
+    }
+    if ("color" in patch) {
+      valueLines.push(`  color: ${patch.color === null ? "(cleared)" : patch.color}`);
+    }
+    const broadcastText =
+      valueLines.length === 0
+        ? `${updated.username} updated profile.`
+        : `${updated.username} updated profile:\n${valueLines.join("\n")}`;
     try {
       ctx.chat.addMessage({
         from_agent_id: "system",
         scope: "project",
         project: updated.project,
-        text: `${updated.username} updated profile (${changedKeys.join(", ")}).`,
+        text: broadcastText,
         system: true,
         system_kind: "profile_update",
       });

@@ -981,6 +981,54 @@ test("update_profile: emits system_kind:profile_update to project peers when des
   expect(msg).toBeDefined();
   expect(msg!.text).toContain("alpha updated profile");
   expect(msg!.text).toContain("description");
+  // Body should carry the NEW value, not just the field name — admins
+  // shouldn't have to call list to learn what changed.
+  expect(msg!.text).toContain("updated lead description");
+});
+
+test("update_profile: broadcast body renders new values for expertise/owns/color (not just field names)", async () => {
+  const { createPersona } = await import("../../identity/index.ts");
+  createPersona(ctx.paths, {
+    username: "alpha",
+    project: "X",
+    cwd: "/work/alpha",
+    platform: "linux",
+    description: "lead", expertise: ["x"], owns: ["/work/alpha"],
+  });
+  await call("claim", { username: "alpha" });
+  const peer = ctx.chat!.add({ username: "betauser", project: "X", transient: false });
+  ctx.chat!.takeMessages(peer.agent_id);
+  await call("update_profile", {
+    expertise: ["typescript", "bun", "sqlite"],
+    owns: ["/work/alpha", "/work/shared"],
+    color: "red",
+  });
+  const taken = ctx.chat!.takeMessages(peer.agent_id);
+  const msg = taken.messages.find((m) => m.system_kind === "profile_update");
+  expect(msg).toBeDefined();
+  expect(msg!.text).toContain("alpha updated profile:");
+  expect(msg!.text).toContain("expertise: typescript, bun, sqlite");
+  expect(msg!.text).toContain("owns: /work/alpha, /work/shared");
+  expect(msg!.text).toContain("color: red");
+});
+
+test("update_profile: broadcast renders color clear as '(cleared)' when set to null", async () => {
+  const { createPersona } = await import("../../identity/index.ts");
+  createPersona(ctx.paths, {
+    username: "alpha",
+    project: "X",
+    cwd: "/work/alpha",
+    platform: "linux",
+    description: "lead", expertise: ["x"], owns: ["/work/alpha"],
+  });
+  await call("claim", { username: "alpha" });
+  const peer = ctx.chat!.add({ username: "betauser", project: "X", transient: false });
+  ctx.chat!.takeMessages(peer.agent_id);
+  await call("update_profile", { color: null });
+  const taken = ctx.chat!.takeMessages(peer.agent_id);
+  const msg = taken.messages.find((m) => m.system_kind === "profile_update");
+  expect(msg).toBeDefined();
+  expect(msg!.text).toContain("color: (cleared)");
 });
 
 test("update_profile: non-profile fields (mode, launch_args, channels) do NOT emit a broadcast", async () => {
