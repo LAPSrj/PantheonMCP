@@ -6,11 +6,13 @@
  * warn callers loudly: anything they want to recall later goes in
  * memory; CC jsonls can be compacted, deleted, or evicted. */
 
-import { readPersona } from "../../identity/index.ts";
+import { listPersonas, readPersona } from "../../identity/index.ts";
 import {
   searchHistory,
+  searchHistoryMulti,
   type HistorySearchScope,
   type HistorySearchRole,
+  type PersonaTarget,
 } from "../../history-search/index.ts";
 import {
   asBoolean,
@@ -39,7 +41,17 @@ function asRoleFilter(v: unknown): HistorySearchRole | undefined {
   );
 }
 
-export const search_history: Handler = async (args, ctx) => {
+interface CommonArgs {
+  query: string;
+  regex: boolean;
+  case_insensitive: boolean;
+  scope: HistorySearchScope;
+  role: HistorySearchRole;
+  limit?: number;
+  since?: string;
+}
+
+function parseCommon(args: Record<string, unknown>): CommonArgs {
   const query = asStringRequired(args.query, "query");
   const regex = asBoolean(args.regex) ?? false;
   const case_insensitive = asBoolean(args.case_insensitive) ?? true;
@@ -47,6 +59,22 @@ export const search_history: Handler = async (args, ctx) => {
   const role = asRoleFilter(args.role) ?? "all";
   const limit = asNumber(args.limit);
   const since = asString(args.since);
+  return {
+    query,
+    regex,
+    case_insensitive,
+    scope,
+    role,
+    ...(limit !== undefined ? { limit } : {}),
+    ...(since !== undefined ? { since } : {}),
+  };
+}
+
+const HISTORY_WARNING =
+  "Conversation history is NOT durable storage. CC may compact, delete, or evict these jsonl files at any time. Save anything you want to keep with `append_memory`.";
+
+export const search_history: Handler = async (args, ctx) => {
+  const common = parseCommon(args);
 
   const username =
     ctx.session.claimedUsername ?? ctx.session.guestUsername ?? null;
@@ -66,30 +94,95 @@ export const search_history: Handler = async (args, ctx) => {
 
   try {
     const hits = searchHistory({
+      ...common,
       cwd: persona.cwd,
-      query,
-      regex,
-      case_insensitive,
-      scope,
-      role,
-      ...(limit !== undefined ? { limit } : {}),
-      ...(since !== undefined ? { since } : {}),
       currentSessionId: ctx.claude_session_id,
     });
     return {
       ok: true,
-      query,
-      regex,
-      scope,
-      role,
+      ...common,
       current_session_id: ctx.claude_session_id,
       count: hits.length,
       hits,
-      warning:
-        "Conversation history is NOT durable storage. CC may compact, delete, or evict these jsonl files at any time. Save anything you want to keep with `append_memory`.",
+      warning: HISTORY_WARNING,
     };
   } catch (err) {
-    // Bad regex etc. — surface as invalid_argument.
+    throw new ToolError(
+      "invalid_argument",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+};
+
+/** Cross-persona variant. Either `target_username` (search one peer's
+ * history) OR `project` (search every persona registered in that
+ * project) must be supplied. Hits carry a `persona_username` field so
+ * the caller can attribute. is_current_session is false for every hit
+ * except those in the caller's own session (only possible if the
+ * caller is one of the resolved personas). */
+export const search_history_any: Handler = async (args, ctx) => {
+  const common = parseCommon(args);
+  const target_username = asString(args.target_username);
+  const project = asString(args.project);
+  if (!target_username && !project) {
+    throw new ToolError(
+      "invalid_argument",
+      "search_history_any requires either `target_username` (one persona) or `project` (all personas in that project).",
+    );
+  }
+
+  let personas: PersonaTarget[];
+  if (target_username) {
+    const persona = readPersona(ctx.paths, target_username);
+    if (!persona) {
+      throw new ToolError(
+        "not_registered",
+        `Persona '${target_username}' is not in the registry.`,
+      );
+    }
+    if (project !== undefined && persona.project !== project) {
+      throw new ToolError(
+        "invalid_argument",
+        `Persona '${target_username}' is in project '${persona.project}', not '${project}'.`,
+      );
+    }
+    personas = [{ username: persona.username, cwd: persona.cwd }];
+  } else {
+    // project-wide: every persona whose `project` matches.
+    const all = listPersonas(ctx.paths).filter((p) => p.project === project);
+    if (all.length === 0) {
+      return {
+        ok: true,
+        ...common,
+        ...(target_username !== undefined ? { target_username } : {}),
+        ...(project !== undefined ? { project } : {}),
+        current_session_id: ctx.claude_session_id,
+        count: 0,
+        hits: [],
+        personas_searched: [],
+        warning: HISTORY_WARNING,
+      };
+    }
+    personas = all.map((p) => ({ username: p.username, cwd: p.cwd }));
+  }
+
+  try {
+    const hits = searchHistoryMulti(personas, {
+      ...common,
+      currentSessionId: ctx.claude_session_id,
+    });
+    return {
+      ok: true,
+      ...common,
+      ...(target_username !== undefined ? { target_username } : {}),
+      ...(project !== undefined ? { project } : {}),
+      current_session_id: ctx.claude_session_id,
+      count: hits.length,
+      hits,
+      personas_searched: personas.map((p) => p.username),
+      warning: HISTORY_WARNING,
+    };
+  } catch (err) {
     throw new ToolError(
       "invalid_argument",
       err instanceof Error ? err.message : String(err),

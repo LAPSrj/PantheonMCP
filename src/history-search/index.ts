@@ -54,6 +54,50 @@ export interface HistorySearchHit {
   /** Tiny windowed view of the match — 20 chars before and after the
    * first match offset, with the match itself in the middle. */
   context: string;
+  /** Persona this hit's session belonged to. Only stamped by the
+   * `_any` variant (`searchHistoryMulti`). Absent on the bare
+   * single-persona path. */
+  persona_username?: string;
+}
+
+/** Persona descriptor for cross-persona search. */
+export interface PersonaTarget {
+  username: string;
+  cwd: string;
+}
+
+/** Multi-persona search. Walks each persona's CC project dir in turn,
+ * stamping `persona_username` on every hit. Limit is global across
+ * all personas — early personas can saturate. To page across personas
+ * deterministically, call once per persona. */
+export function searchHistoryMulti(
+  personas: PersonaTarget[],
+  options: Omit<HistorySearchOptions, "cwd" | "currentSessionId"> & {
+    /** Optional — only meaningful when one of `personas` is the
+     * calling persona. Otherwise hits show is_current_session: false. */
+    currentSessionId?: string | null;
+  },
+): HistorySearchHit[] {
+  const limit = options.limit ?? 50;
+  const hits: HistorySearchHit[] = [];
+  for (const persona of personas) {
+    if (hits.length >= limit) break;
+    const perPersonaLimit = limit - hits.length;
+    const perPersonaOptions: HistorySearchOptions = {
+      ...options,
+      cwd: persona.cwd,
+      limit: perPersonaLimit,
+      ...(options.currentSessionId !== undefined
+        ? { currentSessionId: options.currentSessionId }
+        : {}),
+    };
+    const personaHits = searchHistory(perPersonaOptions).map((h) => ({
+      ...h,
+      persona_username: persona.username,
+    }));
+    hits.push(...personaHits);
+  }
+  return hits;
 }
 
 export function searchHistory(

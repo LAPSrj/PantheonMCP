@@ -1523,4 +1523,25 @@ export const TOOLS: readonly ToolDef[] = [
       },
     },
   },
+  {
+    name: "search_history_any",
+    description:
+      "Search another persona's history, or every persona registered in a project. Provide EXACTLY one of `target_username` (one peer) or `project` (every persona in that project). Hits carry `persona_username` for attribution. Same NOT-durable-storage warning as search_history applies. Limit is global across all searched personas — early personas can saturate.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["query"],
+      properties: {
+        query: { type: "string" },
+        target_username: { type: "string", description: "One specific peer to search." },
+        project: { type: "string", description: "All personas in this project. Mutually exclusive with target_username." },
+        regex: { type: "boolean" },
+        case_insensitive: { type: "boolean" },
+        scope: { type: "string", enum: ["current", "previous", "all"] },
+        role: { type: "string", enum: ["user", "assistant", "all"] },
+        limit: { type: "number" },
+        since: { type: "string" },
+      },
+    },
+  },
 ];
