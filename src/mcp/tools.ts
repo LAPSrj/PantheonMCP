@@ -1544,4 +1544,50 @@ export const TOOLS: readonly ToolDef[] = [
       },
     },
   },
+  {
+    name: "get_history_message",
+    description:
+      "Fetch the full untruncated text of one message returned by `search_history`. Use the hit's `session_id` and `message_at` verbatim. Returns the same `extractText` projection the search applied, sliced to `max_chars` (default 256000) with a `truncated` flag and `size_chars` reporting the pre-slice length. NOT durable storage — see `search_history` warning.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["session_id", "message_at"],
+      properties: {
+        session_id: {
+          type: "string",
+          description: "JSONL filename stem from a search_history hit.",
+        },
+        message_at: {
+          type: "string",
+          description:
+            "ISO timestamp from the hit's `message_at` field. First record with this timestamp wins.",
+        },
+        max_chars: {
+          type: "number",
+          description:
+            "Cap on returned content length (UTF-16 code units, matches String.length). Default 256000.",
+        },
+      },
+    },
+  },
+  {
+    name: "get_history_message_any",
+    description:
+      "Fetch one message from another persona's history. Requires `target_username` — pass the `persona_username` from a `search_history_any` hit. No `project` mode: a single (session_id, message_at) resolves to exactly one persona.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["session_id", "message_at", "target_username"],
+      properties: {
+        session_id: { type: "string" },
+        message_at: { type: "string" },
+        target_username: {
+          type: "string",
+          description:
+            "Persona whose history to read. Use the `persona_username` from the search hit.",
+        },
+        max_chars: { type: "number" },
+      },
+    },
+  },
 ];

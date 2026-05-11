@@ -8,6 +8,7 @@
 
 import { listPersonas, readPersona } from "../../identity/index.ts";
 import {
+  fetchHistoryMessage,
   searchHistory,
   searchHistoryMulti,
   type HistorySearchScope,
@@ -188,4 +189,103 @@ export const search_history_any: Handler = async (args, ctx) => {
       err instanceof Error ? err.message : String(err),
     );
   }
+};
+
+interface FetchArgs {
+  session_id: string;
+  message_at: string;
+  max_chars?: number;
+}
+
+function parseFetchArgs(args: Record<string, unknown>): FetchArgs {
+  const session_id = asStringRequired(args.session_id, "session_id");
+  const message_at = asStringRequired(args.message_at, "message_at");
+  const max_chars = asNumber(args.max_chars);
+  return {
+    session_id,
+    message_at,
+    ...(max_chars !== undefined ? { max_chars } : {}),
+  };
+}
+
+/** Fetch the full untruncated text of one message from the calling
+ * persona's CC jsonls. Pair with `search_history` — use the hit's
+ * `session_id` + `message_at` verbatim. Returns `not_found` when the
+ * session file is missing OR no record carries that timestamp. */
+export const get_history_message: Handler = async (args, ctx) => {
+  const parsed = parseFetchArgs(args);
+
+  const username =
+    ctx.session.claimedUsername ?? ctx.session.guestUsername ?? null;
+  if (!username) {
+    throw new ToolError(
+      "no_persona",
+      "get_history_message needs a claimed persona — claim one (or wait for the bootstrap claim) before calling.",
+    );
+  }
+  const persona = readPersona(ctx.paths, username);
+  if (!persona) {
+    throw new ToolError(
+      "not_registered",
+      `Persona '${username}' is not in the registry; can't resolve its cwd.`,
+    );
+  }
+
+  const fetched = fetchHistoryMessage({
+    cwd: persona.cwd,
+    session_id: parsed.session_id,
+    message_at: parsed.message_at,
+    ...(parsed.max_chars !== undefined ? { maxChars: parsed.max_chars } : {}),
+  });
+  if (fetched === null) {
+    throw new ToolError(
+      "not_found",
+      `no message at '${parsed.message_at}' in session '${parsed.session_id}' for persona '${username}'.`,
+    );
+  }
+  return {
+    ok: true,
+    ...fetched,
+    warning: HISTORY_WARNING,
+  };
+};
+
+/** Cross-persona variant. Requires `target_username` (the
+ * `persona_username` from a `search_history_any` hit). No `project`
+ * mode here: a single `(session_id, message_at)` resolves to exactly
+ * one persona, and the search hit already attributes via
+ * `persona_username`. */
+export const get_history_message_any: Handler = async (args, ctx) => {
+  const parsed = parseFetchArgs(args);
+  const target_username = asStringRequired(
+    args.target_username,
+    "target_username",
+  );
+
+  const persona = readPersona(ctx.paths, target_username);
+  if (!persona) {
+    throw new ToolError(
+      "not_registered",
+      `Persona '${target_username}' is not in the registry.`,
+    );
+  }
+
+  const fetched = fetchHistoryMessage({
+    cwd: persona.cwd,
+    session_id: parsed.session_id,
+    message_at: parsed.message_at,
+    ...(parsed.max_chars !== undefined ? { maxChars: parsed.max_chars } : {}),
+  });
+  if (fetched === null) {
+    throw new ToolError(
+      "not_found",
+      `no message at '${parsed.message_at}' in session '${parsed.session_id}' for persona '${target_username}'.`,
+    );
+  }
+  return {
+    ok: true,
+    ...fetched,
+    persona_username: persona.username,
+    warning: HISTORY_WARNING,
+  };
 };

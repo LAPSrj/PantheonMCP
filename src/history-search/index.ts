@@ -100,6 +100,73 @@ export function searchHistoryMulti(
   return hits;
 }
 
+export interface FetchHistoryMessageOptions {
+  cwd: string;
+  session_id: string;
+  message_at: string;
+  /** Cap on returned content length (UTF-16 code units, matches
+   * `String.length`). Default 256_000. */
+  maxChars?: number;
+  claudeProjectsRoot?: string;
+}
+
+export interface FetchedHistoryMessage {
+  session_id: string;
+  message_at: string;
+  role: "user" | "assistant" | "system" | "tool" | "unknown";
+  /** Full `extractText` projection of the matched record, sliced to
+   * `maxChars`. Same projection the search ran against — what you
+   * searched is what you get. */
+  content: string;
+  /** Length of the full content BEFORE the `maxChars` slice. When
+   * `size_chars > maxChars` the response sets `truncated: true`. */
+  size_chars: number;
+  truncated: boolean;
+}
+
+export const DEFAULT_FETCH_MAX_CHARS = 256_000;
+
+/** Fetch one message from a persona's CC jsonl by `(session_id,
+ * message_at)`. Companion to `searchHistory` — the search returns
+ * snippets, this returns the full text. Returns `null` when the
+ * session file doesn't exist OR no record carries the requested
+ * timestamp OR the record's `extractText` projection is empty.
+ *
+ * Ties on `message_at` (rare; CC stamps message-by-message) resolve
+ * to the first matching record in file order. */
+export function fetchHistoryMessage(
+  options: FetchHistoryMessageOptions,
+): FetchedHistoryMessage | null {
+  const maxChars = options.maxChars ?? DEFAULT_FETCH_MAX_CHARS;
+  const projectsRoot =
+    options.claudeProjectsRoot ?? path.join(os.homedir(), ".claude", "projects");
+  const encodedCwd = encodeCwdForClaudeProject(options.cwd);
+  const filePath = path.join(
+    projectsRoot,
+    encodedCwd,
+    `${options.session_id}.jsonl`,
+  );
+  if (!fs.existsSync(filePath)) return null;
+
+  const lines = readJsonlSafely(filePath);
+  for (const line of lines) {
+    const extracted = extractText(line);
+    if (extracted === null) continue;
+    if (extracted.timestamp !== options.message_at) continue;
+    const size_chars = extracted.text.length;
+    const truncated = size_chars > maxChars;
+    return {
+      session_id: options.session_id,
+      message_at: options.message_at,
+      role: extracted.role,
+      content: truncated ? extracted.text.slice(0, maxChars) : extracted.text,
+      size_chars,
+      truncated,
+    };
+  }
+  return null;
+}
+
 export function searchHistory(
   options: HistorySearchOptions,
 ): HistorySearchHit[] {

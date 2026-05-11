@@ -105,6 +105,8 @@ export const HANDLERS: Record<string, Handler> = {
   // Conversation-history search (CC JSONLs — NOT durable storage)
   search_history: history.search_history,
   search_history_any: history.search_history_any,
+  get_history_message: history.get_history_message,
+  get_history_message_any: history.get_history_message_any,
 
   // Remanifest (spawn fresh incarnation of self; old exits when new logs in)
   remanifest: remanifestMod.remanifest,

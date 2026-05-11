@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import {
+  DEFAULT_FETCH_MAX_CHARS,
+  fetchHistoryMessage,
   searchHistory,
   searchHistoryMulti,
   encodeCwdForClaudeProject,
@@ -326,6 +328,205 @@ test("searchHistoryMulti: stamps current_session flag only for the calling perso
     currentSessionId: "s-current",
   });
   expect(hits.every((h) => h.is_current_session)).toBe(true);
+});
+
+test("fetchHistoryMessage: returns full content for matched (session_id, message_at)", () => {
+  writeJsonl("s-1", [
+    {
+      type: "user",
+      message: { content: "first record" },
+      timestamp: "2026-05-10T10:00:00.000Z",
+    },
+    {
+      type: "assistant",
+      message: { content: [{ type: "text", text: "second record full body" }] },
+      timestamp: "2026-05-10T10:01:00.000Z",
+    },
+  ]);
+  const fetched = fetchHistoryMessage({
+    cwd: personaCwd,
+    session_id: "s-1",
+    message_at: "2026-05-10T10:01:00.000Z",
+    claudeProjectsRoot: projectsRoot,
+  });
+  expect(fetched).not.toBeNull();
+  expect(fetched!.role).toBe("assistant");
+  expect(fetched!.content).toBe("second record full body");
+  expect(fetched!.size_chars).toBe("second record full body".length);
+  expect(fetched!.truncated).toBe(false);
+  expect(fetched!.session_id).toBe("s-1");
+  expect(fetched!.message_at).toBe("2026-05-10T10:01:00.000Z");
+});
+
+test("fetchHistoryMessage: missing session file returns null", () => {
+  const fetched = fetchHistoryMessage({
+    cwd: personaCwd,
+    session_id: "does-not-exist",
+    message_at: "2026-05-10T10:00:00.000Z",
+    claudeProjectsRoot: projectsRoot,
+  });
+  expect(fetched).toBeNull();
+});
+
+test("fetchHistoryMessage: session exists but no matching timestamp returns null", () => {
+  writeJsonl("s-1", [
+    {
+      type: "user",
+      message: { content: "only one" },
+      timestamp: "2026-05-10T10:00:00.000Z",
+    },
+  ]);
+  const fetched = fetchHistoryMessage({
+    cwd: personaCwd,
+    session_id: "s-1",
+    message_at: "2026-05-10T11:00:00.000Z",
+    claudeProjectsRoot: projectsRoot,
+  });
+  expect(fetched).toBeNull();
+});
+
+test("fetchHistoryMessage: max_chars truncates content and flags truncated:true", () => {
+  const big = "x".repeat(500);
+  writeJsonl("s-1", [
+    {
+      type: "user",
+      message: { content: big },
+      timestamp: "2026-05-10T10:00:00.000Z",
+    },
+  ]);
+  const fetched = fetchHistoryMessage({
+    cwd: personaCwd,
+    session_id: "s-1",
+    message_at: "2026-05-10T10:00:00.000Z",
+    maxChars: 100,
+    claudeProjectsRoot: projectsRoot,
+  });
+  expect(fetched).not.toBeNull();
+  expect(fetched!.content.length).toBe(100);
+  expect(fetched!.size_chars).toBe(500);
+  expect(fetched!.truncated).toBe(true);
+});
+
+test("fetchHistoryMessage: content at exactly max_chars is NOT truncated", () => {
+  const exact = "y".repeat(100);
+  writeJsonl("s-1", [
+    {
+      type: "user",
+      message: { content: exact },
+      timestamp: "2026-05-10T10:00:00.000Z",
+    },
+  ]);
+  const fetched = fetchHistoryMessage({
+    cwd: personaCwd,
+    session_id: "s-1",
+    message_at: "2026-05-10T10:00:00.000Z",
+    maxChars: 100,
+    claudeProjectsRoot: projectsRoot,
+  });
+  expect(fetched).not.toBeNull();
+  expect(fetched!.content.length).toBe(100);
+  expect(fetched!.size_chars).toBe(100);
+  expect(fetched!.truncated).toBe(false);
+});
+
+test("fetchHistoryMessage: default max_chars is DEFAULT_FETCH_MAX_CHARS", () => {
+  expect(DEFAULT_FETCH_MAX_CHARS).toBe(256_000);
+  writeJsonl("s-1", [
+    {
+      type: "user",
+      message: { content: "small body" },
+      timestamp: "2026-05-10T10:00:00.000Z",
+    },
+  ]);
+  const fetched = fetchHistoryMessage({
+    cwd: personaCwd,
+    session_id: "s-1",
+    message_at: "2026-05-10T10:00:00.000Z",
+    claudeProjectsRoot: projectsRoot,
+  });
+  expect(fetched!.truncated).toBe(false);
+  expect(fetched!.content).toBe("small body");
+});
+
+test("fetchHistoryMessage: multi-block content uses stringifyContent projection", () => {
+  writeJsonl("s-1", [
+    {
+      type: "assistant",
+      message: {
+        content: [
+          { type: "text", text: "line one" },
+          { type: "tool_use", name: "Read", input: { file: "/tmp/x" } },
+          { type: "text", text: "line three" },
+        ],
+      },
+      timestamp: "2026-05-10T10:00:00.000Z",
+    },
+  ]);
+  const fetched = fetchHistoryMessage({
+    cwd: personaCwd,
+    session_id: "s-1",
+    message_at: "2026-05-10T10:00:00.000Z",
+    claudeProjectsRoot: projectsRoot,
+  });
+  expect(fetched).not.toBeNull();
+  expect(fetched!.content).toContain("line one");
+  expect(fetched!.content).toContain('[tool_use Read: {"file":"/tmp/x"}]');
+  expect(fetched!.content).toContain("line three");
+});
+
+test("fetchHistoryMessage: first record wins on duplicate timestamp", () => {
+  writeJsonl("s-1", [
+    {
+      type: "user",
+      message: { content: "first one" },
+      timestamp: "2026-05-10T10:00:00.000Z",
+    },
+    {
+      type: "user",
+      message: { content: "second one" },
+      timestamp: "2026-05-10T10:00:00.000Z",
+    },
+  ]);
+  const fetched = fetchHistoryMessage({
+    cwd: personaCwd,
+    session_id: "s-1",
+    message_at: "2026-05-10T10:00:00.000Z",
+    claudeProjectsRoot: projectsRoot,
+  });
+  expect(fetched!.content).toBe("first one");
+});
+
+test("fetchHistoryMessage: record with empty extractable content is skipped", () => {
+  // Type 'user' with empty content array → extractText returns null.
+  writeJsonl("s-1", [
+    {
+      type: "user",
+      message: { content: [] },
+      timestamp: "2026-05-10T10:00:00.000Z",
+    },
+    {
+      type: "user",
+      message: { content: "real content" },
+      timestamp: "2026-05-10T10:01:00.000Z",
+    },
+  ]);
+  // Asking for the empty timestamp → null (skipped).
+  const empty = fetchHistoryMessage({
+    cwd: personaCwd,
+    session_id: "s-1",
+    message_at: "2026-05-10T10:00:00.000Z",
+    claudeProjectsRoot: projectsRoot,
+  });
+  expect(empty).toBeNull();
+  // Asking for the real one → returned even though the empty one
+  // appeared first in the file.
+  const real = fetchHistoryMessage({
+    cwd: personaCwd,
+    session_id: "s-1",
+    message_at: "2026-05-10T10:01:00.000Z",
+    claudeProjectsRoot: projectsRoot,
+  });
+  expect(real!.content).toBe("real content");
 });
 
 test("since filter excludes older messages", () => {
