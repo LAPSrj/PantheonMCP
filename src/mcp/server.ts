@@ -15,6 +15,7 @@ import { pruneStaleRestRequests } from "../lifecycle/index.ts";
 import { consumeForceLifecycleRequests } from "./handlers/lifecycle.ts";
 import { expireHandoffs } from "../memory/index.ts";
 import { openChatDb, resolvePaths } from "../storage/index.ts";
+import { importLegacySchemas } from "../schemas/index.ts";
 import {
   isContextCheckDisabled,
   parseThresholdsFromEnv,
@@ -89,6 +90,14 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
   let chatDb: ReturnType<typeof openChatDb> | null = null;
   try {
     chatDb = openChatDb(paths.chatDbPath);
+    // Idempotent legacy import: pull any pre-v7 schemas.json entries
+    // into chat.db under the `__legacy_global__` project bucket. Safe
+    // to call on every boot — same-id imports are upsert-no-op'd.
+    try {
+      importLegacySchemas(chatDb, paths);
+    } catch {
+      // Non-fatal — legacy import is convenience, not correctness.
+    }
   } catch {
     // best-effort — chat persistence is not strictly required for the
     // tools to function (in-memory dispatch still works).

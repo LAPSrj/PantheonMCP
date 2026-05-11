@@ -568,12 +568,28 @@ export const send_structured: Handler = async (args, ctx) => {
   // worse than the false-negative of refusing the send.
   let schemaValidated = false;
   if (schemaId !== undefined) {
-    const stored = getRegisteredSchema(ctx.paths, schemaId);
+    const senderProject =
+      (ctx.chat_agent_id && ctx.chat?.getSubscriberProject(ctx.chat_agent_id)) ||
+      null;
+    if (!senderProject) {
+      throw new ToolError(
+        "no_project_scope",
+        "send_structured with schema_id requires a chat login (schemas are project-scoped).",
+      );
+    }
+    const routerDb = ctx.chat?.chatDb() ?? null;
+    if (!routerDb) {
+      throw new ToolError(
+        "no_chat_router",
+        "Schema lookup requires chat.db (router has no SQLite handle).",
+      );
+    }
+    const stored = getRegisteredSchema(routerDb, senderProject, schemaId);
     if (!stored) {
       throw new ToolError(
         "schema_not_found",
-        `Schema '${schemaId}' is not registered. Register it first with \`register_schema\`, or omit \`schema_id\` to send without validation.`,
-        { schema_id: schemaId },
+        `Schema '${schemaId}' is not registered in project '${senderProject}' (or the legacy fallback). Register it first with \`register_schema\`, or omit \`schema_id\` to send without validation.`,
+        { schema_id: schemaId, project: senderProject },
       );
     }
     const errors = validatePayload(payload, stored.schema);

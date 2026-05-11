@@ -5,7 +5,7 @@ import fs from "node:fs";
 /** Bumped when the schema changes. Each `vN` migration runs once and is
  * recorded in `schema_version`. Migrations are idempotent: re-opening an
  * up-to-date DB applies nothing. */
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 7;
 
 /** Migrations indexed by the version they bring the schema to. So
  * `MIGRATIONS[1]` brings a fresh DB from version 0 to version 1. */
@@ -126,6 +126,31 @@ const MIGRATIONS: Record<number, (db: Database) => void> = {
       );
       CREATE INDEX idx_rest_requests_target ON rest_requests(target_agent_id);
       CREATE INDEX idx_rest_requests_created ON rest_requests(created_at);
+    `);
+  },
+  7: (db) => {
+    // Project-scoped schema registry. Pantheon's `register_schema` /
+    // `get_schema` / `list_schemas` / `unregister_schema` (and
+    // `send_structured`'s validation lookup) move out of the
+    // file-backed `~/.pantheon/schemas.json` and into chat.db, keyed
+    // by (project, schema_id). Same DB as subscribers and messages —
+    // cross-process consistency comes for free.
+    //
+    // Legacy entries from schemas.json are imported into project
+    // `__legacy_global__` on every chat.db open while the file is
+    // still present (idempotent; see `importLegacySchemas`).
+    db.exec(`
+      CREATE TABLE schemas (
+        project TEXT NOT NULL,
+        schema_id TEXT NOT NULL,
+        body_json TEXT NOT NULL,
+        description TEXT,
+        registered_by TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (project, schema_id)
+      );
+      CREATE INDEX idx_schemas_project ON schemas(project);
     `);
   },
 };

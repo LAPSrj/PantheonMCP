@@ -16,5 +16,7 @@ export {
   getSchema,
   registerSchema,
   unregisterSchema,
+  importLegacySchemas,
+  LEGACY_GLOBAL_PROJECT,
   type RegisterOptions,
 } from "./registry.ts";

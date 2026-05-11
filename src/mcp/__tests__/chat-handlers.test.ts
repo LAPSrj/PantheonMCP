@@ -2,16 +2,35 @@ import { test, expect, beforeEach, afterEach } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { resolvePaths } from "../../storage/index.ts";
+import { openChatDb, resolvePaths } from "../../storage/index.ts";
 import { Session } from "../../identity/index.ts";
 import { Watchdog, realScheduler } from "../../watchdog/index.ts";
 import { ChatRouter } from "../../chat/index.ts";
 import { createContext } from "../context.ts";
 import { dispatch } from "../dispatch.ts";
 import type { HandlerContext } from "../types.ts";
+import type { Database } from "bun:sqlite";
 
 let tmpDir: string;
 let ctx: HandlerContext;
+// Optional db handle a test can open to wire ctx.chat with a real
+// SQLite backing (e.g. schema-registry tests). Closed in afterEach
+// when set. Most tests leave this null and run with an in-memory
+// router.
+let ctxChatDb: Database | null = null;
+
+/** Replace ctx.chat with a db-backed router. Idempotent within a
+ * single test — call once before exercising schema-registry tools. */
+function useDbBackedRouter(): void {
+  ctxChatDb = openChatDb(ctx.paths.chatDbPath);
+  // Augment the existing ctx with a router that points at the same db.
+  // Casting through Mutable<HandlerContext> would be over-engineered for
+  // a test helper; the field is `readonly` only at the type level.
+  (ctx as { chat: ChatRouter }).chat = new ChatRouter({
+    paths: ctx.paths,
+    db: ctxChatDb,
+  });
+}
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pantheon-chat-handlers-"));
@@ -27,6 +46,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  if (ctxChatDb) {
+    ctxChatDb.close();
+    ctxChatDb = null;
+  }
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -1080,6 +1103,7 @@ test("send_structured: payload round-trips via get_message", async () => {
 });
 
 test("send_structured: unknown schema_id errors with schema_not_found", async () => {
+  useDbBackedRouter();
   await call("login", { username: "alpha", project: "X", transient: false });
   const r = await call("send_structured", {
     kind: "pushback",
@@ -1091,6 +1115,7 @@ test("send_structured: unknown schema_id errors with schema_not_found", async ()
 });
 
 test("send_structured: registered schema validates payload + sets schema_validated:true", async () => {
+  useDbBackedRouter();
   await call("login", { username: "alpha", project: "X", transient: false });
   ctx.chat!.add({ username: "beta", project: "X", transient: false });
   await call("register_schema", {
@@ -1170,6 +1195,7 @@ test("login: guest (transient) response has no resume_summary", async () => {
 });
 
 test("send_structured: payload failing schema is rejected", async () => {
+  useDbBackedRouter();
   await call("login", { username: "alpha", project: "X", transient: false });
   await call("register_schema", {
     schema_id: "test/pushback@v1",

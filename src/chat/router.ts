@@ -144,6 +144,15 @@ export class ChatRouter {
     return this.db;
   }
 
+  /** Resolve the project an agent is logged into. Used by the
+   * schema-registry handlers to scope `register_schema` / `get_schema`
+   * etc. to the caller's project without each handler reaching into
+   * the subscriber map directly. Returns null when the agent is not
+   * connected to this router. */
+  getSubscriberProject(agent_id: string): string | null {
+    return this.subscribers.get(agent_id)?.project ?? null;
+  }
+
   // -------------------------------------------------------------------- //
   // Subscriber lifecycle
   // -------------------------------------------------------------------- //
