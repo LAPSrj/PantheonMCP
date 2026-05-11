@@ -1453,4 +1453,25 @@ export const TOOLS: readonly ToolDef[] = [
       properties: { project: { type: "string" }, id: { type: "string" } },
     },
   },
+
+  // --- Conversation-history search (CC JSONLs) ---
+  {
+    name: "search_history",
+    description:
+      "Search this persona's past CC conversations (JSONL files under ~/.claude/projects/<cwd>/). WARNING: not durable storage — CC may compact / delete / evict these files at any time. Save anything you want to keep with `append_memory`. scope: 'current' = this conversation only; 'previous' = every OTHER session; 'all' = both (default). Supports regex via `regex: true`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["query"],
+      properties: {
+        query: { type: "string", description: "Substring (default) or regex source (when regex: true)." },
+        regex: { type: "boolean", description: "Treat `query` as a JS regex." },
+        case_insensitive: { type: "boolean", description: "Default true." },
+        scope: { type: "string", enum: ["current", "previous", "all"], description: "Default 'all'." },
+        role: { type: "string", enum: ["user", "assistant", "all"], description: "Default 'all'." },
+        limit: { type: "number", description: "Default 50." },
+        since: { type: "string", description: "ISO date lower bound on message timestamp." },
+      },
+    },
+  },
 ];

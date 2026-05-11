@@ -6,6 +6,7 @@ import * as spawn from "./spawn.ts";
 import * as chat from "./chat.ts";
 import * as schemas from "./schemas.ts";
 import * as projectMemory from "./project-memory.ts";
+import * as history from "./history.ts";
 
 /** Single registry of every implemented handler keyed by tool name.
  * Tools with no handler entry surface as `unknown_tool` from dispatch. */
@@ -98,4 +99,7 @@ export const HANDLERS: Record<string, Handler> = {
   list_project_memory_any: projectMemory.list_project_memory_any,
   get_project_memory_details: projectMemory.get_project_memory_details,
   get_project_memory_details_any: projectMemory.get_project_memory_details_any,
+
+  // Conversation-history search (CC JSONLs — NOT durable storage)
+  search_history: history.search_history,
 };
