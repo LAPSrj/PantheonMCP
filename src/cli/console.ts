@@ -618,6 +618,19 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
   if (interactive) {
     rl.prompt();
     rl.on("line", (line) => {
+      // Cursor-math compensation. After drawStatusArea + rl.prompt(true), the
+      // cursor sits at the END of the prompt row. When the user hits Enter,
+      // readline echoes \r\n so the cursor lands ONE row below the prompt.
+      // clearStatusArea then moves up by `statusLines.length` rows — but that
+      // count is the height of the roster ITSELF, not roster+prompt. So the
+      // up-move under-shoots by one row and lands one row INSIDE the roster
+      // strip, leaving the top roster line ("X agent(s) connected:") visible
+      // above whatever content gets written next. Fix: nudge the cursor back
+      // up onto the prompt row before any clearStatusArea fires (whether
+      // inside handleLine via printLine or at the post-handleLine redraw).
+      // The tail-loop printLine path doesn't need this — its cursor is
+      // already on the prompt row when it fires.
+      if (rosterEnabled) stdout.write("\x1b[1A\r");
       const cont = handleLine(line);
       if (!cont) {
         controller.abort();
