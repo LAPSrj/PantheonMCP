@@ -4,7 +4,26 @@ import path from "node:path";
 import os from "node:os";
 import { Readable, Writable } from "node:stream";
 import { resolvePaths, openChatDb, type Paths } from "../../storage/index.ts";
+import { ChatRouter } from "../../chat/index.ts";
 import { runConsole } from "../console.ts";
+
+/** Helper: register a live presence row so console-CLI offline checks
+ * see the username/project as connected. The console refuses /dm and
+ * /proj when the target isn't online (recipient_offline parity with
+ * the MCP send_message / send_structured / ask handlers). */
+function seedSubscriber(
+  paths: Paths,
+  username: string,
+  project: string,
+): void {
+  const db = openChatDb(paths.chatDbPath);
+  try {
+    const router = new ChatRouter({ paths, db });
+    router.add({ username, project, transient: false });
+  } finally {
+    db.close();
+  }
+}
 
 let tmpDir: string;
 let paths: Paths;
@@ -93,6 +112,9 @@ test("non-TTY stdin: a bare line broadcasts to scope=global as admin", async () 
 });
 
 test("non-TTY stdin: /dm sends a scoped DM to the named target", async () => {
+  // Recipient must be online for the DM to go through (recipient_offline
+  // parity with MCP send_message). Seed a live presence row first.
+  seedSubscriber(paths, "vellumpike", "pantheon");
   await runConsole({
     args: ["--no-tail", "--no-color", "--no-roster"],
     stdin: Readable.from(["/dm vellumpike check the build\n"]),
@@ -113,7 +135,33 @@ test("non-TTY stdin: /dm sends a scoped DM to the named target", async () => {
   }
 });
 
+test("non-TTY stdin: /dm to an OFFLINE target refuses with recipient_offline; nothing persisted", async () => {
+  // No seed — the named user has never logged in, so they're offline.
+  const stdout = new StringSink();
+  await runConsole({
+    args: ["--no-tail", "--no-color", "--no-roster"],
+    stdin: Readable.from(["/dm ghost-user hello?\n"]),
+    stdout,
+    stderr: new StringSink(),
+    paths,
+  });
+  expect(stdout.buf).toContain("recipient_offline");
+  expect(stdout.buf).toContain("ghost-user");
+  // No row landed in chat.db — refuse means refuse, no phantom queue.
+  const db = openChatDb(paths.chatDbPath);
+  try {
+    const rows = db
+      .query("SELECT COUNT(*) AS n FROM messages WHERE scope = 'dm'")
+      .get() as { n: number };
+    expect(rows.n).toBe(0);
+  } finally {
+    db.close();
+  }
+});
+
 test("non-TTY stdin: /proj sends to the named project", async () => {
+  // At least one agent must be in the project for the broadcast to go.
+  seedSubscriber(paths, "vellumpike", "nyus");
   await runConsole({
     args: ["--no-tail", "--no-color", "--no-roster"],
     stdin: Readable.from(["/proj nyus pause work\n"]),
@@ -128,6 +176,28 @@ test("non-TTY stdin: /proj sends to the named project", async () => {
       .get("project") as { text: string; project: string | null };
     expect(row.text).toBe("pause work");
     expect(row.project).toBe("nyus");
+  } finally {
+    db.close();
+  }
+});
+
+test("non-TTY stdin: /proj to a project with ZERO agents refuses; nothing persisted", async () => {
+  const stdout = new StringSink();
+  await runConsole({
+    args: ["--no-tail", "--no-color", "--no-roster"],
+    stdin: Readable.from(["/proj abandoned no one home\n"]),
+    stdout,
+    stderr: new StringSink(),
+    paths,
+  });
+  expect(stdout.buf).toContain("recipient_offline");
+  expect(stdout.buf).toContain("'abandoned'");
+  const db = openChatDb(paths.chatDbPath);
+  try {
+    const rows = db
+      .query("SELECT COUNT(*) AS n FROM messages WHERE scope = 'project'")
+      .get() as { n: number };
+    expect(rows.n).toBe(0);
   } finally {
     db.close();
   }

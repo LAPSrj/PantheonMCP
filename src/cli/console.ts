@@ -553,13 +553,17 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
         printLine(paint("red", "empty text"));
         return true;
       }
-      // Soft-warn: chat router has no offline-DM queue. If the target
-      // isn't currently connected, the message persists in chat.db
-      // but the recipient won't see it on next login.
+      // Refuse rather than silently persist a message the recipient will
+      // never see. Pantheon has no offline-DM queue; matches the MCP-side
+      // `recipient_offline` contract (see src/mcp/handlers/chat.ts:436-451).
       if (!listActive(db).some((a) => a.username === target)) {
         printLine(
-          paint("yellow", `warning: ${target} not currently connected — message stored but not delivered`),
+          paint(
+            "red",
+            `recipient_offline: '${target}' is not currently connected. Pantheon has no offline-DM queue; message NOT sent. Retry once they connect, or use /g to broadcast.`,
+          ),
         );
+        return true;
       }
       broadcast("dm", text, { target });
       return true;
@@ -577,10 +581,16 @@ export async function runConsole(options: RunConsoleOptions): Promise<number> {
         printLine(paint("red", "empty text"));
         return true;
       }
+      // Same fail-loud contract: refuse rather than persist a project
+      // broadcast nobody is listening for.
       if (!listActive(db).some((a) => a.project === proj)) {
         printLine(
-          paint("yellow", `warning: no agents currently in project '${proj}' — message stored but not delivered`),
+          paint(
+            "red",
+            `recipient_offline: project '${proj}' has zero connected agents. Message NOT sent. Pick another project, or use /g to broadcast globally.`,
+          ),
         );
+        return true;
       }
       broadcast("project", text, { project: proj });
       return true;
