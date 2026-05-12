@@ -109,11 +109,23 @@ export function applyPersonaPlan(
 
   for (const action of plan.consolidate) {
     try {
+      // Carry source ids forward as `see_also` so the render-time
+      // index synopsis surfaces back-pointers from the consolidated
+      // entry to its sources (`[see_also: a, b, …]`). At this point
+      // the sources are still active in the store, so the
+      // `appendEntry` reference-validation passes; the subsequent
+      // fade/forget on each source leaves the references pointing
+      // at tombstoned entries, which the renderer handles gracefully
+      // and which `recall_memory(id)` can still resurrect.
+      const validSeeAlso = action.source_ids.filter((sid) =>
+        preStore.entries.some((e) => e.id === sid),
+      );
       appendPersonaEntry(paths, username, {
         summary: action.new_entry.summary,
         text: action.new_entry.text,
         ...(action.new_entry.kind !== undefined ? { kind: action.new_entry.kind } : {}),
         ...(action.new_entry.core !== undefined ? { core: action.new_entry.core } : {}),
+        ...(validSeeAlso.length > 0 ? { see_also: validSeeAlso } : {}),
       });
       for (const sid of action.source_ids) {
         try {

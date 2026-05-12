@@ -503,7 +503,7 @@ test("applyPersonaPlan: chain only partially handled → still surfaces skip war
     summary: "m",
     replies_to: root.id,
   });
-  const leaf = appendPersonaEntry(paths, "vellumpike", {
+  appendPersonaEntry(paths, "vellumpike", {
     text: "l",
     summary: "l",
     replies_to: mid.id,
@@ -517,6 +517,84 @@ test("applyPersonaPlan: chain only partially handled → still surfaces skip war
   expect(
     result.notes.some((n) => n.includes("consolidation skipped")),
   ).toBe(true);
+});
+
+// --- Commit 4: consolidated_from → see_also renderer integration --- //
+
+test("applyPersonaPlan: consolidated entry carries source ids as see_also", async () => {
+  const { getEntry } = await import("../../memory/index.ts");
+  const a = appendPersonaEntry(paths, "vellumpike", {
+    text: "src 1",
+    summary: "src 1",
+  });
+  const b = appendPersonaEntry(paths, "vellumpike", {
+    text: "src 2",
+    summary: "src 2",
+  });
+  applyPersonaPlan(paths, "vellumpike", {
+    fade: [],
+    forget: [],
+    consolidate: [
+      {
+        source_ids: [a.id, b.id],
+        new_entry: { summary: "merged", text: "merged" },
+      },
+    ],
+  });
+  const all = listPersonaIndex(paths, "vellumpike", { status: "active" });
+  const consolidated = all.find((e) => e.summary === "merged")!;
+  const entry = getEntry(paths, "vellumpike", consolidated.id)!;
+  expect(entry.see_also).toEqual([a.id, b.id]);
+});
+
+test("applyPersonaPlan: see_also is omitted when source_ids reference unknown entries", async () => {
+  const { getEntry } = await import("../../memory/index.ts");
+  applyPersonaPlan(paths, "vellumpike", {
+    fade: [],
+    forget: [],
+    consolidate: [
+      {
+        source_ids: ["does-not-exist-1", "does-not-exist-2"],
+        new_entry: { summary: "phantom", text: "phantom" },
+      },
+    ],
+  });
+  const all = listPersonaIndex(paths, "vellumpike", { status: "active" });
+  const consolidated = all.find((e) => e.summary === "phantom");
+  // Append may have failed because there are no real entries to
+  // reference; the consolidation might land or not depending on
+  // append validation. Either way the entry must NOT carry stale
+  // see_also references to nonexistent ids.
+  if (consolidated) {
+    const entry = getEntry(paths, "vellumpike", consolidated.id)!;
+    expect(entry.see_also ?? []).toEqual([]);
+  }
+});
+
+test("applyPersonaPlan: see_also references survive after sources are forgotten", async () => {
+  const { getEntry } = await import("../../memory/index.ts");
+  const a = appendPersonaEntry(paths, "vellumpike", {
+    text: "src",
+    summary: "src",
+  });
+  applyPersonaPlan(paths, "vellumpike", {
+    fade: [],
+    forget: [],
+    consolidate: [
+      {
+        source_ids: [a.id],
+        new_entry: { summary: "merged-from-one", text: "merged" },
+      },
+    ],
+  });
+  // Source was forgotten as part of the consolidate.
+  expect(getEntry(paths, "vellumpike", a.id)!.status).toBe("forgotten");
+  // The consolidated entry's see_also still points at the
+  // tombstoned source — useful for future-self navigation.
+  const all = listPersonaIndex(paths, "vellumpike", { status: "active" });
+  const consolidated = all.find((e) => e.summary === "merged-from-one")!;
+  const entry = getEntry(paths, "vellumpike", consolidated.id)!;
+  expect(entry.see_also).toEqual([a.id]);
 });
 
 test("audit text on empty plan still produces a no-op marker", async () => {
