@@ -320,7 +320,21 @@ export const force_exit_any: Handler = async (args, ctx) =>
 
 /** Apply the rest pipeline directly — bypasses the self-rest
  * preconditions (block_self_exit, allow_rest_authorized, summoned).
- * The force-* request IS the authorization. */
+ * The force-* request IS the authorization.
+ *
+ * Also drops the chat subscriber row so the target vanishes from
+ * `list_agents`. Without this step the target's chat watcher would
+ * keep heartbeating (it runs in a separate CC `Monitor` task, not in
+ * this MCP process), `pruneStale`'s 60s TTL would never expire, and
+ * `list_agents` would show the rested agent as live indefinitely.
+ * Removing the subscriber row causes the watcher's next refresh to
+ * surface `SessionExpiredError`, terminating the loop cleanly.
+ * Self-`rest` deliberately does NOT do this — agents resting
+ * themselves remain DM-able and can resume. Force-rest is asymmetric
+ * because the peer/admin's intent is "make this agent go away."
+ *
+ * Symmetric with logout: emits a system "left" message into the
+ * project so peers see the eviction in their chat. */
 function applyForceRest(ctx: HandlerContext, reason: string): void {
   const claimed = ctx.session.claimedUsername;
   if (!claimed) return; // can't rest without a claimed persona
@@ -333,6 +347,31 @@ function applyForceRest(ctx: HandlerContext, reason: string): void {
     stampRested(ctx.paths, claimed, reason, ctx.claude_session_id ?? null);
   } catch {
     // best-effort
+  }
+  // Drop chat presence so the watcher terminates and list_agents
+  // stops surfacing the rested agent.
+  if (ctx.chat && ctx.chat_agent_id) {
+    const agentId = ctx.chat_agent_id;
+    try {
+      const removed = ctx.chat.remove(agentId);
+      if (removed) {
+        try {
+          ctx.chat.addMessage({
+            from_agent_id: "system",
+            scope: "project",
+            project: removed.project,
+            text: `${removed.username}${removed.transient ? "*" : ""} was force-rested.`,
+            system: true,
+            system_kind: "leave",
+          });
+        } catch {
+          // best-effort — the eviction already happened.
+        }
+      }
+    } catch {
+      // best-effort
+    }
+    ctx.setChatAgentId(null);
   }
 }
 
