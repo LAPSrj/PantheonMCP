@@ -1590,6 +1590,45 @@ export const TOOLS: readonly ToolDef[] = [
       },
     },
   },
+  {
+    name: "validate_user_quote",
+    description:
+      "Audit whether a persona's user actually typed a verbatim quote. Walks the persona's CC JSONLs (resolved via the registry's `cwd`) and checks `role: \"user\"` records — strictly only `content[].type === \"text\"` blocks, so tool_use/tool_result content cannot spoof a hit. Inherently cross-persona / cross-project — no `_any` variant; pass the username being audited. Returns `matches: QuoteMatch[]` (always an array; capped by `limit`, default 1, max 10), each with the full user message and the immediately-preceding assistant text. `found: false` with empty matches and no `error` means \"not present in transcripts\" (truthful negative). `error: \"unknown_persona\"` or `\"no_sessions\"` indicates hard failure.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "quote"],
+      properties: {
+        username: {
+          type: "string",
+          description: "Persona handle being audited.",
+        },
+        quote: {
+          type: "string",
+          description: "Verbatim substring to check for.",
+        },
+        case_sensitive: {
+          type: "boolean",
+          description: "Default false. Set true for byte-exact matching.",
+        },
+        since: {
+          type: "string",
+          description:
+            "Optional ISO lower bound on message timestamp. NO default — full history searched. Pass when you want to scope to a recent window.",
+        },
+        max_chars: {
+          type: "number",
+          description:
+            "Per-field cap on returned text (UTF-16 code units). Default 256000.",
+        },
+        limit: {
+          type: "number",
+          description:
+            "Max matches returned, newest-first. Default 1, max 10.",
+        },
+      },
+    },
+  },
 
   // -------- Notebook (per-persona) --------
   {

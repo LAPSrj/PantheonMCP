@@ -126,6 +126,152 @@ export interface FetchedHistoryMessage {
 
 export const DEFAULT_FETCH_MAX_CHARS = 256_000;
 
+// ---- validate_user_quote --------------------------------------------- //
+
+export interface ValidateUserQuoteOptions {
+  /** Persona's registered cwd. Resolves to `~/.claude/projects/<encoded>/`. */
+  cwd: string;
+  /** Verbatim substring to look for in user-typed text. */
+  quote: string;
+  /** Default false — case-insensitive substring match. */
+  case_sensitive?: boolean;
+  /** Optional ISO lower bound on message timestamp. NO default — the
+   * audit case "user said this 3 days ago, agent quoted it today" must
+   * succeed. Callers can scope to a window when they want a fast check. */
+  since?: string;
+  /** Per-field cap on returned text. UTF-16 code units (String.length).
+   * Default 256_000, matching `DEFAULT_FETCH_MAX_CHARS`. */
+  max_chars?: number;
+  /** Cap on number of matches returned, newest-first. Default 1, max 10. */
+  limit?: number;
+  claudeProjectsRoot?: string;
+}
+
+export interface QuoteMatch {
+  session_id: string;
+  message_at: string | null;
+  user_message: string;
+  user_message_size_chars: number;
+  user_message_truncated: boolean;
+  /** Immediately-preceding `role: "assistant"` text block from the same
+   * JSONL, walked backward from the matched user record. Null when the
+   * match is the first user message in the session. Same strict
+   * text-only projection. */
+  previous_agent_message: string | null;
+  previous_agent_message_size_chars: number;
+  previous_agent_message_truncated: boolean;
+}
+
+export interface ValidateUserQuoteResult {
+  found: boolean;
+  matches: QuoteMatch[];
+  /** Set only when found is false AND there's a hard failure (no
+   * sessions to search). "Quote not present in transcripts" returns
+   * found: false WITHOUT an error field — the negative is meaningful. */
+  error?: "no_sessions";
+}
+
+export const DEFAULT_VALIDATE_LIMIT = 1;
+export const MAX_VALIDATE_LIMIT = 10;
+
+export function validateUserQuote(
+  options: ValidateUserQuoteOptions,
+): ValidateUserQuoteResult {
+  const caseSensitive = options.case_sensitive ?? false;
+  const maxChars = options.max_chars ?? DEFAULT_FETCH_MAX_CHARS;
+  const limitRaw = options.limit ?? DEFAULT_VALIDATE_LIMIT;
+  const limit = Math.min(Math.max(1, limitRaw), MAX_VALIDATE_LIMIT);
+  const sinceMs = options.since ? Date.parse(options.since) : null;
+
+  const projectsRoot =
+    options.claudeProjectsRoot ?? path.join(os.homedir(), ".claude", "projects");
+  const encodedCwd = encodeCwdForClaudeProject(options.cwd);
+  const dir = path.join(projectsRoot, encodedCwd);
+
+  if (!fs.existsSync(dir)) {
+    return { found: false, matches: [], error: "no_sessions" };
+  }
+  const allFiles = fs
+    .readdirSync(dir)
+    .filter((f) => f.endsWith(".jsonl"));
+  if (allFiles.length === 0) {
+    return { found: false, matches: [], error: "no_sessions" };
+  }
+
+  const needle = caseSensitive ? options.quote : options.quote.toLowerCase();
+  if (needle.length === 0) {
+    return { found: false, matches: [] };
+  }
+
+  const matches: QuoteMatch[] = [];
+  for (const filename of allFiles) {
+    const session_id = filename.replace(/\.jsonl$/, "");
+    const filePath = path.join(dir, filename);
+    const lines = readJsonlSafely(filePath);
+    for (let i = 0; i < lines.length; i++) {
+      const extracted = extractUserTypedText(lines[i]);
+      if (extracted === null) continue;
+      if (
+        sinceMs !== null &&
+        extracted.timestampMs !== null &&
+        extracted.timestampMs < sinceMs
+      ) {
+        continue;
+      }
+      const hay = caseSensitive
+        ? extracted.text
+        : extracted.text.toLowerCase();
+      if (!hay.includes(needle)) continue;
+
+      const previous = findPreviousAssistantMessage(lines, i);
+      const userTruncated = extracted.text.length > maxChars;
+      const prevTruncated =
+        previous !== null && previous.text.length > maxChars;
+      matches.push({
+        session_id,
+        message_at: extracted.timestamp,
+        user_message: userTruncated
+          ? extracted.text.slice(0, maxChars)
+          : extracted.text,
+        user_message_size_chars: extracted.text.length,
+        user_message_truncated: userTruncated,
+        previous_agent_message:
+          previous === null
+            ? null
+            : prevTruncated
+              ? previous.text.slice(0, maxChars)
+              : previous.text,
+        previous_agent_message_size_chars: previous?.text.length ?? 0,
+        previous_agent_message_truncated: prevTruncated,
+      });
+    }
+  }
+
+  // Sort newest-first by message_at (string ISO ordering is correct for
+  // RFC 3339 UTC timestamps). Records without timestamps sink to the
+  // bottom — preserves determinism without losing them.
+  matches.sort((a, b) => {
+    const aT = a.message_at ?? "";
+    const bT = b.message_at ?? "";
+    if (aT !== bT) return aT < bT ? 1 : -1;
+    return a.session_id < b.session_id ? 1 : -1;
+  });
+
+  const capped = matches.slice(0, limit);
+  return { found: capped.length > 0, matches: capped };
+}
+
+function findPreviousAssistantMessage(
+  lines: unknown[],
+  userIdx: number,
+): ExtractedMessage | null {
+  for (let j = userIdx - 1; j >= 0; j--) {
+    const candidate = extractAssistantTypedText(lines[j]);
+    if (candidate !== null) return candidate;
+  }
+  return null;
+}
+
 /** Fetch one message from a persona's CC jsonl by `(session_id,
  * message_at)`. Companion to `searchHistory` — the search returns
  * snippets, this returns the full text. Returns `null` when the
@@ -348,6 +494,90 @@ function stringifyContent(content: unknown): string {
     } else if (b.type === "tool_result") {
       out.push(`[tool_result: ${safeStringify(b.content)}]`);
     }
+  }
+  return out.join("\n");
+}
+
+/** STRICT user-typed-text projection — only `content[].type === "text"`
+ * blocks of `role: "user"` records. Skips tool_use, tool_result, image,
+ * any other block type. Used by `validateUserQuote` so an agent can't
+ * spoof a quote by embedding it inside a tool_result they triggered.
+ *
+ * Returns null when the record is not a user-typed message (wrong role,
+ * empty content, only tool blocks, etc.). Callers should treat null as
+ * "this record cannot contain a real Leandro quote." */
+export function extractUserTypedText(raw: unknown): ExtractedMessage | null {
+  if (!raw || typeof raw !== "object") return null;
+  const entry = raw as Record<string, unknown>;
+  const type = typeof entry.type === "string" ? entry.type : "unknown";
+  if (type !== "user") return null;
+  const msg = entry.message as Record<string, unknown> | undefined;
+  if (!msg) return null;
+  const content = msg.content;
+  const text = stringifyUserTextBlocksOnly(content);
+  if (text.length === 0) return null;
+  const timestamp = typeof entry.timestamp === "string" ? entry.timestamp : null;
+  const timestampMs = timestamp ? Date.parse(timestamp) : null;
+  return {
+    role: "user",
+    text,
+    timestamp,
+    timestampMs: Number.isFinite(timestampMs) ? timestampMs : null,
+  };
+}
+
+/** STRICT assistant-text projection — only `content[].type === "text"`
+ * blocks of `role: "assistant"` records. Skips tool_use blocks (the
+ * agent's tool invocations are not "what the agent said" for audit
+ * purposes). Pair to `extractUserTypedText`. */
+export function extractAssistantTypedText(
+  raw: unknown,
+): ExtractedMessage | null {
+  if (!raw || typeof raw !== "object") return null;
+  const entry = raw as Record<string, unknown>;
+  const type = typeof entry.type === "string" ? entry.type : "unknown";
+  if (type !== "assistant") return null;
+  const msg = entry.message as Record<string, unknown> | undefined;
+  if (!msg) return null;
+  const text = stringifyAssistantTextBlocksOnly(msg.content);
+  if (text.length === 0) return null;
+  const timestamp = typeof entry.timestamp === "string" ? entry.timestamp : null;
+  const timestampMs = timestamp ? Date.parse(timestamp) : null;
+  return {
+    role: "assistant",
+    text,
+    timestamp,
+    timestampMs: Number.isFinite(timestampMs) ? timestampMs : null,
+  };
+}
+
+function stringifyUserTextBlocksOnly(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const out: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const b = block as Record<string, unknown>;
+    if (b.type === "text" && typeof b.text === "string") {
+      out.push(b.text);
+    }
+    // Everything else (tool_use, tool_result, image, ...) is
+    // intentionally dropped — those are NOT user-typed input.
+  }
+  return out.join("\n");
+}
+
+function stringifyAssistantTextBlocksOnly(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const out: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const b = block as Record<string, unknown>;
+    if (b.type === "text" && typeof b.text === "string") {
+      out.push(b.text);
+    }
+    // tool_use intentionally dropped.
   }
   return out.join("\n");
 }

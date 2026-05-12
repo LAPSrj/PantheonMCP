@@ -11,6 +11,7 @@ import {
   fetchHistoryMessage,
   searchHistory,
   searchHistoryMulti,
+  validateUserQuote,
   type HistorySearchScope,
   type HistorySearchRole,
   type PersonaTarget,
@@ -286,6 +287,63 @@ export const get_history_message_any: Handler = async (args, ctx) => {
     ok: true,
     ...fetched,
     persona_username: persona.username,
+    warning: HISTORY_WARNING,
+  };
+};
+
+/** Audit-grade quote verification.
+ *
+ * Pass `username` + a verbatim `quote`. The tool walks the persona's CC
+ * JSONLs and reports whether the quote appears in a `role: "user"`
+ * record's `content[].type === "text"` blocks — strictly. Tool_use,
+ * tool_result, image, and other block types are excluded from the
+ * projection so an agent cannot spoof a "Leandro said X" claim by
+ * triggering a tool whose result contains the literal text.
+ *
+ * Inherently cross-persona / cross-project — no `_any` variant. The
+ * caller (typically an auditor like `righthand`) names the persona
+ * being audited; no relationship to the caller's session.
+ *
+ * Response shape is uniform: `matches: QuoteMatch[]` always, capped by
+ * `limit` (default 1, max 10). `found: false` with empty matches means
+ * "not in transcripts" (truthful negative). `error: "unknown_persona"`
+ * or `error: "no_sessions"` distinguishes hard failures from clean
+ * negatives. */
+export const validate_user_quote: Handler = async (args, ctx) => {
+  const username = asStringRequired(args.username, "username");
+  const quote = asStringRequired(args.quote, "quote");
+  const case_sensitive = asBoolean(args.case_sensitive);
+  const since = asString(args.since);
+  const max_chars = asNumber(args.max_chars);
+  const limit = asNumber(args.limit);
+
+  const persona = readPersona(ctx.paths, username);
+  if (!persona) {
+    return {
+      ok: true,
+      username,
+      found: false,
+      matches: [],
+      error: "unknown_persona",
+      warning: HISTORY_WARNING,
+    };
+  }
+
+  const result = validateUserQuote({
+    cwd: persona.cwd,
+    quote,
+    ...(case_sensitive !== undefined ? { case_sensitive } : {}),
+    ...(since !== undefined ? { since } : {}),
+    ...(max_chars !== undefined ? { max_chars } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+  });
+
+  return {
+    ok: true,
+    username,
+    project: persona.project,
+    cwd: persona.cwd,
+    ...result,
     warning: HISTORY_WARNING,
   };
 };

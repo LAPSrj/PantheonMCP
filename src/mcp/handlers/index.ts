@@ -109,6 +109,7 @@ export const HANDLERS: Record<string, Handler> = {
   search_history_any: history.search_history_any,
   get_history_message: history.get_history_message,
   get_history_message_any: history.get_history_message_any,
+  validate_user_quote: history.validate_user_quote,
 
   // Remanifest (spawn fresh incarnation of self; old exits when new logs in)
   remanifest: remanifestMod.remanifest,
