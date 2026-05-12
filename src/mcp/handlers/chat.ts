@@ -88,7 +88,7 @@ export const login: Handler = async (args, ctx) => {
       const claimed = ctx.session.claimedUsername;
       const resumeSummary =
         !existing.transient && claimed
-          ? buildResumeSummary(ctx.paths, claimed)
+          ? buildResumeSummary(ctx.paths, claimed, { project: existing.project })
           : null;
       const noteTemplate = supportsChannels ? "login-note-channels" : "login-note";
       let note: string;
@@ -387,8 +387,36 @@ export const login: Handler = async (args, ctx) => {
   // Skipped for guests (no persona file → nothing to summarize).
   const resumeSummary =
     !subscriber.transient && claimedPersona
-      ? buildResumeSummary(ctx.paths, claimedPersona)
+      ? buildResumeSummary(ctx.paths, claimedPersona, {
+          project: subscriber.project,
+        })
       : null;
+
+  // Notebook nudge — one-line hint when the persona / project has
+  // context-scoped notes available. The TOC itself surfaces in
+  // resume_summary; this nudge points the agent at it so they don't
+  // miss the field.
+  if (resumeSummary) {
+    const notes: string[] = [];
+    if (resumeSummary.notebooks && resumeSummary.notebooks.length > 0) {
+      const n = resumeSummary.notebooks.length;
+      notes.push(
+        `You have notebook entries on ${n} topic${n === 1 ? "" : "s"} — see \`resume_summary.notebooks\` for the TOC, then \`notebook_open({ topic })\` to read pages.`,
+      );
+    }
+    if (
+      resumeSummary.project_notebooks &&
+      resumeSummary.project_notebooks.length > 0
+    ) {
+      const n = resumeSummary.project_notebooks.length;
+      notes.push(
+        `Project notebook has ${n} topic${n === 1 ? "" : "s"} — see \`resume_summary.project_notebooks\` and \`project_notebook_open({ topic })\`.`,
+      );
+    }
+    if (notes.length > 0) {
+      note = `${notes.join(" ")}\n\n${note}`;
+    }
+  }
 
   // Re-surface the handoff text in the login response when the agent's
   // initial bootstrap is gone (e.g. post-/compact re-bootstrap). The

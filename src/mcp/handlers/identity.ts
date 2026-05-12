@@ -114,7 +114,9 @@ export const claim: Handler = async (args, ctx) => {
   return {
     persona,
     memory: { entries: memory.entries.length, version: memory.version },
-    resume_summary: buildResumeSummary(ctx.paths, persona.username),
+    resume_summary: buildResumeSummary(ctx.paths, persona.username, {
+      project: persona.project,
+    }),
   };
 };
 
@@ -127,7 +129,9 @@ export const manifest: Handler = async (args, ctx) => {
       claimed: persona,
       reason: "explicit-username",
       memory_entries: memory.entries.length,
-      resume_summary: buildResumeSummary(ctx.paths, persona.username),
+      resume_summary: buildResumeSummary(ctx.paths, persona.username, {
+        project: persona.project,
+      }),
     };
   }
   const cwd = asString(args.cwd) ?? process.cwd();
@@ -139,7 +143,11 @@ export const manifest: Handler = async (args, ctx) => {
       claimed: result.matched.persona,
       reason: result.matched.reason,
       memory_entries: memory.entries.length,
-      resume_summary: buildResumeSummary(ctx.paths, result.matched.persona.username),
+      resume_summary: buildResumeSummary(
+        ctx.paths,
+        result.matched.persona.username,
+        { project: result.matched.persona.project },
+      ),
     };
   }
   if ("ambiguous" in result) {
