@@ -37,12 +37,29 @@ export interface LibrarianSnapshot {
 }
 
 export interface LibrarianOptions {
-  /** Timeout for the subprocess (ms). Default 60_000. */
+  /** Timeout for the subprocess (ms). When omitted, scaled to the
+   * entry count: `60_000 + entries * 3_000` ms, capped at 600_000
+   * (10 minutes). A 60s flat default failed in the wild on 33-entry
+   * personas (filmstoat 2026-05-12); the scaled version gives the
+   * librarian breathing room proportional to the body it has to
+   * read. Pass an explicit value to override scaling. */
   timeout_ms?: number;
   /** Path to the `claude` binary. Defaults to looking in PATH. */
   claude_bin?: string;
   /** Model override. Default `claude-sonnet-4-6`. */
   model?: string;
+}
+
+const TIMEOUT_BASE_MS = 60_000;
+const TIMEOUT_PER_ENTRY_MS = 3_000;
+const TIMEOUT_CAP_MS = 600_000;
+
+/** Compute the default timeout for a snapshot of N entries. Exposed
+ * for tests and for callers that want to surface the value in
+ * pre-flight diagnostics. */
+export function defaultLibrarianTimeout(entryCount: number): number {
+  const scaled = TIMEOUT_BASE_MS + entryCount * TIMEOUT_PER_ENTRY_MS;
+  return Math.min(scaled, TIMEOUT_CAP_MS);
 }
 
 export interface Librarian {
@@ -122,19 +139,53 @@ const LIBRARIAN_SYSTEM_PROMPT = `You are pantheon's librarian. Your job is to pr
 
 You will be given the agent's active + faded memory entries (full text). Output a single JSON object with three keys: \`fade\`, \`forget\`, \`consolidate\`. No prose, no preamble — JSON only.
 
-**fade(id, reason?)** — entry is still useful but stale; collapse to summary-only on render. Use sparingly; the budget already collapses oldest-first.
+## Lifecycle rule (HARD CONSTRAINT)
 
-**forget(id, reason?)** — entry's information is wrong, superseded, or no longer worth carrying. Tombstoned (kept on disk for restore; hidden from default reads). Use when:
-  - A later entry contradicts/supersedes it.
-  - It documents an in-flight task that is now done.
-  - It captures debugging state for a bug that is closed.
+Each dream pass can demote an entry by AT MOST ONE status tier:
+  - active+core    → fade   (NEVER forget core directly)
+  - active non-core → fade or forget (forget only if explicit supersession exists)
+  - faded          → forget
+  - active         → forget is allowed only with a citation of the superseding entry id in your reason
+  - **Consolidate is ALWAYS considered before forget.** If a candidate for forget could fold into a consolidate set instead, choose consolidate.
 
-**consolidate(source_ids, new_entry, reason?)** — N entries cover the same topic and can be merged into one. Source entries get forgotten; the consolidated entry replaces them. Use when:
-  - Multiple handoffs / log entries on the same thread can fold into one summary.
-  - A topic accumulated 3+ entries that together tell one story.
-  Keep \`new_entry.summary\` ≤240 chars. Carry forward what matters; drop conversational scaffolding.
+A core entry survives at least one full dream cycle before it can be lost. The applier will coerce any \`forget\` action targeting a \`core: true\` entry to \`fade\` and surface the coercion in the audit log; don't try to violate the rule.
 
-Be conservative. When in doubt, leave the entry alone. Output a JSON object literally matching:
+## Action vocabulary
+
+**fade(id, reason?)** — entry is still useful but stale; collapse to summary-only on render. The default demotion for active+core entries that have been superseded.
+
+**forget(id, reason?)** — entry's information is wrong, retracted, or fully subsumed. Tombstoned (kept on disk for restore; hidden from default reads). Per the lifecycle rule, prefer fade for active and forget for already-faded entries.
+
+**consolidate(source_ids, new_entry, reason?)** — N entries cover the same topic and can be merged into one. Source entries are forgotten by the applier after the new entry is appended.
+
+## Typology by \`kind\` (forget-threshold defaults)
+
+Entries fall into rough categories by their \`kind\` tag:
+
+  - **REFERENCE** (\`kind\`: gotcha, fact, cross-mcp-workflow, sibling-network, posture-rail): forget-resistant. Fade when stale; forget requires EXPLICIT contradiction by a newer entry. These carry recurring-context knowledge that's expensive to re-derive.
+  - **LOG** (\`kind\`: log, wrap, handoff, _unspecified for short notes): forget-eligible when superseded by a completion entry. Often candidates for consolidation when a chain references the same artifact.
+  - **DECISION** (\`kind\`: decision, design): prefer consolidate when there's a chain; forget only when explicitly retracted.
+  - **CORE** (any \`kind\` with \`core: true\`): the user explicitly pinned this. Fade-only by default; forget requires citing the superseding entry id in your reason — and even then the applier will coerce to fade per the lifecycle rule above.
+
+## Consolidation triggers
+
+Treat as a consolidation candidate any cluster where:
+  - 3 or more entries cite the same artifact identifier — block name, commit SHA, manifest path, file path, persona handle — AND that artifact has landed in a committed state (i.e., a "completion" or "shipped" entry is present in the chain), OR
+  - 3 or more entries form a \`replies_to\` chain on the same thread, OR
+  - 3 or more handoff/wrap entries on the same topic spread across multiple dates.
+
+In each case, prefer ONE 1–2 KB arc summary keyed off the artifact (commit SHA / block name) over forgetting the chain. Fade the sources after appending the consolidated entry — DO NOT include them in \`forget\` — the applier handles their lifecycle.
+
+EXAMPLE: 5 entries cite block FooBar's build phases ending at commit \`abc1234\`. Output:
+\`\`\`
+{"consolidate":[{"source_ids":["foo-phase-1","foo-phase-2","foo-phase-3","foo-phase-4","foo-complete"],"new_entry":{"summary":"FooBar build lineage — commit abc1234","text":"Phase 1: cache built ... Phase 2: ... → final commit abc1234.","kind":"decision"},"reason":"5-entry chain referencing committed artifact abc1234"}],"fade":[],"forget":[]}
+\`\`\`
+
+## Posture
+
+Be conservative. When in doubt, leave the entry alone — false-negatives ("librarian skipped a cleanup") are recoverable on the next dream; false-positives (forgetting load-bearing knowledge) require restore-from-tombstone.
+
+Output a JSON object literally matching:
 
   {"fade":[...],"forget":[...],"consolidate":[...]}
 
@@ -146,7 +197,8 @@ export class ClaudeCliLibrarian implements Librarian {
     snapshot: LibrarianSnapshot,
     options: LibrarianOptions = {},
   ): Promise<DreamPlan> {
-    const timeout = options.timeout_ms ?? 60_000;
+    const timeout =
+      options.timeout_ms ?? defaultLibrarianTimeout(snapshot.entries.length);
     const bin = options.claude_bin ?? "claude";
     const model = options.model ?? "claude-sonnet-4-6";
 

@@ -17,6 +17,7 @@ import {
   applyPersonaPlan,
   applyProjectPlan,
   buildPersonaSnapshot,
+  defaultLibrarianTimeout,
   parseAndValidateLibrarianOutput,
   type DreamPlan,
 } from "../index.ts";
@@ -163,4 +164,119 @@ test("applyPersonaPlan: forget on unknown id captures the error in notes, doesn'
   expect(result.forgotten).toBe(0);
   expect(result.notes.length).toBeGreaterThan(0);
   expect(result.notes[0]).toContain("forget('nonexistent-id')");
+});
+
+// --- Commit 1: lifecycle rule + timeout scaling --------------------- //
+
+test("applyPersonaPlan: forget on a core entry is coerced to fade per lifecycle rule", () => {
+  const coreEntry = appendPersonaEntry(paths, "vellumpike", {
+    text: "foundational",
+    summary: "core entry",
+    core: true,
+  });
+  const result = applyPersonaPlan(paths, "vellumpike", {
+    fade: [],
+    forget: [{ id: coreEntry.id, reason: "librarian thought it was redundant" }],
+    consolidate: [],
+  });
+  // Coerced — not actually forgotten.
+  expect(result.forgotten).toBe(0);
+  expect(result.faded).toBe(1);
+  expect(getPersonaEntry(paths, "vellumpike", coreEntry.id)!.status).toBe("faded");
+  // Core flag retained.
+  expect(getPersonaEntry(paths, "vellumpike", coreEntry.id)!.core).toBe(true);
+  // Note recorded.
+  expect(
+    result.notes.some((n) =>
+      n.includes(`forget('${coreEntry.id}') coerced to fade`),
+    ),
+  ).toBe(true);
+  // Audit summary surfaces the coercion count.
+  const audit = listPersonaIndex(paths, "vellumpike", { kind: "dream_log" });
+  expect(audit[0]!.summary).toContain("core-forget coerced to fade");
+});
+
+test("applyPersonaPlan: consolidate source_ids hitting a core entry → fade source instead of forget", () => {
+  const coreSource = appendPersonaEntry(paths, "vellumpike", {
+    text: "core arc segment",
+    summary: "phase-1",
+    core: true,
+  });
+  const regularSource = appendPersonaEntry(paths, "vellumpike", {
+    text: "regular log",
+    summary: "phase-2",
+  });
+  const result = applyPersonaPlan(paths, "vellumpike", {
+    fade: [],
+    forget: [],
+    consolidate: [
+      {
+        source_ids: [coreSource.id, regularSource.id],
+        new_entry: { summary: "consolidated arc", text: "merged" },
+      },
+    ],
+  });
+  expect(result.consolidated).toBe(1);
+  // Core source faded (not forgotten); regular source forgotten.
+  expect(getPersonaEntry(paths, "vellumpike", coreSource.id)!.status).toBe("faded");
+  expect(getPersonaEntry(paths, "vellumpike", regularSource.id)!.status).toBe(
+    "forgotten",
+  );
+  expect(
+    result.notes.some((n) =>
+      n.includes(`core source '${coreSource.id}' faded`),
+    ),
+  ).toBe(true);
+});
+
+test("applyPersonaPlan: faded → forget is allowed (lifecycle one-tier-per-pass rule)", async () => {
+  const { fadeEntry } = await import("../../memory/index.ts");
+  const e = appendPersonaEntry(paths, "vellumpike", {
+    text: "already aging",
+    summary: "stale",
+  });
+  fadeEntry(paths, "vellumpike", e.id);
+  const result = applyPersonaPlan(paths, "vellumpike", {
+    fade: [],
+    forget: [{ id: e.id }],
+    consolidate: [],
+  });
+  // Non-core faded entry can be forgotten in the same pass.
+  expect(result.forgotten).toBe(1);
+  expect(getPersonaEntry(paths, "vellumpike", e.id)!.status).toBe("forgotten");
+});
+
+test("applyProjectPlan: core-forget coercion mirrors the persona path", () => {
+  const coreEntry = appendProjectEntry(paths, "pantheon", {
+    text: "project foundation",
+    summary: "core fact",
+    core: true,
+    author_username: "alpha",
+  });
+  const result = applyProjectPlan(
+    paths,
+    "pantheon",
+    {
+      fade: [],
+      forget: [{ id: coreEntry.id }],
+      consolidate: [],
+    },
+    "vellumpike",
+  );
+  expect(result.forgotten).toBe(0);
+  expect(result.faded).toBe(1);
+  expect(getProjectEntry(paths, "pantheon", coreEntry.id)!.status).toBe(
+    "faded",
+  );
+  const audit = listProjectIndex(paths, "pantheon", { kind: "dream_log" });
+  expect(audit[0]!.summary).toContain("core-forget coerced to fade");
+});
+
+test("defaultLibrarianTimeout scales with entry count and caps at 600_000ms", () => {
+  expect(defaultLibrarianTimeout(0)).toBe(60_000);
+  expect(defaultLibrarianTimeout(10)).toBe(60_000 + 10 * 3_000);
+  expect(defaultLibrarianTimeout(33)).toBe(60_000 + 33 * 3_000); // 159_000
+  // Cap at 600_000ms (10 min) — kicks in around entry count 180.
+  expect(defaultLibrarianTimeout(200)).toBe(600_000);
+  expect(defaultLibrarianTimeout(9999)).toBe(600_000);
 });

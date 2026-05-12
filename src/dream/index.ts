@@ -15,6 +15,7 @@ export {
   type LibrarianOptions,
   ClaudeCliLibrarian,
   DREAM_PLAN_SCHEMA,
+  defaultLibrarianTimeout,
   parseAndValidateLibrarianOutput,
 } from "./librarian.ts";
 

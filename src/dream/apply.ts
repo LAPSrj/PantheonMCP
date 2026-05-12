@@ -81,6 +81,17 @@ export function applyPersonaPlan(
   let faded = 0;
   let forgotten = 0;
   let consolidated = 0;
+  let core_forgets_coerced = 0;
+
+  // Build a snapshot of which ids are currently core so the applier
+  // can enforce the lifecycle rule: forget on a core entry is coerced
+  // to fade. Snapshot taken once at the start; mid-plan mutations on
+  // core status are vanishingly rare (no plan action sets core: true
+  // on an existing entry).
+  const preStore = loadPersonaStore(paths, username);
+  const coreIds = new Set(
+    preStore.entries.filter((e) => Boolean(e.core)).map((e) => e.id),
+  );
 
   for (const action of plan.consolidate) {
     try {
@@ -92,10 +103,23 @@ export function applyPersonaPlan(
       });
       for (const sid of action.source_ids) {
         try {
-          forgetPersonaEntry(paths, username, sid);
+          // Source ids in a consolidate set get FADED rather than
+          // forgotten when they're core — same lifecycle protection
+          // as the standalone forget queue. The consolidated entry
+          // already carries forward what matters.
+          if (coreIds.has(sid)) {
+            fadePersonaEntry(paths, username, sid);
+            faded++;
+            core_forgets_coerced++;
+            notes.push(
+              `consolidate: core source '${sid}' faded (not forgotten) per lifecycle rule.`,
+            );
+          } else {
+            forgetPersonaEntry(paths, username, sid);
+          }
         } catch (err) {
           notes.push(
-            `consolidate: forget source '${sid}' failed: ${(err as Error).message}`,
+            `consolidate: drop source '${sid}' failed: ${(err as Error).message}`,
           );
         }
       }
@@ -115,6 +139,23 @@ export function applyPersonaPlan(
   }
 
   for (const action of plan.forget) {
+    if (coreIds.has(action.id)) {
+      // Lifecycle rule: forget on core → fade. Surface the coercion
+      // so the auditor sees the librarian's intent + the enforcement.
+      try {
+        fadePersonaEntry(paths, username, action.id);
+        faded++;
+        core_forgets_coerced++;
+        notes.push(
+          `forget('${action.id}') coerced to fade — entry is core; per lifecycle rule, core demotes at most one tier per pass.`,
+        );
+      } catch (err) {
+        notes.push(
+          `fade-coercion('${action.id}') failed: ${(err as Error).message}`,
+        );
+      }
+      continue;
+    }
     try {
       forgetPersonaEntry(paths, username, action.id);
       forgotten++;
@@ -123,8 +164,12 @@ export function applyPersonaPlan(
     }
   }
 
+  const coercionSuffix =
+    core_forgets_coerced > 0
+      ? `, ${core_forgets_coerced} core-forget coerced to fade`
+      : "";
   const audit = appendPersonaEntry(paths, username, {
-    summary: `Dream ${todayIso()} — faded ${faded}, forgot ${forgotten}, consolidated ${consolidated}`,
+    summary: `Dream ${todayIso()} — faded ${faded}, forgot ${forgotten}, consolidated ${consolidated}${coercionSuffix}`,
     text: renderAuditBody(plan, notes),
     kind: "dream_log",
   });
@@ -152,6 +197,12 @@ export function applyProjectPlan(
   let faded = 0;
   let forgotten = 0;
   let consolidated = 0;
+  let core_forgets_coerced = 0;
+
+  const preStore = loadProjectMemoryStore(paths, project);
+  const coreIds = new Set(
+    preStore.entries.filter((e) => Boolean(e.core)).map((e) => e.id),
+  );
 
   for (const action of plan.consolidate) {
     try {
@@ -164,10 +215,19 @@ export function applyProjectPlan(
       });
       for (const sid of action.source_ids) {
         try {
-          forgetProjectEntry(paths, project, sid);
+          if (coreIds.has(sid)) {
+            fadeProjectEntry(paths, project, sid);
+            faded++;
+            core_forgets_coerced++;
+            notes.push(
+              `consolidate: core source '${sid}' faded (not forgotten) per lifecycle rule.`,
+            );
+          } else {
+            forgetProjectEntry(paths, project, sid);
+          }
         } catch (err) {
           notes.push(
-            `consolidate: forget source '${sid}' failed: ${(err as Error).message}`,
+            `consolidate: drop source '${sid}' failed: ${(err as Error).message}`,
           );
         }
       }
@@ -187,6 +247,21 @@ export function applyProjectPlan(
   }
 
   for (const action of plan.forget) {
+    if (coreIds.has(action.id)) {
+      try {
+        fadeProjectEntry(paths, project, action.id);
+        faded++;
+        core_forgets_coerced++;
+        notes.push(
+          `forget('${action.id}') coerced to fade — entry is core; per lifecycle rule, core demotes at most one tier per pass.`,
+        );
+      } catch (err) {
+        notes.push(
+          `fade-coercion('${action.id}') failed: ${(err as Error).message}`,
+        );
+      }
+      continue;
+    }
     try {
       forgetProjectEntry(paths, project, action.id);
       forgotten++;
@@ -195,8 +270,12 @@ export function applyProjectPlan(
     }
   }
 
+  const coercionSuffix =
+    core_forgets_coerced > 0
+      ? `, ${core_forgets_coerced} core-forget coerced to fade`
+      : "";
   const audit = appendProjectEntry(paths, project, {
-    summary: `Project-dream ${todayIso()} — faded ${faded}, forgot ${forgotten}, consolidated ${consolidated}`,
+    summary: `Project-dream ${todayIso()} — faded ${faded}, forgot ${forgotten}, consolidated ${consolidated}${coercionSuffix}`,
     text: renderAuditBody(plan, notes),
     kind: "dream_log",
     ...(author_username !== null ? { author_username } : {}),
