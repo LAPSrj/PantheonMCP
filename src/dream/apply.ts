@@ -93,6 +93,20 @@ export function applyPersonaPlan(
     preStore.entries.filter((e) => Boolean(e.core)).map((e) => e.id),
   );
 
+  // Detect consolidation opportunities the librarian missed. Surfaces
+  // as a note for the auditor; does NOT gate the apply.
+  const liveEntries = preStore.entries.filter(
+    (e) => e.status === "active" || e.status === "faded",
+  );
+  const skippedChains = detectSkippedConsolidations(liveEntries, plan);
+  for (const chain of skippedChains) {
+    notes.push(
+      `consolidation skipped: replies_to chain of ${chain.length} entries ` +
+        `(${chain.slice(0, 3).join(" ← ")}${chain.length > 3 ? ` ← … (+${chain.length - 3})` : ""}) ` +
+        `— librarian neither consolidated nor forgot the chain.`,
+    );
+  }
+
   for (const action of plan.consolidate) {
     try {
       appendPersonaEntry(paths, username, {
@@ -210,6 +224,10 @@ export function applyProjectPlan(
   const coreIds = new Set(
     preStore.entries.filter((e) => Boolean(e.core)).map((e) => e.id),
   );
+
+  // Project entries don't carry replies_to (the field is persona-only),
+  // so skipped-chain detection is a no-op here. Keeping the symmetric
+  // call site documented so a future schema addition would slot in.
 
   for (const action of plan.consolidate) {
     try {
@@ -492,6 +510,100 @@ function escapeMd(s: string): string {
   // the inline-code rendering. Bodies don't need fuller escaping;
   // this is just for the inline `\`...\`` snippets.
   return s.replace(/`/g, "\\`");
+}
+
+/** Detect replies_to chains of length ≥3 that the librarian did NOT
+ * consolidate AND did NOT forget entirely. These are the clearest
+ * "consolidation opportunity skipped" signals: a structured chain of
+ * related entries left intact, when the prompt-trained librarian
+ * should have folded them.
+ *
+ * Returns ordered chains, root-first (oldest parent to newest leaf).
+ * Does NOT consider artifact-id clustering (commit SHAs, block names)
+ * — that detection is heavier and fuzzier; replies_to is canonical
+ * and structured, so it's the high-precision signal worth surfacing.
+ *
+ * Detect-don't-gate: the warning informs the auditor; nothing in the
+ * apply is rejected or blocked. */
+function detectSkippedConsolidations(
+  entries: ReadonlyArray<{ id: string; replies_to?: string }>,
+  plan: DreamPlan,
+): string[][] {
+  // Build child → parent adjacency. Only entries that ARE replies
+  // create edges.
+  const parentOf = new Map<string, string>();
+  const idSet = new Set<string>();
+  for (const e of entries) {
+    idSet.add(e.id);
+    if (e.replies_to && e.replies_to.length > 0) {
+      parentOf.set(e.id, e.replies_to);
+    }
+  }
+
+  // Identify chain roots: entries that have at least one descendant
+  // but are not themselves descendants. Walking children from each
+  // root produces the maximal chain rooted there.
+  const childrenOf = new Map<string, string[]>();
+  for (const [child, parent] of parentOf) {
+    if (!idSet.has(parent)) continue; // parent outside snapshot — skip.
+    const arr = childrenOf.get(parent) ?? [];
+    arr.push(child);
+    childrenOf.set(parent, arr);
+  }
+  const roots: string[] = [];
+  for (const e of entries) {
+    if (parentOf.has(e.id)) continue; // not a root.
+    if (childrenOf.has(e.id)) roots.push(e.id);
+  }
+
+  // For each root, walk the chain via depth-first single path
+  // (multiple children fork — we pick the longest path for the
+  // warning; alternative branches are still part of the chain
+  // family but the warning surfaces the longest one for readability).
+  const chains: string[][] = [];
+  for (const root of roots) {
+    const chain = longestChain(root, childrenOf);
+    if (chain.length >= 3) chains.push(chain);
+  }
+
+  if (chains.length === 0) return chains;
+
+  // Filter out chains the librarian handled — fully consolidated OR
+  // every member ended up in `forget`. Either action is a valid
+  // "the chain was processed" outcome.
+  const consolidatedIds = new Set<string>();
+  for (const action of plan.consolidate) {
+    for (const sid of action.source_ids) consolidatedIds.add(sid);
+  }
+  const forgetIds = new Set<string>();
+  for (const action of plan.forget) forgetIds.add(action.id);
+
+  return chains.filter((chain) => {
+    const allConsolidated = chain.every((id) => consolidatedIds.has(id));
+    const allForgotten = chain.every((id) => forgetIds.has(id));
+    return !allConsolidated && !allForgotten;
+  });
+}
+
+function longestChain(
+  root: string,
+  childrenOf: Map<string, string[]>,
+): string[] {
+  let best: string[] = [];
+  const dfs = (node: string, path: string[]): void => {
+    const children = childrenOf.get(node) ?? [];
+    if (children.length === 0) {
+      if (path.length > best.length) best = path.slice();
+      return;
+    }
+    for (const c of children) {
+      path.push(c);
+      dfs(c, path);
+      path.pop();
+    }
+  };
+  dfs(root, [root]);
+  return best;
 }
 
 function todayIso(): string {

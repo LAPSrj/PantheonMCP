@@ -386,6 +386,139 @@ test("audit details contains full plan; audit text is compact", async () => {
   expect(detailsIdMatches.length).toBe(15);
 });
 
+// --- Commit 3: consolidation-skip audit warning -------------------- //
+
+test("applyPersonaPlan: surfaces a note when a replies_to chain of 3+ was left untouched", () => {
+  const root = appendPersonaEntry(paths, "vellumpike", {
+    text: "chain root",
+    summary: "step 1",
+  });
+  const mid = appendPersonaEntry(paths, "vellumpike", {
+    text: "chain mid",
+    summary: "step 2",
+    replies_to: root.id,
+  });
+  const leaf = appendPersonaEntry(paths, "vellumpike", {
+    text: "chain leaf",
+    summary: "step 3",
+    replies_to: mid.id,
+  });
+  // Librarian did nothing.
+  const result = applyPersonaPlan(paths, "vellumpike", {
+    fade: [],
+    forget: [],
+    consolidate: [],
+  });
+  expect(
+    result.notes.some(
+      (n) =>
+        n.includes("consolidation skipped") &&
+        n.includes(`${root.id} ← ${mid.id} ← ${leaf.id}`),
+    ),
+  ).toBe(true);
+});
+
+test("applyPersonaPlan: chain of exactly 2 does NOT trigger the skip warning (threshold 3)", () => {
+  const root = appendPersonaEntry(paths, "vellumpike", {
+    text: "root",
+    summary: "r",
+  });
+  appendPersonaEntry(paths, "vellumpike", {
+    text: "leaf",
+    summary: "l",
+    replies_to: root.id,
+  });
+  const result = applyPersonaPlan(paths, "vellumpike", {
+    fade: [],
+    forget: [],
+    consolidate: [],
+  });
+  expect(
+    result.notes.some((n) => n.includes("consolidation skipped")),
+  ).toBe(false);
+});
+
+test("applyPersonaPlan: chain that was consolidated → no skip warning", () => {
+  const root = appendPersonaEntry(paths, "vellumpike", {
+    text: "r",
+    summary: "r",
+  });
+  const mid = appendPersonaEntry(paths, "vellumpike", {
+    text: "m",
+    summary: "m",
+    replies_to: root.id,
+  });
+  const leaf = appendPersonaEntry(paths, "vellumpike", {
+    text: "l",
+    summary: "l",
+    replies_to: mid.id,
+  });
+  const result = applyPersonaPlan(paths, "vellumpike", {
+    fade: [],
+    forget: [],
+    consolidate: [
+      {
+        source_ids: [root.id, mid.id, leaf.id],
+        new_entry: { summary: "arc", text: "consolidated" },
+      },
+    ],
+  });
+  expect(
+    result.notes.some((n) => n.includes("consolidation skipped")),
+  ).toBe(false);
+});
+
+test("applyPersonaPlan: chain that was fully forgotten → no skip warning", () => {
+  const root = appendPersonaEntry(paths, "vellumpike", {
+    text: "r",
+    summary: "r",
+  });
+  const mid = appendPersonaEntry(paths, "vellumpike", {
+    text: "m",
+    summary: "m",
+    replies_to: root.id,
+  });
+  const leaf = appendPersonaEntry(paths, "vellumpike", {
+    text: "l",
+    summary: "l",
+    replies_to: mid.id,
+  });
+  const result = applyPersonaPlan(paths, "vellumpike", {
+    fade: [],
+    forget: [{ id: root.id }, { id: mid.id }, { id: leaf.id }],
+    consolidate: [],
+  });
+  expect(
+    result.notes.some((n) => n.includes("consolidation skipped")),
+  ).toBe(false);
+});
+
+test("applyPersonaPlan: chain only partially handled → still surfaces skip warning", () => {
+  const root = appendPersonaEntry(paths, "vellumpike", {
+    text: "r",
+    summary: "r",
+  });
+  const mid = appendPersonaEntry(paths, "vellumpike", {
+    text: "m",
+    summary: "m",
+    replies_to: root.id,
+  });
+  const leaf = appendPersonaEntry(paths, "vellumpike", {
+    text: "l",
+    summary: "l",
+    replies_to: mid.id,
+  });
+  // Librarian forgot the root only. Mid and leaf left active.
+  const result = applyPersonaPlan(paths, "vellumpike", {
+    fade: [],
+    forget: [{ id: root.id }],
+    consolidate: [],
+  });
+  expect(
+    result.notes.some((n) => n.includes("consolidation skipped")),
+  ).toBe(true);
+});
+
 test("audit text on empty plan still produces a no-op marker", async () => {
   const { getEntry } = await import("../../memory/index.ts");
   appendPersonaEntry(paths, "vellumpike", { text: "untouched" });
