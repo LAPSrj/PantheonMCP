@@ -40,6 +40,13 @@ test("parseAndValidateLibrarianOutput accepts a well-formed plan with prose surr
   expect(plan.fade).toHaveLength(1);
 });
 
+test("parseAndValidateLibrarianOutput accepts optional posture_summary", () => {
+  const raw =
+    '{"fade":[],"forget":[],"consolidate":[],"posture_summary":"Conservative pass."}';
+  const plan = parseAndValidateLibrarianOutput(raw);
+  expect(plan.posture_summary).toBe("Conservative pass.");
+});
+
 test("parseAndValidateLibrarianOutput rejects missing required keys", () => {
   const raw = `{"fade":[]}`;
   expect(() => parseAndValidateLibrarianOutput(raw)).toThrow(/schema validation/);
@@ -279,4 +286,115 @@ test("defaultLibrarianTimeout scales with entry count and caps at 600_000ms", ()
   // Cap at 600_000ms (10 min) — kicks in around entry count 180.
   expect(defaultLibrarianTimeout(200)).toBe(600_000);
   expect(defaultLibrarianTimeout(9999)).toBe(600_000);
+});
+
+// --- Commit 2: audit roll-up + posture_summary --------------------- //
+
+test("audit text rolls up forget reasons into categories with top-5 verbatim notable forgets", async () => {
+  const { getEntry } = await import("../../memory/index.ts");
+  // 7 entries with reasons that cluster into 2 categories.
+  const ids = [];
+  for (let i = 0; i < 4; i++) {
+    const e = appendPersonaEntry(paths, "vellumpike", { text: `e${i}` });
+    ids.push(e.id);
+  }
+  for (let i = 0; i < 3; i++) {
+    const e = appendPersonaEntry(paths, "vellumpike", { text: `f${i}` });
+    ids.push(e.id);
+  }
+  const plan: DreamPlan = {
+    fade: [],
+    forget: [
+      { id: ids[0]!, reason: "session log; superseded by completion" },
+      { id: ids[1]!, reason: "session log; same thread" },
+      { id: ids[2]!, reason: "session log; different sub-thread" },
+      { id: ids[3]!, reason: "session log; yet another wrap" },
+      { id: ids[4]!, reason: "handoff drained; target read it" },
+      { id: ids[5]!, reason: "handoff drained; superseded too" },
+      { id: ids[6]!, reason: "handoff drained; auto-fade past expiry" },
+    ],
+    consolidate: [],
+  };
+  applyPersonaPlan(paths, "vellumpike", plan);
+  const audit = listPersonaIndex(paths, "vellumpike", { kind: "dream_log" })[0]!;
+  const auditEntry = getEntry(paths, "vellumpike", audit.id)!;
+
+  // Categories surface in audit text.
+  expect(auditEntry.text).toContain("forget categories:");
+  expect(auditEntry.text).toMatch(/4× session log/);
+  expect(auditEntry.text).toMatch(/3× handoff drained/);
+
+  // First 5 forgets surface verbatim under "notable forgets".
+  expect(auditEntry.text).toContain("notable forgets");
+  // 6th and 7th surface a "more — see details" marker.
+  expect(auditEntry.text).toContain("+2 more");
+
+  // Full per-action dump lands in details.
+  expect(auditEntry.details).toBeDefined();
+  expect(auditEntry.details!).toContain("## forgotten:");
+  // Every original id is in details.
+  for (const id of ids) {
+    expect(auditEntry.details!).toContain(id);
+  }
+});
+
+test("audit summary uses posture_summary when present", async () => {
+  const { getEntry } = await import("../../memory/index.ts");
+  const e = appendPersonaEntry(paths, "vellumpike", { text: "stale" });
+  const plan: DreamPlan = {
+    fade: [],
+    forget: [{ id: e.id }],
+    consolidate: [],
+    posture_summary: "Conservative pass — most entries are reference-shape.",
+  };
+  applyPersonaPlan(paths, "vellumpike", plan);
+  const audit = listPersonaIndex(paths, "vellumpike", { kind: "dream_log" })[0]!;
+  expect(audit.summary).toBe(
+    "Conservative pass — most entries are reference-shape.",
+  );
+  // posture_summary also shows up at the top of text.
+  const auditEntry = getEntry(paths, "vellumpike", audit.id)!;
+  expect(auditEntry.text).toMatch(/Conservative pass/);
+});
+
+test("audit details contains full plan; audit text is compact", async () => {
+  const { getEntry } = await import("../../memory/index.ts");
+  // 15 forgets — verbose enough that the compact text must summarize.
+  const ids: string[] = [];
+  for (let i = 0; i < 15; i++) {
+    const e = appendPersonaEntry(paths, "vellumpike", { text: `t-${i}` });
+    ids.push(e.id);
+  }
+  const plan: DreamPlan = {
+    fade: [],
+    forget: ids.map((id) => ({ id, reason: "shipped block, log no longer relevant" })),
+    consolidate: [],
+  };
+  applyPersonaPlan(paths, "vellumpike", plan);
+  const audit = listPersonaIndex(paths, "vellumpike", { kind: "dream_log" })[0]!;
+  const auditEntry = getEntry(paths, "vellumpike", audit.id)!;
+
+  // Text shows the top 5 + "+10 more — see details".
+  const textIdMatches = ids.filter((id) => auditEntry.text.includes(id));
+  expect(textIdMatches.length).toBe(5);
+  expect(auditEntry.text).toContain("+10 more");
+
+  // Details has all 15.
+  const detailsIdMatches = ids.filter((id) =>
+    auditEntry.details!.includes(id),
+  );
+  expect(detailsIdMatches.length).toBe(15);
+});
+
+test("audit text on empty plan still produces a no-op marker", async () => {
+  const { getEntry } = await import("../../memory/index.ts");
+  appendPersonaEntry(paths, "vellumpike", { text: "untouched" });
+  applyPersonaPlan(paths, "vellumpike", {
+    fade: [],
+    forget: [],
+    consolidate: [],
+  });
+  const audit = listPersonaIndex(paths, "vellumpike", { kind: "dream_log" })[0]!;
+  const auditEntry = getEntry(paths, "vellumpike", audit.id)!;
+  expect(auditEntry.text).toContain("No-op pass");
 });

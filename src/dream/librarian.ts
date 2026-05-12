@@ -71,6 +71,12 @@ export const DREAM_PLAN_SCHEMA: JsonSchema = {
   required: ["fade", "forget", "consolidate"],
   additionalProperties: false,
   properties: {
+    /** Optional one-line summary of the librarian's overall posture
+     * for this pass. Surfaces in the dream_log audit entry's summary
+     * when present. Useful for "I was conservative — most entries
+     * were reference-shape and stayed" vs "aggressive cleanup of
+     * stale session logs." */
+    posture_summary: { type: "string", maxLength: 240 },
     fade: {
       type: "array",
       items: {

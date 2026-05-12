@@ -50,6 +50,10 @@ export interface DreamPlan {
   fade: DreamPlanFade[];
   forget: DreamPlanForget[];
   consolidate: DreamPlanConsolidate[];
+  /** Optional librarian-provided one-line summary of the pass's
+   * overall posture. Surfaces in the dream_log audit entry's
+   * summary when present. */
+  posture_summary?: string;
 }
 
 export interface DreamApplyResult {

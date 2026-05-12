@@ -168,9 +168,16 @@ export function applyPersonaPlan(
     core_forgets_coerced > 0
       ? `, ${core_forgets_coerced} core-forget coerced to fade`
       : "";
+  const bodies = renderAuditBodies(plan, notes);
+  const summary = plan.posture_summary
+    ? plan.posture_summary.length <= 240
+      ? plan.posture_summary
+      : `Dream ${todayIso()} — ${plan.posture_summary.slice(0, 200)}…`
+    : `Dream ${todayIso()} — faded ${faded}, forgot ${forgotten}, consolidated ${consolidated}${coercionSuffix}`;
   const audit = appendPersonaEntry(paths, username, {
-    summary: `Dream ${todayIso()} — faded ${faded}, forgot ${forgotten}, consolidated ${consolidated}${coercionSuffix}`,
-    text: renderAuditBody(plan, notes),
+    summary,
+    text: bodies.text,
+    details: bodies.details,
     kind: "dream_log",
   });
 
@@ -274,9 +281,16 @@ export function applyProjectPlan(
     core_forgets_coerced > 0
       ? `, ${core_forgets_coerced} core-forget coerced to fade`
       : "";
+  const bodies = renderAuditBodies(plan, notes);
+  const summary = plan.posture_summary
+    ? plan.posture_summary.length <= 240
+      ? plan.posture_summary
+      : `Project-dream ${todayIso()} — ${plan.posture_summary.slice(0, 200)}…`
+    : `Project-dream ${todayIso()} — faded ${faded}, forgot ${forgotten}, consolidated ${consolidated}${coercionSuffix}`;
   const audit = appendProjectEntry(paths, project, {
-    summary: `Project-dream ${todayIso()} — faded ${faded}, forgot ${forgotten}, consolidated ${consolidated}${coercionSuffix}`,
-    text: renderAuditBody(plan, notes),
+    summary,
+    text: bodies.text,
+    details: bodies.details,
     kind: "dream_log",
     ...(author_username !== null ? { author_username } : {}),
   });
@@ -292,19 +306,126 @@ export function applyProjectPlan(
   };
 }
 
-function renderAuditBody(plan: DreamPlan, notes: string[]): string {
+interface AuditBodies {
+  /** Compact summary going into the dream_log entry's `text` — the
+   * body rendered inline at startup. */
+  text: string;
+  /** Full plan dump going into `details` — accessed only via
+   * `get_memory_details(id)`. Off-budget. */
+  details: string;
+}
+
+/** Render the audit body in two tiers: a compact reason-category
+ * roll-up for `text` (rendered inline) and the full per-action dump
+ * for `details` (never inlined). Forget reasons get grouped by
+ * first-clause to keep the count summary readable even at 30+
+ * forgets. Top 5 forget decisions are surfaced verbatim alongside
+ * the rollup for fast skim. */
+function renderAuditBodies(plan: DreamPlan, notes: string[]): AuditBodies {
+  const text = renderAuditRollup(plan, notes);
+  const details = renderAuditDetail(plan, notes);
+  return { text, details };
+}
+
+function renderAuditRollup(plan: DreamPlan, notes: string[]): string {
+  const lines: string[] = [];
+
+  if (plan.posture_summary) {
+    lines.push(`> ${plan.posture_summary}`);
+    lines.push("");
+  }
+
+  lines.push(
+    `Counts — fade: ${plan.fade.length}, forget: ${plan.forget.length}, consolidate: ${plan.consolidate.length}.`,
+  );
+  lines.push("");
+
+  if (plan.consolidate.length > 0) {
+    lines.push("## consolidated:");
+    for (const a of plan.consolidate) {
+      lines.push(
+        `- (${a.source_ids.length}) → \`${escapeMd(a.new_entry.summary)}\`${a.reason ? ` — ${a.reason}` : ""}`,
+      );
+    }
+    lines.push("");
+  }
+
+  const fadeCats = groupByReason(plan.fade);
+  if (fadeCats.size > 0) {
+    lines.push("## fade categories:");
+    for (const [cat, ids] of topN(fadeCats, 3)) {
+      lines.push(`- ${ids.length}× ${cat}`);
+    }
+    if (fadeCats.size > 3) {
+      lines.push(`- (+${fadeCats.size - 3} more categories — see details)`);
+    }
+    lines.push("");
+  }
+
+  const forgetCats = groupByReason(plan.forget);
+  if (forgetCats.size > 0) {
+    lines.push("## forget categories:");
+    for (const [cat, ids] of topN(forgetCats, 3)) {
+      lines.push(`- ${ids.length}× ${cat}`);
+    }
+    if (forgetCats.size > 3) {
+      lines.push(`- (+${forgetCats.size - 3} more categories — see details)`);
+    }
+    lines.push("");
+  }
+
+  if (plan.forget.length > 0) {
+    lines.push("## notable forgets (top 5 by id):");
+    for (const a of plan.forget.slice(0, 5)) {
+      lines.push(`- \`${a.id}\`${a.reason ? ` — ${a.reason}` : ""}`);
+    }
+    if (plan.forget.length > 5) {
+      lines.push(
+        `- (+${plan.forget.length - 5} more — see details for full list)`,
+      );
+    }
+    lines.push("");
+  }
+
+  if (notes.length > 0) {
+    const visible = notes.slice(0, 5);
+    lines.push("## notes:");
+    for (const n of visible) lines.push(`- ${n}`);
+    if (notes.length > visible.length) {
+      lines.push(
+        `- (+${notes.length - visible.length} more notes — see details)`,
+      );
+    }
+    lines.push("");
+  }
+
+  if (
+    plan.fade.length === 0 &&
+    plan.forget.length === 0 &&
+    plan.consolidate.length === 0 &&
+    notes.length === 0
+  ) {
+    lines.push("No-op pass — librarian returned an empty plan.");
+  }
+
+  return lines.join("\n").trimEnd();
+}
+
+function renderAuditDetail(plan: DreamPlan, notes: string[]): string {
   const lines: string[] = [];
   if (plan.fade.length > 0) {
     lines.push("## faded:");
     for (const a of plan.fade) {
       lines.push(`- ${a.id}${a.reason ? ` — ${a.reason}` : ""}`);
     }
+    lines.push("");
   }
   if (plan.forget.length > 0) {
     lines.push("## forgotten:");
     for (const a of plan.forget) {
       lines.push(`- ${a.id}${a.reason ? ` — ${a.reason}` : ""}`);
     }
+    lines.push("");
   }
   if (plan.consolidate.length > 0) {
     lines.push("## consolidated:");
@@ -313,13 +434,64 @@ function renderAuditBody(plan: DreamPlan, notes: string[]): string {
         `- (${a.source_ids.length}) ${a.source_ids.join(", ")} → "${a.new_entry.summary}"${a.reason ? ` — ${a.reason}` : ""}`,
       );
     }
+    lines.push("");
   }
   if (notes.length > 0) {
     lines.push("## notes:");
     for (const n of notes) lines.push(`- ${n}`);
   }
-  if (lines.length === 0) lines.push("No-op pass — librarian returned an empty plan.");
-  return lines.join("\n");
+  return lines.join("\n").trimEnd();
+}
+
+/** Group plan entries by a normalized first-clause of their reason.
+ * Entries without a reason go under the synthetic key
+ * `(no reason given)`. Keys are lowercased + whitespace-collapsed
+ * + truncated to 80 chars so near-duplicates merge. */
+function groupByReason(
+  items: ReadonlyArray<{ id: string; reason?: string }>,
+): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const it of items) {
+    const key = normalizeReason(it.reason);
+    const existing = out.get(key);
+    if (existing) existing.push(it.id);
+    else out.set(key, [it.id]);
+  }
+  return out;
+}
+
+function normalizeReason(reason: string | undefined): string {
+  if (!reason || reason.trim().length === 0) return "(no reason given)";
+  // First-clause: split on `;` or `. ` or `, ` (in priority order).
+  let clause = reason.trim();
+  for (const sep of [";", ". ", ", "]) {
+    const at = clause.indexOf(sep);
+    if (at > 0) {
+      clause = clause.slice(0, at);
+      break;
+    }
+  }
+  return clause
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+}
+
+function topN<K, V>(
+  map: Map<K, V[]>,
+  n: number,
+): Array<[K, V[]]> {
+  return [...map.entries()]
+    .sort((a, b) => b[1].length - a[1].length)
+    .slice(0, n);
+}
+
+function escapeMd(s: string): string {
+  // Light escape — `s.replace` for any `` ` `` chars that would break
+  // the inline-code rendering. Bodies don't need fuller escaping;
+  // this is just for the inline `\`...\`` snippets.
+  return s.replace(/`/g, "\\`");
 }
 
 function todayIso(): string {
