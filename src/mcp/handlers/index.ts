@@ -9,6 +9,8 @@ import * as projectMemory from "./project-memory.ts";
 import * as history from "./history.ts";
 import * as remanifestMod from "./remanifest.ts";
 import * as dreamMod from "./dream.ts";
+import * as notebook from "./notebook.ts";
+import * as projectNotebook from "./project-notebook.ts";
 
 /** Single registry of every implemented handler keyed by tool name.
  * Tools with no handler entry surface as `unknown_tool` from dispatch. */
@@ -113,4 +115,43 @@ export const HANDLERS: Record<string, Handler> = {
 
   // Dream (librarian-driven memory cleanup; persona or project)
   dream: dreamMod.dream,
+
+  // Notebook (per-persona)
+  notebook_write_page: notebook.notebook_write_page,
+  notebook_open: notebook.notebook_open,
+  notebook_get_page: notebook.notebook_get_page,
+  notebook_list_topics: notebook.notebook_list_topics,
+  notebook_search: notebook.notebook_search,
+  notebook_delete_page: notebook.notebook_delete_page,
+  notebook_restore_page: notebook.notebook_restore_page,
+  notebook_delete_topic: notebook.notebook_delete_topic,
+  notebook_rename_topic: notebook.notebook_rename_topic,
+  notebook_list_topics_any: notebook.notebook_list_topics_any,
+  notebook_open_any: notebook.notebook_open_any,
+  notebook_get_page_any: notebook.notebook_get_page_any,
+  notebook_search_any: notebook.notebook_search_any,
+  notebook_export: notebook.notebook_export,
+  notebook_export_any: notebook.notebook_export_any,
+
+  // Project notebook (shared across all agents in a project)
+  project_notebook_write_page: projectNotebook.project_notebook_write_page,
+  project_notebook_write_page_any: projectNotebook.project_notebook_write_page_any,
+  project_notebook_open: projectNotebook.project_notebook_open,
+  project_notebook_open_any: projectNotebook.project_notebook_open_any,
+  project_notebook_get_page: projectNotebook.project_notebook_get_page,
+  project_notebook_get_page_any: projectNotebook.project_notebook_get_page_any,
+  project_notebook_list_topics: projectNotebook.project_notebook_list_topics,
+  project_notebook_list_topics_any: projectNotebook.project_notebook_list_topics_any,
+  project_notebook_search: projectNotebook.project_notebook_search,
+  project_notebook_search_any: projectNotebook.project_notebook_search_any,
+  project_notebook_delete_page: projectNotebook.project_notebook_delete_page,
+  project_notebook_delete_page_any: projectNotebook.project_notebook_delete_page_any,
+  project_notebook_restore_page: projectNotebook.project_notebook_restore_page,
+  project_notebook_restore_page_any: projectNotebook.project_notebook_restore_page_any,
+  project_notebook_delete_topic: projectNotebook.project_notebook_delete_topic,
+  project_notebook_delete_topic_any: projectNotebook.project_notebook_delete_topic_any,
+  project_notebook_rename_topic: projectNotebook.project_notebook_rename_topic,
+  project_notebook_rename_topic_any: projectNotebook.project_notebook_rename_topic_any,
+  project_notebook_export: projectNotebook.project_notebook_export,
+  project_notebook_export_any: projectNotebook.project_notebook_export_any,
 };

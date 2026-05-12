@@ -1590,4 +1590,517 @@ export const TOOLS: readonly ToolDef[] = [
       },
     },
   },
+
+  // -------- Notebook (per-persona) --------
+  {
+    name: "notebook_write_page",
+    description:
+      "Create or update a page in the caller's notebook. `topic` is a caller-supplied kebab slug (^[a-z0-9][a-z0-9_-]{0,63}$); a new slug creates a new topic. Pass `page_id` to update an existing page in place; omit to create a new one (id slugified from title, deduped within topic). `topic_title` sets the display title when the topic is new — to rename later, use `notebook_rename_topic`. Page bodies are NEVER inlined at login; only a TOC of topics surfaces in `resume_summary.notebooks`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["topic", "title", "body"],
+      properties: {
+        topic: { type: "string" },
+        title: { type: "string" },
+        body: { type: "string" },
+        page_id: { type: "string" },
+        tags: { type: "array", items: { type: "string" } },
+        topic_title: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "notebook_open",
+    description:
+      "Return every active page in a topic with full bodies. Use this when you need the actual content. Pass `include_deleted: true` to also surface tombstoned pages.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["topic"],
+      properties: {
+        topic: { type: "string" },
+        include_deleted: { type: "boolean" },
+      },
+    },
+  },
+  {
+    name: "notebook_get_page",
+    description: "Return a single notebook page by (topic, page_id) with full body.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["topic", "page_id"],
+      properties: {
+        topic: { type: "string" },
+        page_id: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "notebook_list_topics",
+    description:
+      "TOC view of the caller's notebook — every topic with its active page count and last-touched timestamp. Empty topics omitted by default. Useful mid-session; for login-time TOC see `resume_summary.notebooks`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        include_empty: { type: "boolean" },
+      },
+    },
+  },
+  {
+    name: "notebook_search",
+    description:
+      "Substring search across the caller's notebook — matches title, body, and tags. Filter by `topic` and/or `tag` (exact match, case-insensitive). Default limit 20.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["query"],
+      properties: {
+        query: { type: "string" },
+        topic: { type: "string" },
+        tag: { type: "string" },
+        limit: { type: "number" },
+      },
+    },
+  },
+  {
+    name: "notebook_delete_page",
+    description:
+      "Tombstone a page (status → 'deleted'). The page stays on disk and can be brought back with `notebook_restore_page`. There is no hard-delete surface.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["topic", "page_id"],
+      properties: {
+        topic: { type: "string" },
+        page_id: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "notebook_restore_page",
+    description: "Restore a tombstoned page (status → 'active').",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["topic", "page_id"],
+      properties: {
+        topic: { type: "string" },
+        page_id: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "notebook_delete_topic",
+    description:
+      "Tombstone every active page in a topic. The topic auto-vanishes from the TOC until a page is restored or a new page is appended.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["topic"],
+      properties: {
+        topic: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "notebook_rename_topic",
+    description:
+      "Move every page from one topic slug to another. Rejects when the destination slug already exists (no auto-merge).",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["from", "to"],
+      properties: {
+        from: { type: "string" },
+        to: { type: "string" },
+      },
+    },
+  },
+
+  // -------- Notebook (cross-persona reads) --------
+  {
+    name: "notebook_list_topics_any",
+    description: "TOC of another persona's notebook. Required: `username`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username"],
+      properties: {
+        username: { type: "string" },
+        include_empty: { type: "boolean" },
+      },
+    },
+  },
+  {
+    name: "notebook_open_any",
+    description: "Read a peer's topic — every active page with full body.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "topic"],
+      properties: {
+        username: { type: "string" },
+        topic: { type: "string" },
+        include_deleted: { type: "boolean" },
+      },
+    },
+  },
+  {
+    name: "notebook_get_page_any",
+    description: "Read a single page from a peer's notebook.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "topic", "page_id"],
+      properties: {
+        username: { type: "string" },
+        topic: { type: "string" },
+        page_id: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "notebook_search_any",
+    description:
+      "Search notebooks across personas. `scope: 'self'` (default) restricts to the caller; `scope: 'all'` unions every registered persona. Pass `username` to target a specific peer instead. Results carry the source `username` on each hit.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["query"],
+      properties: {
+        query: { type: "string" },
+        scope: { type: "string", enum: ["self", "all"] },
+        username: { type: "string" },
+        topic: { type: "string" },
+        tag: { type: "string" },
+        limit: { type: "number" },
+      },
+    },
+  },
+
+  // -------- Notebook export --------
+  {
+    name: "notebook_export",
+    description:
+      "Export the caller's notebook (or one topic) to a markdown file at an absolute path. `overwrite` defaults to false (refuses to clobber an existing file). `include_deleted` defaults to false. Parent directory must already exist.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["output_path"],
+      properties: {
+        output_path: { type: "string" },
+        topic: { type: "string" },
+        overwrite: { type: "boolean" },
+        include_deleted: { type: "boolean" },
+      },
+    },
+  },
+  {
+    name: "notebook_export_any",
+    description:
+      "Export another persona's notebook to a markdown file at an absolute path. Same overwrite/include_deleted semantics as `notebook_export`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "output_path"],
+      properties: {
+        username: { type: "string" },
+        output_path: { type: "string" },
+        topic: { type: "string" },
+        overwrite: { type: "boolean" },
+        include_deleted: { type: "boolean" },
+      },
+    },
+  },
+
+  // -------- Project-notebook (shared across all agents in a project) --------
+  {
+    name: "project_notebook_write_page",
+    description:
+      "Create or update a page in the caller's project notebook. Same shape as `notebook_write_page`; pages carry `author_username` stamped from the caller's claimed persona. Project resolved from chat scope — call `login` first.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["topic", "title", "body"],
+      properties: {
+        topic: { type: "string" },
+        title: { type: "string" },
+        body: { type: "string" },
+        page_id: { type: "string" },
+        tags: { type: "array", items: { type: "string" } },
+        topic_title: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "project_notebook_write_page_any",
+    description: "Explicit-project variant — pass `project` directly instead of relying on chat scope.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["project", "topic", "title", "body"],
+      properties: {
+        project: { type: "string" },
+        topic: { type: "string" },
+        title: { type: "string" },
+        body: { type: "string" },
+        page_id: { type: "string" },
+        tags: { type: "array", items: { type: "string" } },
+        topic_title: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "project_notebook_open",
+    description: "Return every active page in a project-notebook topic with full bodies.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["topic"],
+      properties: {
+        topic: { type: "string" },
+        include_deleted: { type: "boolean" },
+      },
+    },
+  },
+  {
+    name: "project_notebook_open_any",
+    description: "Explicit-project variant of `project_notebook_open`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["project", "topic"],
+      properties: {
+        project: { type: "string" },
+        topic: { type: "string" },
+        include_deleted: { type: "boolean" },
+      },
+    },
+  },
+  {
+    name: "project_notebook_get_page",
+    description: "Return a single project-notebook page by (topic, page_id).",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["topic", "page_id"],
+      properties: {
+        topic: { type: "string" },
+        page_id: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "project_notebook_get_page_any",
+    description: "Explicit-project variant of `project_notebook_get_page`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["project", "topic", "page_id"],
+      properties: {
+        project: { type: "string" },
+        topic: { type: "string" },
+        page_id: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "project_notebook_list_topics",
+    description: "TOC view of the caller's project notebook.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        include_empty: { type: "boolean" },
+      },
+    },
+  },
+  {
+    name: "project_notebook_list_topics_any",
+    description: "Explicit-project variant of `project_notebook_list_topics`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["project"],
+      properties: {
+        project: { type: "string" },
+        include_empty: { type: "boolean" },
+      },
+    },
+  },
+  {
+    name: "project_notebook_search",
+    description:
+      "Substring search across the caller's project notebook. Optional `author` filter on `author_username`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["query"],
+      properties: {
+        query: { type: "string" },
+        topic: { type: "string" },
+        tag: { type: "string" },
+        author: { type: "string" },
+        limit: { type: "number" },
+      },
+    },
+  },
+  {
+    name: "project_notebook_search_any",
+    description: "Explicit-project variant of `project_notebook_search`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["project", "query"],
+      properties: {
+        project: { type: "string" },
+        query: { type: "string" },
+        topic: { type: "string" },
+        tag: { type: "string" },
+        author: { type: "string" },
+        limit: { type: "number" },
+      },
+    },
+  },
+  {
+    name: "project_notebook_delete_page",
+    description: "Tombstone a project-notebook page. Restore via `project_notebook_restore_page`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["topic", "page_id"],
+      properties: {
+        topic: { type: "string" },
+        page_id: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "project_notebook_delete_page_any",
+    description: "Explicit-project variant of `project_notebook_delete_page`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["project", "topic", "page_id"],
+      properties: {
+        project: { type: "string" },
+        topic: { type: "string" },
+        page_id: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "project_notebook_restore_page",
+    description: "Restore a tombstoned project-notebook page.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["topic", "page_id"],
+      properties: {
+        topic: { type: "string" },
+        page_id: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "project_notebook_restore_page_any",
+    description: "Explicit-project variant of `project_notebook_restore_page`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["project", "topic", "page_id"],
+      properties: {
+        project: { type: "string" },
+        topic: { type: "string" },
+        page_id: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "project_notebook_delete_topic",
+    description: "Tombstone every active page in a project-notebook topic.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["topic"],
+      properties: {
+        topic: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "project_notebook_delete_topic_any",
+    description: "Explicit-project variant of `project_notebook_delete_topic`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["project", "topic"],
+      properties: {
+        project: { type: "string" },
+        topic: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "project_notebook_rename_topic",
+    description: "Move every page from one topic slug to another in the caller's project notebook.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["from", "to"],
+      properties: {
+        from: { type: "string" },
+        to: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "project_notebook_rename_topic_any",
+    description: "Explicit-project variant of `project_notebook_rename_topic`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["project", "from", "to"],
+      properties: {
+        project: { type: "string" },
+        from: { type: "string" },
+        to: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "project_notebook_export",
+    description:
+      "Export the caller's project notebook (or one topic) to a markdown file at an absolute path. Same overwrite/include_deleted semantics as `notebook_export`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["output_path"],
+      properties: {
+        output_path: { type: "string" },
+        topic: { type: "string" },
+        overwrite: { type: "boolean" },
+        include_deleted: { type: "boolean" },
+      },
+    },
+  },
+  {
+    name: "project_notebook_export_any",
+    description: "Explicit-project variant of `project_notebook_export`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["project", "output_path"],
+      properties: {
+        project: { type: "string" },
+        output_path: { type: "string" },
+        topic: { type: "string" },
+        overwrite: { type: "boolean" },
+        include_deleted: { type: "boolean" },
+      },
+    },
+  },
 ];
