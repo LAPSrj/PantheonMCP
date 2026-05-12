@@ -117,8 +117,12 @@ test("pressure hint can fire for claimed-persona sessions", async () => {
   await dispatch("claim", { username: "vellumpike" }, ctx);
   // Force the surrogate over the soft_hint floor by tampering with
   // env-tunable thresholds — set the soft floor to 1 tool call.
+  // Also disable the 30-min freshness floor so the hint can fire
+  // without waiting wall-clock minutes.
   const prevSoft = process.env.PANTHEON_PRESSURE_SOFT_TOOLS;
+  const prevFloor = process.env.PANTHEON_PRESSURE_FRESHNESS_FLOOR_MIN;
   process.env.PANTHEON_PRESSURE_SOFT_TOOLS = "1";
+  process.env.PANTHEON_PRESSURE_FRESHNESS_FLOOR_MIN = "0";
   try {
     // claim already bumped activity. session_info bumps once more.
     const r = await dispatch("session_info", {}, ctx);
@@ -131,6 +135,11 @@ test("pressure hint can fire for claimed-persona sessions", async () => {
       delete process.env.PANTHEON_PRESSURE_SOFT_TOOLS;
     } else {
       process.env.PANTHEON_PRESSURE_SOFT_TOOLS = prevSoft;
+    }
+    if (prevFloor === undefined) {
+      delete process.env.PANTHEON_PRESSURE_FRESHNESS_FLOOR_MIN;
+    } else {
+      process.env.PANTHEON_PRESSURE_FRESHNESS_FLOOR_MIN = prevFloor;
     }
   }
 });

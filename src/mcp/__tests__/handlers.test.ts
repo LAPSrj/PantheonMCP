@@ -495,9 +495,13 @@ test("find_memory: scope='self' without a claim → no_persona", async () => {
 
 test("context-pressure: tool calls past the soft threshold inject a hint into the response", async () => {
   // Bump just past the soft threshold via env override so the test
-  // doesn't have to dispatch 50 tools.
+  // doesn't have to dispatch 50 tools. Also disable the freshness
+  // floor — it would otherwise suppress the hint because lastSaveAt
+  // is sub-second in test time.
   const prev = process.env.PANTHEON_PRESSURE_SOFT_TOOLS;
+  const prevFloor = process.env.PANTHEON_PRESSURE_FRESHNESS_FLOOR_MIN;
   process.env.PANTHEON_PRESSURE_SOFT_TOOLS = "2";
+  process.env.PANTHEON_PRESSURE_FRESHNESS_FLOOR_MIN = "0";
   try {
     await call("register", {
       username: "vellumpike",
@@ -518,6 +522,11 @@ test("context-pressure: tool calls past the soft threshold inject a hint into th
   } finally {
     if (prev === undefined) delete process.env.PANTHEON_PRESSURE_SOFT_TOOLS;
     else process.env.PANTHEON_PRESSURE_SOFT_TOOLS = prev;
+    if (prevFloor === undefined) {
+      delete process.env.PANTHEON_PRESSURE_FRESHNESS_FLOOR_MIN;
+    } else {
+      process.env.PANTHEON_PRESSURE_FRESHNESS_FLOOR_MIN = prevFloor;
+    }
   }
 });
 

@@ -21,7 +21,15 @@
  * Override thresholds via env (testing): `PANTHEON_PRESSURE_SOFT_TOOLS`,
  * `PANTHEON_PRESSURE_STRONG_TOOLS`, `PANTHEON_PRESSURE_SAVE_TOOLS`,
  * `PANTHEON_PRESSURE_SOFT_MIN`, `PANTHEON_PRESSURE_STRONG_MIN`,
- * `PANTHEON_PRESSURE_SAVE_MIN`. */
+ * `PANTHEON_PRESSURE_SAVE_MIN`, `PANTHEON_PRESSURE_FRESHNESS_FLOOR_MIN`.
+ *
+ * Freshness floor: when a memory-write tool fired within
+ * `freshness_floor_minutes` (default 30), ALL tiers suppress to `low`.
+ * The hint should not hammer an agent right after they save — the
+ * trigger uses real wall-clock elapsed time as a context-budget proxy,
+ * and a recent save resets that proxy to zero. The floor closes a
+ * narrow window where tool_call_count had crossed a threshold but
+ * elapsed time hadn't yet caught up. */
 
 export type PressureLevel = "low" | "soft_hint" | "strong_nudge" | "save_now";
 
@@ -40,6 +48,10 @@ export interface PressureThresholds {
   soft_minutes: number;
   strong_minutes: number;
   save_minutes: number;
+  /** Minutes since last save below which ALL tiers suppress to `low`.
+   * Prevents firing immediately after a save when tool-call count was
+   * elevated. Default 30. */
+  freshness_floor_minutes: number;
 }
 
 const DEFAULTS: PressureThresholds = {
@@ -49,13 +61,16 @@ const DEFAULTS: PressureThresholds = {
   soft_minutes: 120, // 2 hours
   strong_minutes: 240, // 4 hours
   save_minutes: 480, // 8 hours
+  freshness_floor_minutes: 30,
 };
 
 function envInt(name: string, fallback: number): number {
   const raw = process.env[name];
   if (!raw) return fallback;
   const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
+  // 0 is valid (it disables the threshold — useful for the freshness
+  // floor, where 0 means "no floor"). Negative values fall back.
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
 export function resolveThresholds(): PressureThresholds {
@@ -66,17 +81,38 @@ export function resolveThresholds(): PressureThresholds {
     soft_minutes: envInt("PANTHEON_PRESSURE_SOFT_MIN", DEFAULTS.soft_minutes),
     strong_minutes: envInt("PANTHEON_PRESSURE_STRONG_MIN", DEFAULTS.strong_minutes),
     save_minutes: envInt("PANTHEON_PRESSURE_SAVE_MIN", DEFAULTS.save_minutes),
+    freshness_floor_minutes: envInt(
+      "PANTHEON_PRESSURE_FRESHNESS_FLOOR_MIN",
+      DEFAULTS.freshness_floor_minutes,
+    ),
   };
 }
 
 /** Tools that count as "memory save" — they reset the pressure
  * counter when they succeed. The activity tracker on each tool
- * dispatch checks this set and calls `markMemorySave()` accordingly. */
+ * dispatch checks this set and calls `markMemorySave()` accordingly.
+ *
+ * Includes per-persona memory writes, project-memory writes, and
+ * notebook writes (per-persona + project). `fade_memory` /
+ * `forget_memory` and their project variants are NOT included —
+ * those are metadata-only mutations (status changes), not content
+ * writes, and shouldn't reset the "you've saved state" signal. */
 const SAVE_TOOLS: ReadonlySet<string> = new Set([
+  // Per-persona memory writes
   "append_memory",
   "update_memory",
   "set_memory",
   "snapshot_memory",
+  // Project-memory writes (parallel to per-persona — also add content)
+  "append_project_memory",
+  "append_project_memory_any",
+  "update_project_memory",
+  "update_project_memory_any",
+  // Notebook writes (per-persona + project — add long-form content)
+  "notebook_write_page",
+  "project_notebook_write_page",
+  "project_notebook_write_page_any",
+  // Lifecycle
   "rest", // rest with handoff slot also acts as a save
 ]);
 
@@ -91,6 +127,12 @@ export function computePressure(
   thresholds: PressureThresholds = resolveThresholds(),
 ): PressureLevel {
   const elapsedMin = (now - state.lastSaveAt) / 60_000;
+  // Freshness floor — suppress every tier when a memory-write fired
+  // recently. The tool-call counter was reset by `markMemorySave()`,
+  // but if the previous-pressure-window hadn't expired yet we'd still
+  // emit a stale-feeling hint right after the save. The floor closes
+  // that window.
+  if (elapsedMin < thresholds.freshness_floor_minutes) return "low";
   const tools = state.toolCallsSinceLastSave;
   if (tools >= thresholds.save_tools || elapsedMin >= thresholds.save_minutes) {
     return "save_now";
