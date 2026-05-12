@@ -24,5 +24,6 @@ export {
   buildProjectSnapshot,
   applyPersonaPlan,
   applyProjectPlan,
+  REFERENCE_KINDS,
   summarizePlan,
 } from "./apply.ts";

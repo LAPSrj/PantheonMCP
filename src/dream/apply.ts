@@ -31,6 +31,27 @@ import type {
 } from "./types.ts";
 import type { LibrarianSnapshot } from "./librarian.ts";
 
+/** Kinds whose forget bar is high enough that a single dream pass
+ * should never transition them straight from active → forgotten. The
+ * applier coerces any such `forget` action to `fade`, mirroring the
+ * core-coercion path: same multi-pass guarantee, surfaced in the
+ * audit note for traceability.
+ *
+ * Mirrors the typology in `LIBRARIAN_SYSTEM_PROMPT`. Kept in sync by
+ * convention — the prompt explains the rule to the librarian; this
+ * set enforces it deterministically. `handoff` is intentionally
+ * excluded: handoffs cycle by design (TTL-fade after 7 days; clearly
+ * ephemeral). */
+export const REFERENCE_KINDS: ReadonlySet<string> = new Set([
+  "gotcha",
+  "fact",
+  "decision",
+  "design",
+  "cross-mcp-workflow",
+  "sibling-network",
+  "posture-rail",
+]);
+
 export function buildPersonaSnapshot(
   paths: Paths,
   username: string,
@@ -92,6 +113,21 @@ export function applyPersonaPlan(
   const coreIds = new Set(
     preStore.entries.filter((e) => Boolean(e.core)).map((e) => e.id),
   );
+  // Lookup for the reference-kind coercion: id → entry (active only;
+  // already-faded reference entries can still be forgotten per the
+  // one-tier-per-pass rule). Built once at the top so each forget
+  // check is O(1).
+  const activeRefById = new Map<string, { id: string; kind: string }>();
+  for (const e of preStore.entries) {
+    if (
+      e.status === "active" &&
+      typeof e.kind === "string" &&
+      REFERENCE_KINDS.has(e.kind)
+    ) {
+      activeRefById.set(e.id, { id: e.id, kind: e.kind });
+    }
+  }
+  let reference_forgets_coerced = 0;
 
   // Detect consolidation opportunities the librarian missed. Surfaces
   // as a note for the auditor; does NOT gate the apply.
@@ -182,6 +218,27 @@ export function applyPersonaPlan(
       }
       continue;
     }
+    const refEntry = activeRefById.get(action.id);
+    if (refEntry !== undefined) {
+      // Reference-shape kinds (gotcha/fact/decision/design/...) get
+      // the same multi-pass protection as core when active. They
+      // carry recurring-context knowledge that's expensive to
+      // re-derive; a single-pass forget loses lineage.
+      try {
+        fadePersonaEntry(paths, username, action.id);
+        faded++;
+        reference_forgets_coerced++;
+        notes.push(
+          `forget('${action.id}') coerced to fade — entry is an active ${refEntry.kind} ` +
+            `(reference-shape kind); per lifecycle rule, reference entries demote at most one tier per pass.`,
+        );
+      } catch (err) {
+        notes.push(
+          `fade-coercion('${action.id}') failed: ${(err as Error).message}`,
+        );
+      }
+      continue;
+    }
     try {
       forgetPersonaEntry(paths, username, action.id);
       forgotten++;
@@ -191,8 +248,13 @@ export function applyPersonaPlan(
   }
 
   const coercionSuffix =
-    core_forgets_coerced > 0
-      ? `, ${core_forgets_coerced} core-forget coerced to fade`
+    core_forgets_coerced > 0 || reference_forgets_coerced > 0
+      ? (core_forgets_coerced > 0
+          ? `, ${core_forgets_coerced} core-forget coerced to fade`
+          : "") +
+        (reference_forgets_coerced > 0
+          ? `, ${reference_forgets_coerced} reference-forget coerced to fade`
+          : "")
       : "";
   const bodies = renderAuditBodies(plan, notes);
   const summary = plan.posture_summary
@@ -236,6 +298,19 @@ export function applyProjectPlan(
   const coreIds = new Set(
     preStore.entries.filter((e) => Boolean(e.core)).map((e) => e.id),
   );
+  // Same reference-kind lookup as the persona path. Project entries
+  // carry a `kind` field with the same conventions.
+  const activeRefById = new Map<string, { id: string; kind: string }>();
+  for (const e of preStore.entries) {
+    if (
+      e.status === "active" &&
+      typeof e.kind === "string" &&
+      REFERENCE_KINDS.has(e.kind)
+    ) {
+      activeRefById.set(e.id, { id: e.id, kind: e.kind });
+    }
+  }
+  let reference_forgets_coerced = 0;
 
   // Project entries don't carry replies_to (the field is persona-only),
   // so skipped-chain detection is a no-op here. Keeping the symmetric
@@ -299,6 +374,23 @@ export function applyProjectPlan(
       }
       continue;
     }
+    const refEntry = activeRefById.get(action.id);
+    if (refEntry !== undefined) {
+      try {
+        fadeProjectEntry(paths, project, action.id);
+        faded++;
+        reference_forgets_coerced++;
+        notes.push(
+          `forget('${action.id}') coerced to fade — entry is an active ${refEntry.kind} ` +
+            `(reference-shape kind); per lifecycle rule, reference entries demote at most one tier per pass.`,
+        );
+      } catch (err) {
+        notes.push(
+          `fade-coercion('${action.id}') failed: ${(err as Error).message}`,
+        );
+      }
+      continue;
+    }
     try {
       forgetProjectEntry(paths, project, action.id);
       forgotten++;
@@ -308,8 +400,13 @@ export function applyProjectPlan(
   }
 
   const coercionSuffix =
-    core_forgets_coerced > 0
-      ? `, ${core_forgets_coerced} core-forget coerced to fade`
+    core_forgets_coerced > 0 || reference_forgets_coerced > 0
+      ? (core_forgets_coerced > 0
+          ? `, ${core_forgets_coerced} core-forget coerced to fade`
+          : "") +
+        (reference_forgets_coerced > 0
+          ? `, ${reference_forgets_coerced} reference-forget coerced to fade`
+          : "")
       : "";
   const bodies = renderAuditBodies(plan, notes);
   const summary = plan.posture_summary

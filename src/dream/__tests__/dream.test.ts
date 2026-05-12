@@ -519,6 +519,122 @@ test("applyPersonaPlan: chain only partially handled → still surfaces skip war
   ).toBe(true);
 });
 
+// --- Commit 7: reference-kind forget coercion ---------------------- //
+
+test("applyPersonaPlan: forget on an active gotcha is coerced to fade", () => {
+  const e = appendPersonaEntry(paths, "vellumpike", {
+    text: "freshness-check window-timing-strict misdiagnoses",
+    summary: "phase-6 freshness gotcha",
+    kind: "gotcha",
+  });
+  const result = applyPersonaPlan(paths, "vellumpike", {
+    fade: [],
+    forget: [{ id: e.id, reason: "phase-6 work done, gotcha narrow" }],
+    consolidate: [],
+  });
+  // Coerced — not actually forgotten.
+  expect(result.forgotten).toBe(0);
+  expect(result.faded).toBe(1);
+  expect(getPersonaEntry(paths, "vellumpike", e.id)!.status).toBe("faded");
+  // Audit note attributes the coercion to the reference-shape kind.
+  expect(
+    result.notes.some(
+      (n) =>
+        n.includes(`forget('${e.id}') coerced to fade`) &&
+        n.includes("active gotcha") &&
+        n.includes("reference-shape kind"),
+    ),
+  ).toBe(true);
+  // Audit summary surfaces the reference-coercion count.
+  const audit = listPersonaIndex(paths, "vellumpike", { kind: "dream_log" });
+  expect(audit[0]!.summary).toContain("reference-forget coerced to fade");
+});
+
+test("applyPersonaPlan: forget on a FADED gotcha is allowed (one-tier-per-pass rule preserves this path)", async () => {
+  const { fadeEntry } = await import("../../memory/index.ts");
+  const e = appendPersonaEntry(paths, "vellumpike", {
+    text: "old gotcha",
+    summary: "old gotcha",
+    kind: "gotcha",
+  });
+  fadeEntry(paths, "vellumpike", e.id);
+  const result = applyPersonaPlan(paths, "vellumpike", {
+    fade: [],
+    forget: [{ id: e.id }],
+    consolidate: [],
+  });
+  // Faded → forget is one tier. Allowed by the lifecycle rule.
+  expect(result.forgotten).toBe(1);
+  expect(getPersonaEntry(paths, "vellumpike", e.id)!.status).toBe("forgotten");
+});
+
+test("applyPersonaPlan: forget on an active LOG-kind entry is NOT coerced", () => {
+  const e = appendPersonaEntry(paths, "vellumpike", {
+    text: "session wrap",
+    summary: "session wrap",
+    kind: "log",
+  });
+  const result = applyPersonaPlan(paths, "vellumpike", {
+    fade: [],
+    forget: [{ id: e.id }],
+    consolidate: [],
+  });
+  // LOG-kind: regular forget proceeds.
+  expect(result.forgotten).toBe(1);
+  expect(getPersonaEntry(paths, "vellumpike", e.id)!.status).toBe("forgotten");
+  expect(
+    result.notes.some((n) => n.includes("reference-shape kind")),
+  ).toBe(false);
+});
+
+test("applyPersonaPlan: forget on an active kind-less entry is NOT coerced", () => {
+  const e = appendPersonaEntry(paths, "vellumpike", {
+    text: "no kind set",
+    summary: "no kind",
+  });
+  const result = applyPersonaPlan(paths, "vellumpike", {
+    fade: [],
+    forget: [{ id: e.id }],
+    consolidate: [],
+  });
+  // No `kind` → typology can't apply. Forget proceeds.
+  expect(result.forgotten).toBe(1);
+});
+
+test("applyProjectPlan: reference-kind coercion mirrors the persona path", () => {
+  const e = appendProjectEntry(paths, "pantheon", {
+    text: "project-shared gotcha",
+    summary: "p gotcha",
+    kind: "gotcha",
+    author_username: "alpha",
+  });
+  const result = applyProjectPlan(
+    paths,
+    "pantheon",
+    {
+      fade: [],
+      forget: [{ id: e.id }],
+      consolidate: [],
+    },
+    "vellumpike",
+  );
+  expect(result.forgotten).toBe(0);
+  expect(result.faded).toBe(1);
+  expect(getProjectEntry(paths, "pantheon", e.id)!.status).toBe("faded");
+  const audit = listProjectIndex(paths, "pantheon", { kind: "dream_log" });
+  expect(audit[0]!.summary).toContain("reference-forget coerced to fade");
+});
+
+test("REFERENCE_KINDS excludes handoff (ephemeral by design)", async () => {
+  const { REFERENCE_KINDS } = await import("../index.ts");
+  expect(REFERENCE_KINDS.has("gotcha")).toBe(true);
+  expect(REFERENCE_KINDS.has("fact")).toBe(true);
+  expect(REFERENCE_KINDS.has("decision")).toBe(true);
+  expect(REFERENCE_KINDS.has("design")).toBe(true);
+  expect(REFERENCE_KINDS.has("handoff")).toBe(false);
+  expect(REFERENCE_KINDS.has("log")).toBe(false);
+});
+
 // --- Commit 4: consolidated_from → see_also renderer integration --- //
 
 test("applyPersonaPlan: consolidated entry carries source ids as see_also", async () => {
