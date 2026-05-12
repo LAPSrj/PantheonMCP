@@ -31,3 +31,13 @@ export {
   type WritePageInput,
   type WritePageResult,
 } from "./operations.ts";
+
+export {
+  exportNotebook,
+  exportProjectNotebook,
+  renderNotebookMarkdown,
+  renderProjectNotebookMarkdown,
+  type ExportOptions,
+  type ExportResult,
+  type RenderOptions,
+} from "./export.ts";
