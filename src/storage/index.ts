@@ -2,6 +2,7 @@ export {
   resolvePaths,
   personaFilePath,
   memoryFilePath,
+  notebookFilePath,
   personaDir,
   projectMemoryFilePath,
   projectMemoryDir,

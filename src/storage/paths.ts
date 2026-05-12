@@ -89,6 +89,10 @@ export function memoryFilePath(paths: Paths, handle: string): string {
   return path.join(paths.personasDir, handle, "memory.json");
 }
 
+export function notebookFilePath(paths: Paths, handle: string): string {
+  return path.join(paths.personasDir, handle, "notebook.json");
+}
+
 export function personaDir(paths: Paths, handle: string): string {
   return path.join(paths.personasDir, handle);
 }
