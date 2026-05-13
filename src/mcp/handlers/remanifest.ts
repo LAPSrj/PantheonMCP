@@ -119,6 +119,48 @@ export const remanifest: Handler = async (args, ctx) => {
     unknown
   >;
 
+  // Self-evict from chat the moment the NEW process has been exec'd.
+  // Closes the canonical-handle reclaim race: pre-fix, NEW's `login`
+  // saw OLD's row in `allKnownSubscribers` (heartbeat-fresh in
+  // SQLite) and auto-suffixed to `<persona>2`; canonical reclaim
+  // then waited 60-90s for OLD's row to age out. Now OLD drops its
+  // own presence row + clears chat_agent_id, so NEW's first login
+  // finds canonical free and boots as `<persona>` from message one.
+  //
+  // Gated on a successful spawn_pid — if the spawn failed, leave
+  // OLD's chat presence intact so the user isn't silently evicted
+  // from chat for a remanifest that never produced a new session.
+  // Heartbeat scheduler checks `subscribers.has(id)` before
+  // upserting, so the in-memory remove is enough to stop further
+  // heartbeats from re-inserting the row.
+  let self_evicted = false;
+  if (result.spawn_pid && ctx.chat && ctx.chat_agent_id) {
+    const agentId = ctx.chat_agent_id;
+    try {
+      const removed = ctx.chat.remove(agentId);
+      if (removed) {
+        try {
+          ctx.chat.addMessage({
+            from_agent_id: "system",
+            scope: "project",
+            project: removed.project,
+            text: `${removed.username}${removed.transient ? "*" : ""} remanifesting — a fresh incarnation is taking over.`,
+            system: true,
+            system_kind: "leave",
+          });
+        } catch {
+          // best-effort — the eviction already happened.
+        }
+        self_evicted = true;
+      }
+    } catch {
+      // best-effort — if remove fails, fall back to current behavior
+      // (NEW auto-suffixes and reclaim-canonical sweep cleans up
+      // when OLD's row eventually ages out).
+    }
+    ctx.setChatAgentId(null);
+  }
+
   return {
     ok: true,
     remanifested: persona.username,
@@ -131,6 +173,7 @@ export const remanifest: Handler = async (args, ctx) => {
       adapter: result.adapter ?? null,
       tab_title: result.tab_title ?? null,
     },
+    self_evicted,
     note: "New incarnation is spawning. As soon as it logs into chat it will signal me (the old session) to exit. You can stop interacting now — the new session takes over.",
   };
 };
