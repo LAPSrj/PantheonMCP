@@ -377,7 +377,15 @@ function applyForceRest(ctx: HandlerContext, reason: string): void {
 
 /** Apply the exit pipeline directly. Schedules SIGTERM with the
  * default delay; bypasses the block_self_exit gate (force-exit IS
- * the override). */
+ * the override).
+ *
+ * Symmetric with `applyForceRest`: drops the chat presence row +
+ * clears `ctx.chat_agent_id` BEFORE scheduling SIGTERM, so peers
+ * see the target leave immediately rather than waiting ~60s for
+ * the prune-grace to expire after the heartbeat stops. Closes the
+ * canonical-handle reclaim race for remanifest (an auto-suffixed
+ * NEW session can reclaim canonical on its next prune-tick instead
+ * of waiting for OLD's row to age out of SQLite). */
 function applyForceExit(ctx: HandlerContext): void {
   try {
     ctx.watchdog.unregister(ctx.session.id);
@@ -390,6 +398,35 @@ function applyForceExit(ctx: HandlerContext): void {
     } catch {
       // best-effort
     }
+  }
+  // Drop chat presence synchronously so the target disappears from
+  // peer views the moment force-exit is consumed, not 60s later when
+  // pruneStale finally evicts the stale row. Heartbeat scheduler
+  // checks `subscribers.has(id)` before upserting, so removing the
+  // in-memory subscriber prevents the row from being re-inserted in
+  // the ~2s window before SIGTERM lands.
+  if (ctx.chat && ctx.chat_agent_id) {
+    const agentId = ctx.chat_agent_id;
+    try {
+      const removed = ctx.chat.remove(agentId);
+      if (removed) {
+        try {
+          ctx.chat.addMessage({
+            from_agent_id: "system",
+            scope: "project",
+            project: removed.project,
+            text: `${removed.username}${removed.transient ? "*" : ""} was force-exited.`,
+            system: true,
+            system_kind: "leave",
+          });
+        } catch {
+          // best-effort — the eviction already happened.
+        }
+      }
+    } catch {
+      // best-effort
+    }
+    ctx.setChatAgentId(null);
   }
   ctx.scheduleExit(2, "force_exit");
 }
