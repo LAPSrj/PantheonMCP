@@ -195,6 +195,9 @@ export type ChatErrorCode =
   | "respondent_disconnected"
   | "missing_target"
   | "recipient_offline"
+  | "agent_id_not_username"
+  | "ambiguous_agent_id"
+  | "agent_id_not_live"
   | "promote_validation_failed";
 
 /** Discriminated outcome of an `ask`. The router used to return

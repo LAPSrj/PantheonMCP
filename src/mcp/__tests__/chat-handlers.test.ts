@@ -561,6 +561,182 @@ test("send_message: DM to an offline target fails recipient_offline + does NOT p
   expect(r.payload.message_id).toBeUndefined();
 });
 
+// --- DM resolver: educational errors for agent_id-as-target -------- //
+
+test("send_message: DM with agent_id (full UUID) where live subscriber exists → agent_id_not_username", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const target = ctx.chat!.add({ username: "beta", project: "X", transient: false });
+  const r = await call("send_message", {
+    text: "psst",
+    scope: "dm",
+    target: target.agent_id,
+  });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("agent_id_not_username");
+  expect((r.payload.message as string)).toContain("'beta'");
+  expect((r.payload.message as string)).toContain("agent_id");
+  expect(r.payload.resolved_username).toBe("beta");
+});
+
+test("send_message: DM with agent_id prefix (8 chars) matching one live subscriber → agent_id_not_username", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const target = ctx.chat!.add({ username: "beta", project: "X", transient: false });
+  const prefix = target.agent_id.slice(0, 8);
+  const r = await call("send_message", {
+    text: "psst",
+    scope: "dm",
+    target: prefix,
+  });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("agent_id_not_username");
+  expect(r.payload.resolved_username).toBe("beta");
+});
+
+test("send_message: DM with hex prefix matching 2+ subscribers → ambiguous_agent_id", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  // Both subs are added with random UUIDs; we contrive overlap by
+  // computing the common leading-hex slice across two NEW adds via the
+  // router. Most agent_ids share at least one hex digit at position 0,
+  // so a 1-char prefix is reliably ambiguous when 2+ subs exist.
+  const beta = ctx.chat!.add({ username: "beta", project: "X", transient: false });
+  const gamma = ctx.chat!.add({ username: "gamma", project: "X", transient: false });
+  // Find the longest common prefix that's still hex-shape and ≥ 4 chars.
+  // Falls back to skipping if the two ids share no 4-char prefix.
+  let commonPrefix = "";
+  for (let i = 0; i < beta.agent_id.length && i < gamma.agent_id.length; i++) {
+    if (beta.agent_id[i] === gamma.agent_id[i]) commonPrefix += beta.agent_id[i];
+    else break;
+  }
+  if (commonPrefix.length < 4) {
+    // Skip: the random ids don't happen to overlap enough this run.
+    return;
+  }
+  const r = await call("send_message", {
+    text: "psst",
+    scope: "dm",
+    target: commonPrefix,
+  });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("ambiguous_agent_id");
+  const candidates = r.payload.candidates as string[];
+  expect(candidates).toContain("beta");
+  expect(candidates).toContain("gamma");
+});
+
+test("send_message: DM with UUID-shape target but no live match → agent_id_not_live", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const r = await call("send_message", {
+    text: "psst",
+    scope: "dm",
+    target: "deadbeef-1234-5678-9abc-deadbeefcafe",
+  });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("agent_id_not_live");
+  expect((r.payload.message as string)).toContain("looks like an agent_id");
+});
+
+test("send_message: DM with username-shape target that's not live → recipient_offline (unchanged)", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const r = await call("send_message", {
+    text: "psst",
+    scope: "dm",
+    target: "ghosthand",
+  });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("recipient_offline");
+});
+
+// --- project-broadcast clarity warnings ---------------------------- //
+
+test("send_message: project broadcast with no peers surfaces an emptyProject warning", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const r = await call("send_message", {
+    text: "hello team",
+    scope: "project",
+  });
+  expect(r.ok).toBe(true);
+  const hints = r.payload.hints as string[] | undefined;
+  expect(hints).toBeDefined();
+  expect(hints!.some((h) => h.includes("No other live subscribers on project 'X'"))).toBe(true);
+});
+
+test("send_message: project broadcast with peers does NOT surface emptyProject warning", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  ctx.chat!.add({ username: "beta", project: "X", transient: false });
+  const r = await call("send_message", {
+    text: "hello team",
+    scope: "project",
+  });
+  expect(r.ok).toBe(true);
+  const hints = (r.payload.hints as string[] | undefined) ?? [];
+  expect(hints.some((h) => h.includes("No other live subscribers"))).toBe(false);
+});
+
+test("send_message: project broadcast with exactly one @mention surfaces single-mention warning", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  ctx.chat!.add({ username: "beta", project: "X", transient: false });
+  const r = await call("send_message", {
+    text: "@beta can you review?",
+    scope: "project",
+  });
+  expect(r.ok).toBe(true);
+  const hints = r.payload.hints as string[] | undefined;
+  expect(hints).toBeDefined();
+  expect(hints!.some((h) => h.includes("addressed to exactly one peer (@beta)"))).toBe(true);
+});
+
+test("send_message: project broadcast with two @mentions does NOT surface single-mention warning", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  ctx.chat!.add({ username: "beta", project: "X", transient: false });
+  ctx.chat!.add({ username: "gamma", project: "X", transient: false });
+  const r = await call("send_message", {
+    text: "@beta and @gamma — quick sync?",
+    scope: "project",
+  });
+  expect(r.ok).toBe(true);
+  const hints = (r.payload.hints as string[] | undefined) ?? [];
+  expect(hints.some((h) => h.includes("addressed to exactly one peer"))).toBe(false);
+});
+
+test("send_message: @-mention of an offline name doesn't count toward the single-mention warning", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  ctx.chat!.add({ username: "beta", project: "X", transient: false });
+  const r = await call("send_message", {
+    text: "@nonexistent_user has a question",
+    scope: "project",
+  });
+  expect(r.ok).toBe(true);
+  const hints = (r.payload.hints as string[] | undefined) ?? [];
+  // 0 live mentions in the body → no warning.
+  expect(hints.some((h) => h.includes("addressed to exactly one peer"))).toBe(false);
+});
+
+test("send_message: self-@-mention is excluded from the single-mention warning", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  ctx.chat!.add({ username: "beta", project: "X", transient: false });
+  const r = await call("send_message", {
+    text: "@alpha checking in publicly",
+    scope: "project",
+  });
+  expect(r.ok).toBe(true);
+  const hints = (r.payload.hints as string[] | undefined) ?? [];
+  expect(hints.some((h) => h.includes("addressed to exactly one peer"))).toBe(false);
+});
+
+test("send_message: DM scope does not trigger any project-broadcast warnings", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  ctx.chat!.add({ username: "beta", project: "X", transient: false });
+  const r = await call("send_message", {
+    text: "@beta direct",
+    scope: "dm",
+    target: "beta",
+  });
+  expect(r.ok).toBe(true);
+  const hints = (r.payload.hints as string[] | undefined) ?? [];
+  expect(hints.some((h) => h.includes("No other live subscribers"))).toBe(false);
+  expect(hints.some((h) => h.includes("addressed to exactly one peer"))).toBe(false);
+});
+
 test("get_message: returns the full row by id", async () => {
   await call("login", { username: "alpha", project: "X", transient: false });
   ctx.chat!.add({ username: "beta", project: "X", transient: false });

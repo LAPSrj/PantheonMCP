@@ -2,6 +2,7 @@ import {
   ChatError,
   getMessageById,
   promoteInPlace,
+  type ChatErrorCode,
   type PromoteFields,
 } from "../../chat/index.ts";
 import { writeRestRequest } from "../../lifecycle/index.ts";
@@ -36,6 +37,163 @@ function requireRouter(ctx: Parameters<Handler>[1]) {
     );
   }
   return ctx.chat;
+}
+
+/** Pattern that recognizes UUID-shape or UUID-prefix strings (4+ hex
+ * chars, possibly with hyphens). Used to detect when a caller passed
+ * an `agent_id` where a `username` was expected so the error can
+ * educate instead of just saying "offline." */
+const AGENT_ID_LIKE = /^[0-9a-f][0-9a-f-]{3,}$/i;
+const AGENT_ID_PREFIX_MIN_LEN = 4;
+
+/** Resolve a DM `target` to one of four outcomes:
+ *
+ *   - `ok`: caller passed a live username, send proceeds.
+ *   - `agent_id_for_username`: caller passed something that resolves
+ *     to a live `agent_id` (full UUID or hex prefix matching exactly
+ *     one live subscriber). We DO NOT auto-translate — pantheon's
+ *     contract is that `target` is a username. The error teaches the
+ *     caller the correct username and they retry.
+ *   - `ambiguous_agent_id`: a hex prefix matched 2+ live subscribers.
+ *   - `agent_id_not_live`: target is UUID-shaped but no live match.
+ *   - `recipient_offline`: target doesn't match any of the above —
+ *     treated as a plain unknown username (today's behavior).
+ *
+ * The "no auto-translate" decision is deliberate (Leandro): senders
+ * should learn to use usernames. Accepting agent_id silently would
+ * paper over the confusion. */
+type DMResolution =
+  | { kind: "ok" }
+  | { kind: "error"; code: ChatErrorCode; message: string; extra?: Record<string, unknown> };
+
+function resolveDMTarget(
+  router: ReturnType<typeof requireRouter>,
+  target: string,
+): DMResolution {
+  const online = router.onlineUsernames();
+  if (online.has(target.toLowerCase())) return { kind: "ok" };
+
+  // Could the target be an agent_id (or prefix) that the caller
+  // copied from a watcher line?
+  if (AGENT_ID_LIKE.test(target) && target.length >= AGENT_ID_PREFIX_MIN_LEN) {
+    const matches = router.findLiveByAgentIdPrefix(target);
+    if (matches.length === 1) {
+      const sub = matches[0]!;
+      return {
+        kind: "error",
+        code: "agent_id_not_username",
+        message:
+          `'${target}' looks like an agent_id, not a username. The live subscriber ` +
+          `behind that id is '${sub.username}' — pass that as \`target\` instead. ` +
+          `(Pantheon DM addressing is by username, not by id — agent_ids are session-scoped ` +
+          `and rotate; usernames are durable.)`,
+        extra: { target, resolved_username: sub.username },
+      };
+    }
+    if (matches.length > 1) {
+      return {
+        kind: "error",
+        code: "ambiguous_agent_id",
+        message:
+          `'${target}' is an agent_id prefix that matches ${matches.length} live subscribers ` +
+          `(${matches.map((s) => `'${s.username}'`).join(", ")}). Pass one of those usernames ` +
+          `as \`target\` instead.`,
+        extra: { target, candidates: matches.map((s) => s.username) },
+      };
+    }
+    // UUID-shaped but no live match. Could be a stale id the caller
+    // copied from history; could be a malformed username.
+    return {
+      kind: "error",
+      code: "agent_id_not_live",
+      message:
+        `'${target}' looks like an agent_id but no live subscriber matches. ` +
+        `Pantheon DM addressing is by username (e.g. 'righthand'), not by agent_id. ` +
+        `Did the agent_id you copied belong to a session that has since exited?`,
+      extra: { target },
+    };
+  }
+
+  // Doesn't look like an agent_id — treat as an unknown username.
+  return {
+    kind: "error",
+    code: "recipient_offline",
+    message:
+      `Cannot DM '${target}' — they are not currently in chat. Pantheon has no offline-DM queue; ` +
+      `the message was NOT persisted. Retry once they connect, or use scope='project'/'global' to broadcast.`,
+    extra: { target },
+  };
+}
+
+/** Apply the DM resolver and throw a ChatError on any non-ok
+ * outcome. No-op when scope isn't `"dm"` or no target is set. */
+function assertDMRecipient(
+  router: ReturnType<typeof requireRouter>,
+  scope: string,
+  target: string | undefined,
+): void {
+  if (scope !== "dm" || !target) return;
+  const result = resolveDMTarget(router, target);
+  if (result.kind === "error") {
+    throw new ChatError(result.code, result.message, result.extra ?? {});
+  }
+}
+
+/** Heuristic warning: a project-scope broadcast addressed to exactly
+ * one peer via `@username` mention is almost always a misdirected DM.
+ * Returns a warning string when triggered; null otherwise. Only
+ * mentions matching a live username count (so "@bobby" who isn't in
+ * chat doesn't trip the heuristic). Caller-decides — don't block. */
+function singleMentionWarning(
+  router: ReturnType<typeof requireRouter>,
+  text: string,
+  senderAgentId: string,
+): string | null {
+  const live = router.onlineUsernames();
+  const mentioned = new Set<string>();
+  // Conservative regex: `@<handle>` where handle starts with a letter
+  // and contains only letters/digits/_-. Email addresses ("foo@bar")
+  // are excluded by the leading word-boundary requirement.
+  const re = /(?:^|[^\w])@([a-zA-Z][a-zA-Z0-9_-]*)/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text)) !== null) {
+    const candidate = match[1]!.toLowerCase();
+    if (live.has(candidate)) {
+      // Exclude self-@-mention so a sender narrating their own work
+      // doesn't trip the heuristic.
+      const self = router.getByAgentId(senderAgentId);
+      if (self && self.username.toLowerCase() === candidate) continue;
+      mentioned.add(candidate);
+      if (mentioned.size > 1) return null; // 2+ → not a misdirected DM
+    }
+  }
+  if (mentioned.size !== 1) return null;
+  const handle = [...mentioned][0]!;
+  return (
+    `Heuristic: project broadcast addressed to exactly one peer (@${handle}). ` +
+    `If you meant to reach only them, use \`scope:"dm", target:"${handle}"\`. ` +
+    `Ignore if you intended public visibility.`
+  );
+}
+
+/** Warn when a project-scope broadcast has no other live subscribers
+ * on the sender's project — the message will be persisted but no
+ * watcher will pick it up. */
+function emptyProjectWarning(
+  router: ReturnType<typeof requireRouter>,
+  senderAgentId: string,
+): string | null {
+  const me = router.getByAgentId(senderAgentId);
+  if (!me) return null;
+  const peers = router
+    .publicList(me.project)
+    .filter((p) => p.username.toLowerCase() !== me.username.toLowerCase());
+  if (peers.length > 0) return null;
+  return (
+    `No other live subscribers on project '${me.project}' — this broadcast was persisted ` +
+    `but no peer will see it until someone logs in. Consider DMing a specific peer, or ` +
+    `posting on \`scope:"global"\` if the message warrants cross-project reach.`
+  );
 }
 
 export const login: Handler = async (args, ctx) => {
@@ -507,22 +665,11 @@ export const send_message: Handler = async (args, ctx) => {
   if (scope === "dm" && !target) {
     throw new ChatError("missing_target", "scope='dm' requires a target username.");
   }
-  // DM delivery contract: if the recipient isn't online, refuse the
-  // send. Pantheon has no offline-DM queue, so silently persisting
-  // the message would mean the sender thinks they delivered but the
-  // recipient never sees it (the original chat-mcp behavior). Fail
-  // loud — caller learns immediately and can re-send when the
-  // recipient reconnects (or pick a different addressee).
-  if (scope === "dm" && target) {
-    const online = router.onlineUsernames();
-    if (!online.has(target.toLowerCase())) {
-      throw new ChatError(
-        "recipient_offline",
-        `Cannot DM '${target}' — they are not currently in chat. Pantheon has no offline-DM queue; the message was NOT persisted. Retry once they connect, or use scope='project'/'global' to broadcast.`,
-        { target },
-      );
-    }
-  }
+  // DM delivery contract: refuse the send when the recipient isn't
+  // online (no offline-DM queue). Also catches the agent-id-as-target
+  // confusion and surfaces an educational error instead of the
+  // generic recipient_offline.
+  assertDMRecipient(router, scope, target);
   const msg = router.addMessage({
     from_agent_id: agentId,
     scope,
@@ -547,6 +694,13 @@ export const send_message: Handler = async (args, ctx) => {
           `Otherwise leave it; peers see it via list_agents.`,
       );
     }
+  }
+  // Project-broadcast clarity warnings.
+  if (scope === "project") {
+    const empty = emptyProjectWarning(router, agentId);
+    if (empty) hints.push(empty);
+    const singleMention = singleMentionWarning(router, text, agentId);
+    if (singleMention) hints.push(singleMention);
   }
   return {
     ok: true,
@@ -684,17 +838,10 @@ export const send_structured: Handler = async (args, ctx) => {
     throw new ChatError("missing_target", "scope='dm' requires a target username.");
   }
   // Same offline-DM contract as `send_message`: refuse rather than
-  // silently persist a message the recipient will never see.
-  if (scope === "dm" && target) {
-    const online = router.onlineUsernames();
-    if (!online.has(target.toLowerCase())) {
-      throw new ChatError(
-        "recipient_offline",
-        `Cannot DM '${target}' — they are not currently in chat. Pantheon has no offline-DM queue; the message was NOT persisted. Retry once they connect, or use scope='project'/'global' to broadcast.`,
-        { target },
-      );
-    }
-  }
+  // silently persist a message the recipient will never see. Also
+  // catches the agent-id-as-target confusion with an educational
+  // error.
+  assertDMRecipient(router, scope, target);
 
   const msg = router.addMessage({
     from_agent_id: agentId,
@@ -705,6 +852,13 @@ export const send_structured: Handler = async (args, ctx) => {
     ...(target !== undefined ? { target } : {}),
     ...(replyTo !== undefined ? { reply_to: replyTo } : {}),
   });
+  const hints: string[] = [];
+  if (scope === "project") {
+    const empty = emptyProjectWarning(router, agentId);
+    if (empty) hints.push(empty);
+    const singleMention = singleMentionWarning(router, text, agentId);
+    if (singleMention) hints.push(singleMention);
+  }
   return {
     ok: true,
     message_id: msg.id,
@@ -712,6 +866,7 @@ export const send_structured: Handler = async (args, ctx) => {
     kind,
     mentions: msg.mentions,
     ...(schemaId !== undefined ? { schema_id: schemaId, schema_validated: schemaValidated } : {}),
+    ...(hints.length > 0 ? { hints } : {}),
   };
 };
 
@@ -725,15 +880,9 @@ export const ask: Handler = async (args, ctx) => {
   // (no peer is there to answer), so it would time out after
   // `timeout_ms` seconds with no signal. Fail fast instead — the
   // caller learns the recipient isn't around without burning the
-  // timeout budget.
-  const online = router.onlineUsernames();
-  if (!online.has(target.toLowerCase())) {
-    throw new ChatError(
-      "recipient_offline",
-      `Cannot ask '${target}' — they are not currently in chat. The ask was NOT persisted; retry once they connect, or pick a different respondent.`,
-      { target },
-    );
-  }
+  // timeout budget. The resolver also catches agent-id-as-target
+  // confusion and emits an educational error.
+  assertDMRecipient(router, "dm", target);
   const result = await router.ask({
     from_agent_id: agentId,
     target_username: target,

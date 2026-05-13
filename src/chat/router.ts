@@ -1025,6 +1025,21 @@ export class ChatRouter {
     return this.subscribers.values();
   }
 
+  /** Return every live subscriber visible to this process (in-memory
+   * + SQLite-side cross-process rows) whose `agent_id` starts with
+   * `prefix`. Used by `send_message`'s educational-error path: when a
+   * caller passes an agent_id (or its hex prefix) as `target`, the
+   * resolver tells them the actual username to retry with. Empty
+   * prefix returns nothing. */
+  findLiveByAgentIdPrefix(prefix: string): Subscriber[] {
+    if (prefix.length === 0) return [];
+    const out: Subscriber[] = [];
+    for (const sub of this.allKnownSubscribers()) {
+      if (sub.agent_id.startsWith(prefix)) out.push(sub);
+    }
+    return out;
+  }
+
   publicList(project?: string): PublicAgent[] {
     // Cross-process: when a SQLite db is wired, prefer the presence
     // table — it sees subscribers across every MCP process. Falls
