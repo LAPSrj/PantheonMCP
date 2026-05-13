@@ -33,8 +33,38 @@ import {
   asString,
   asStringRequired,
   type Handler,
+  type SpawnMetadata,
   ToolError,
 } from "../types.ts";
+
+/** Pure resolver: pick the spawn target shape for remanifest given
+ * what we know about the calling session.
+ *
+ * Three cases, in priority order:
+ *   1. Pantheon-spawned + inherit_pane: split-pane in the named
+ *      window from spawn_metadata.
+ *   2. Manually-started in Windows Terminal: new tab in the parent
+ *      WT window, identified by WT_SESSION env var.
+ *   3. Anything else: mode-only new-tab-here (wt resolves -w 0 to
+ *      "most recently used" window; other adapters do their own
+ *      fallback).
+ *
+ * Exported for unit testing — the truth table here is the spec. */
+export function resolveRemanifestTarget(
+  inherit_pane: boolean,
+  spawn_metadata: SpawnMetadata | null,
+  spawn_env: NodeJS.ProcessEnv,
+): { window?: string; mode: "split-pane" | "new-tab-here" } {
+  const oldWindowName = spawn_metadata?.window_name;
+  if (inherit_pane && oldWindowName) {
+    return { window: oldWindowName, mode: "split-pane" };
+  }
+  const wtSession = spawn_env.WT_SESSION;
+  if (wtSession) {
+    return { window: wtSession, mode: "new-tab-here" };
+  }
+  return { mode: "new-tab-here" };
+}
 
 export const remanifest: Handler = async (args, ctx) => {
   const handoff = asStringRequired(args.handoff, "handoff");
@@ -61,17 +91,21 @@ export const remanifest: Handler = async (args, ctx) => {
     );
   }
 
-  // Build the spawn args. Reuse this session's window when
-  // inherit_pane (default) so the new pane lands adjacent and the
-  // tab closes with the old. Fall back to a fresh window otherwise.
-  const oldWindowName = ctx.spawn_metadata?.window_name;
+  // Build the spawn args via the pure resolver above. The fallback
+  // mode here is `"new-tab-here"` (a valid SpawnMode enum value);
+  // earlier code passed `"new-tab"` which is NOT in the enum and
+  // silently triggered the dispatch downgrade ladder starting at
+  // split-pane — wrong target shape on manually-started sessions.
+  const target = resolveRemanifestTarget(
+    inherit_pane,
+    ctx.spawn_metadata,
+    ctx.spawn_env,
+  );
   const spawnArgs: Record<string, unknown> = {
     username: persona.username,
     remanifest_of: ctx.chat_agent_id,
     remanifest_handoff: handoff,
-    target: inherit_pane && oldWindowName
-      ? { window: oldWindowName, mode: "split-pane" }
-      : { mode: "new-tab" },
+    target,
     // The new session must be able to call `exit` from its own
     // process — block_self_exit defaults to off here regardless of
     // whether the calling agent was launched with the block.
