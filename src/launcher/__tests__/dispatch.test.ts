@@ -361,3 +361,80 @@ test("WezTerm-like host without a dedicated adapter resolves via generic", () =>
   );
   expect(plan.adapter).toBe("generic");
 });
+
+// --- wt_profile opt-in ---------------------------------------------- //
+
+test("WT adapter: persona wt_profile renders --profile on new-tab", () => {
+  const plan = resolveSpawnPlan(
+    args({
+      wt_profile: "Ubuntu-22.04",
+      target: { mode: "new-tab-here" },
+    }),
+    { adapter: wt },
+  );
+  const profileIdx = plan.args.indexOf("--profile");
+  expect(profileIdx).toBeGreaterThanOrEqual(0);
+  expect(plan.args[profileIdx + 1]).toBe("Ubuntu-22.04");
+  expect(plan.description).toContain("profile=Ubuntu-22.04");
+});
+
+test("WT adapter: persona wt_profile renders --profile on split-pane", () => {
+  const plan = resolveSpawnPlan(
+    args({
+      wt_profile: "Ubuntu-22.04",
+      target: { mode: "split-pane", window: "win" },
+    }),
+    { adapter: wt },
+  );
+  const profileIdx = plan.args.indexOf("--profile");
+  expect(profileIdx).toBeGreaterThanOrEqual(0);
+  expect(plan.args[profileIdx + 1]).toBe("Ubuntu-22.04");
+});
+
+test("WT adapter: target.wt_profile overrides persona wt_profile", () => {
+  const plan = resolveSpawnPlan(
+    args({
+      wt_profile: "Ubuntu-22.04",
+      target: { mode: "new-tab-here", wt_profile: "Ubuntu Dev" },
+    }),
+    { adapter: wt },
+  );
+  const profileIdx = plan.args.indexOf("--profile");
+  expect(plan.args[profileIdx + 1]).toBe("Ubuntu Dev");
+});
+
+test("WT adapter: no --profile emitted when neither persona nor target sets it", () => {
+  const plan = resolveSpawnPlan(
+    args({ target: { mode: "new-tab-here" } }),
+    { adapter: wt },
+  );
+  expect(plan.args).not.toContain("--profile");
+});
+
+test("WT adapter: wt_profile coexists with --tabColor (both render)", () => {
+  const plan = resolveSpawnPlan(
+    args({
+      color: "purple",
+      wt_profile: "Ubuntu-22.04",
+      target: { mode: "new-tab-here" },
+    }),
+    { adapter: wt },
+  );
+  expect(plan.args).toContain("--profile");
+  expect(plan.args).toContain("Ubuntu-22.04");
+  expect(plan.args).toContain("--tabColor");
+  expect(plan.args).toContain("#b48ead");
+});
+
+test("non-wt adapters ignore wt_profile silently", () => {
+  // alacritty supports only new-window; pass wt_profile and verify
+  // the plan doesn't contain a --profile argument.
+  const plan = resolveSpawnPlan(
+    args({
+      wt_profile: "Ubuntu-22.04",
+      target: { mode: "new-window" },
+    }),
+    { adapter: alacritty },
+  );
+  expect(plan.args).not.toContain("--profile");
+});

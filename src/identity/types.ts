@@ -61,6 +61,18 @@ export interface Persona {
    * `--model <value>` to the spawned `claude`. Omitted means the
    * machine default. Cascade: per-call arg > this field > no flag. */
   model?: string | null;
+  /** Windows Terminal profile name to pin when wt is the spawn
+   * adapter. When set, the wt adapter emits `--profile <value>` so
+   * the new tab opens in the named WT profile (icon, color scheme,
+   * default shell). When unset, WT uses the user's default profile —
+   * which for WSL personas often renders as "PowerShell" in the tab
+   * strip even though wsl.exe is the running command. WT profile
+   * names are user-customized (e.g. "Ubuntu", "Ubuntu-22.04",
+   * "Ubuntu Dev"); they don't always match the WSL distro name, so
+   * this field stays opt-in. Forwarded only by the wt adapter; other
+   * adapters ignore it. `null` means "cleared" (same shape as
+   * permission_mode / model). */
+  wt_profile?: string | null;
 }
 
 export interface PersonaPatch {
@@ -78,6 +90,7 @@ export interface PersonaPatch {
   remote_control?: boolean;
   permission_mode?: PermissionMode | null;
   model?: string | null;
+  wt_profile?: string | null;
 }
 
 export type Platform = "wsl" | "windows" | "mac" | "linux";
@@ -139,6 +152,7 @@ export interface PersonaCreate {
   remote_control?: boolean;
   permission_mode?: PermissionMode | null;
   model?: string | null;
+  wt_profile?: string;
 }
 
 export class IdentityError extends Error {

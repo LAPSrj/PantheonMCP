@@ -35,6 +35,10 @@ export interface SpawnTarget {
    * this directly. Without it, split-pane lands on whichever pane wt
    * has focused, yielding the column-narrowing pattern we don't want. */
   focus_pane_id?: number;
+  /** Windows Terminal profile name. Overrides the persona's
+   * registered `wt_profile` for this spawn only. Other adapters
+   * ignore. */
+  wt_profile?: string;
 }
 
 export interface SpawnArgs {
@@ -63,6 +67,11 @@ export interface SpawnArgs {
    * (or spawn handler) sets this from the window registry; absent
    * means "treat as fresh window/tab." */
   existing_pane_count?: number;
+  /** Windows Terminal profile name (the persona's default, or the
+   * per-call override from `target.wt_profile`). When set, the wt
+   * adapter emits `--profile <value>` on the new-tab / split-pane
+   * subcommand. Other adapters ignore. */
+  wt_profile?: string;
 }
 
 export interface SpawnPlan {

@@ -295,6 +295,9 @@ export async function spawnPersona(
     cwd: persona.cwd,
     tab_title: tabTitle,
     ...(persona.color ? { color: persona.color } : {}),
+    ...(persona.wt_profile !== undefined && persona.wt_profile !== null
+      ? { wt_profile: persona.wt_profile }
+      : {}),
     target: resolvedTarget,
     ...(wslDistro !== undefined ? { wsl_distro: wslDistro } : {}),
     existing_pane_count: currentGeometry ? paneCount(currentGeometry) : 0,

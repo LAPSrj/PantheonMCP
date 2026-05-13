@@ -210,6 +210,13 @@ export const update_profile: Handler = async (args, ctx) => {
       patch.permission_mode = args.permission_mode;
     }
   }
+  if ("wt_profile" in args) {
+    if (args.wt_profile === null) {
+      patch.wt_profile = null;
+    } else if (typeof args.wt_profile === "string") {
+      patch.wt_profile = args.wt_profile;
+    }
+  }
   const updated = patchPersona(ctx.paths, username, patch);
 
   // §6 HIGH — profile_update broadcast. When a profile-shaping field

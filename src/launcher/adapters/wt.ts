@@ -71,6 +71,13 @@ export const wt: Adapter = {
     const mode = target.mode ?? "new-tab-window";
     const windowName = resolveWindowArg(target.window);
     const colorHex = colorToHex(target.color ?? args.color);
+    // Profile resolution cascade: per-call target override > persona
+    // default > nothing (use WT's user-default profile). When set, the
+    // adapter emits `--profile <value>` so the new tab opens in the
+    // named WT profile rather than the user's default. Lets WSL
+    // personas land in a WSL profile tab instead of a default-profile
+    // (often PowerShell) tab that happens to be running wsl.exe.
+    const wtProfile = target.wt_profile ?? args.wt_profile;
     const subcommands: string[] = [];
 
     const splitDirection = resolveSplitDirection(args, target.split);
@@ -93,6 +100,7 @@ export const wt: Adapter = {
       subcommands.push("split-pane", dir);
       subcommands.push("--title", args.tab_title);
       if (colorHex) subcommands.push("--tabColor", colorHex);
+      if (wtProfile) subcommands.push("--profile", wtProfile);
       // Per WSL cwd rule: cwd lives in the inner bash, not in -d.
       if (!args.wsl_distro) subcommands.push("-d", args.cwd);
       subcommands.push(...buildExecCommand(args));
@@ -102,6 +110,7 @@ export const wt: Adapter = {
       // them.
       subcommands.push("new-tab", "--title", args.tab_title);
       if (colorHex) subcommands.push("--tabColor", colorHex);
+      if (wtProfile) subcommands.push("--profile", wtProfile);
       if (!args.wsl_distro) subcommands.push("-d", args.cwd);
       subcommands.push(...buildExecCommand(args));
     }
@@ -112,7 +121,7 @@ export const wt: Adapter = {
       command: "wt.exe",
       args: argv,
       env: args.exec_env,
-      description: `wt.exe → window=${windowName} mode=${mode}${colorHex ? ` color=${colorHex}` : ""}${args.wsl_distro ? ` wsl=${args.wsl_distro}` : ""}${mode === "split-pane" ? ` split=${splitDirection}` : ""}`,
+      description: `wt.exe → window=${windowName} mode=${mode}${colorHex ? ` color=${colorHex}` : ""}${wtProfile ? ` profile=${wtProfile}` : ""}${args.wsl_distro ? ` wsl=${args.wsl_distro}` : ""}${mode === "split-pane" ? ` split=${splitDirection}` : ""}`,
       tab_title: args.tab_title,
       resolved_mode: mode,
       adapter: "wt",

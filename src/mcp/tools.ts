@@ -79,6 +79,11 @@ const SPAWN_TARGET_SCHEMA = {
     color: { type: "string", enum: COLOR_ENUM as unknown as string[] },
     strict: { type: "boolean" },
     escape_tmux: { type: "boolean" },
+    wt_profile: {
+      type: "string",
+      description:
+        "Windows Terminal profile name to pin for this spawn. Overrides the persona's registered `wt_profile`. Other adapters ignore.",
+    },
   },
 };
 
@@ -230,6 +235,11 @@ export const TOOLS: readonly ToolDef[] = [
           oneOf: [MODEL_SCHEMA, { type: "null" }],
           description:
             "Default model for spawns of this persona. `null` clears the field (cascade falls back to machine default).",
+        },
+        wt_profile: {
+          oneOf: [{ type: "string" }, { type: "null" }],
+          description:
+            "Windows Terminal profile name to pin for spawns of this persona (e.g. 'Ubuntu-22.04', 'Ubuntu Dev'). When set, the wt adapter emits `--profile <value>` so the new tab opens in the named WT profile rather than the user's default. Other adapters ignore. `null` clears the field.",
         },
       },
     },
