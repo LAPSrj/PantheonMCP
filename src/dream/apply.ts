@@ -1,5 +1,22 @@
 /** Apply a DreamPlan to persona or project memory.
  *
+ * **Status: superseded by `ConjuredLibrarian` (the librarian now acts
+ * directly via MCP) and `src/memory/lifecycle.ts` (the data-layer
+ * coercion).** The dream MCP handler no longer calls
+ * `applyPersonaPlan` / `applyProjectPlan` in production. This module
+ * is retained for two reasons:
+ *
+ *   1. `buildPersonaSnapshot` / `buildProjectSnapshot` are still used
+ *      by the dream handler to assemble the snapshot file passed to
+ *      the librarian.
+ *   2. Tests in `dream.test.ts` cover the old plan-application path
+ *      against the same lifecycle invariants now enforced at the MCP
+ *      layer — useful regression coverage in case the librarian flow
+ *      needs a synchronous fallback.
+ *
+ * If both reasons drop away (e.g. snapshot builders move to their own
+ * module, plan-shape tests get retired), this file can be deleted.
+ *
  * Auto-apply, no review — the persona has the same information the
  * librarian had, so a review step adds no signal. Audit entry of
  * kind=`dream_log` summarizes what changed so the trail is greppable.
