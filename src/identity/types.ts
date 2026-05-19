@@ -108,9 +108,9 @@ export type ClaudeColor =
   | "cyan";
 
 /** Claude Code's `--permission-mode` values. `acceptEdits` is the
- * `⏵⏵` mode in CC's prompt bar — auto-accepts edit/write tool
- * calls. `default` keeps prompts; `plan` blocks all edits;
- * `bypassPermissions` skips ALL checks (handle with care). */
+ * "accept edits on" mode in CC's prompt bar — auto-accepts edit /
+ * write tool calls. `default` keeps prompts; `plan` blocks all
+ * edits; `bypassPermissions` skips ALL checks (handle with care). */
 export type PermissionMode =
   | "default"
   | "acceptEdits"
@@ -125,8 +125,8 @@ export const PERMISSION_MODES: ReadonlyArray<PermissionMode> = [
 ];
 
 /** Cascade floor — what summoned agents land on when nothing else
- * overrides. `acceptEdits` makes the prompt bar show `⏵⏵ accept
- * edits on` from the first turn. */
+ * overrides. `acceptEdits` makes the prompt bar show "accept edits
+ * on" from the first turn. */
 export const DEFAULT_PERMISSION_MODE: PermissionMode = "acceptEdits";
 
 /** Input shape for `createPersona`. Server-managed fields

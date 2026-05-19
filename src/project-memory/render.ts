@@ -54,7 +54,7 @@ export function renderProjectStore(
     const collapsedIds = applyMiddleOut(core, PROJECT_CORE_BUDGET_BYTES);
     if (collapsedIds.size > 0) {
       warning =
-        `⚠ ${collapsedIds.size} project-memory core entries collapsed to summary (over ${PROJECT_CORE_BUDGET_BYTES / 1024} KB cap).`;
+        `Warning: ${collapsedIds.size} project-memory core entries collapsed to summary (over ${PROJECT_CORE_BUDGET_BYTES / 1024} KB cap).`;
     }
     for (const e of sortAscByDate(core)) {
       lines.push(formatEntry(e, { collapsed: collapsedIds.has(e.id) }));

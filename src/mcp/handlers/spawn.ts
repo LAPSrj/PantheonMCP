@@ -136,8 +136,8 @@ export async function spawnPersona(
   // Permission-mode cascade — per-call > persona.permission_mode >
   // PANTHEON_DEFAULT_PERMISSION_MODE env > "acceptEdits" floor.
   // Forwarded as `--permission-mode <value>` so the spawned `claude`
-  // starts in the desired mode (e.g. `acceptEdits` shows `⏵⏵ accept
-  // edits on` in the prompt bar — no Shift+Tab keystroke needed).
+  // starts in the desired mode (e.g. `acceptEdits` shows "accept
+  // edits on" in the prompt bar — no Shift+Tab keystroke needed).
   const permissionMode = resolvePermissionMode(
     args.permission_mode,
     persona,

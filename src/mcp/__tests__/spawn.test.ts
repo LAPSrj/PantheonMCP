@@ -658,7 +658,7 @@ test("split-pane: caller-explicit target.split overrides policy direction; focus
     target: { mode: "new-tab-window", window: "win" },
   });
   // Caller forces horizontal even though the policy would say vertical
-  // (n=1 → cols<3 + rows>=cols ✓ → add column → V).
+  // (n=1 → cols<3 + rows>=cols → add column → V).
   await call("summon", {
     username: "beta",
     target: { mode: "split-pane", window: "win", split: "horizontal" },

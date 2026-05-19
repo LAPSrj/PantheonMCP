@@ -118,14 +118,14 @@ or pantheon's §15 singleton daemon ships (tab-title).
 
 | Surface                           | Vanilla MCP | This plugin |
 |-----------------------------------|-------------|-------------|
-| Persona register / summon / chat / memory / lifecycle | ✅ | — |
-| Slash commands (`/pantheon-*`)    | —           | ✅          |
-| Statusline integration            | —           | ✅          |
-| Watchdog reset on CC tool-use     | —           | ✅ (wired)  |
-| Settings.json permission templates| —           | ✅          |
-| `/color` binding                  | —           | 🟡 stub      |
-| Tab-title-from-status             | —           | 🟡 stub      |
-| Auto-context-percent nudge        | partial (surrogate) | 🟡 stub  |
+| Persona register / summon / chat / memory / lifecycle | yes | — |
+| Slash commands (`/pantheon-*`)    | —           | yes          |
+| Statusline integration            | —           | yes          |
+| Watchdog reset on CC tool-use     | —           | yes (wired)  |
+| Settings.json permission templates| —           | yes          |
+| `/color` binding                  | —           | stub         |
+| Tab-title-from-status             | —           | stub         |
+| Auto-context-percent nudge        | partial (surrogate) | stub  |
 
 The plugin is **NOT** required to use pantheon. Vanilla MCP carries
 the full feature surface. The plugin only adds CC-side ergonomics.

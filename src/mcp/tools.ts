@@ -23,7 +23,7 @@ const PERMISSION_MODE_SCHEMA = {
   type: "string",
   enum: PERMISSION_MODE_ENUM as unknown as string[],
   description:
-    "Claude Code `--permission-mode` for spawned `claude` processes. `acceptEdits` (default) shows '⏵⏵ accept edits on' from the first turn. `plan` blocks all edits; `default` keeps interactive prompts; `bypassPermissions` skips ALL checks (use with care).",
+    "Claude Code `--permission-mode` for spawned `claude` processes. `acceptEdits` (default) shows 'accept edits on' in the prompt bar from the first turn. `plan` blocks all edits; `default` keeps interactive prompts; `bypassPermissions` skips ALL checks (use with care).",
 } as const;
 
 const MODEL_SCHEMA = {

@@ -103,23 +103,23 @@ export function runDoctor(env: NodeJS.ProcessEnv = process.env): DoctorReport {
 
 export function formatDoctorReport(report: DoctorReport): string {
   const lines: string[] = [];
-  lines.push(`pantheon doctor — ${report.ok ? "HEALTHY ✓" : "ISSUES ✗"}`);
+  lines.push(`pantheon doctor — ${report.ok ? "HEALTHY" : "ISSUES"}`);
   lines.push(`data root: ${report.paths.dataDir}`);
   lines.push(`state root: ${report.paths.stateDir}`);
   lines.push("");
   lines.push("Checks:");
   for (const i of report.info) {
-    lines.push(`  ✓ ${i.check}: ${i.result}`);
+    lines.push(`  OK   ${i.check}: ${i.result}`);
   }
   if (report.warnings.length > 0) {
     lines.push("");
     lines.push("Warnings:");
-    for (const w of report.warnings) lines.push(`  ⚠ ${w}`);
+    for (const w of report.warnings) lines.push(`  WARN ${w}`);
   }
   if (report.errors.length > 0) {
     lines.push("");
     lines.push("Errors:");
-    for (const e of report.errors) lines.push(`  ✗ ${e}`);
+    for (const e of report.errors) lines.push(`  ERR  ${e}`);
   }
   return lines.join("\n") + "\n";
 }

@@ -81,12 +81,12 @@ export function renderStore(
     }
     if (collapsedIds.size > 0) {
       warning =
-        `⚠ ${collapsedIds.size} core entr${collapsedIds.size === 1 ? "y" : "ies"} ` +
+        `Warning: ${collapsedIds.size} core entr${collapsedIds.size === 1 ? "y" : "ies"} ` +
         `collapsed to summary (over 10 KB cap) — recall_memory(id) for full text, ` +
         `or update_memory / fade_memory to prune permanently.`;
     } else if (!withinBudget) {
       warning =
-        `⚠ Core total (${totalKb.toFixed(1)} KB) exceeds 10 KB cap — even with ` +
+        `Warning: Core total (${totalKb.toFixed(1)} KB) exceeds 10 KB cap — even with ` +
         `head_keep=${CORE_HEAD_KEEP} tail_keep=${CORE_TAIL_KEEP} preserved, ` +
         `entries are large. Consider trimming.`;
     }

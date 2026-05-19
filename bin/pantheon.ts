@@ -185,12 +185,12 @@ async function main(): Promise<void> {
       const opts = parseValidateArgs(rest);
       const r = validateFile(opts.file, opts.type);
       if (r.ok) {
-        process.stdout.write(`pantheon validate: ${opts.file} (${r.type}) — VALID ✓\n`);
+        process.stdout.write(`pantheon validate: ${opts.file} (${r.type}) — VALID\n`);
         process.exit(EXIT_CODES.SUCCESS);
       } else {
-        process.stderr.write(`pantheon validate: ${opts.file} (${r.type}) — INVALID ✗\n`);
+        process.stderr.write(`pantheon validate: ${opts.file} (${r.type}) — INVALID\n`);
         for (const e of r.errors) {
-          process.stderr.write(`  ✗ ${e}\n`);
+          process.stderr.write(`  - ${e}\n`);
         }
         process.exit(EXIT_CODES.SCHEMA_ERROR);
       }
