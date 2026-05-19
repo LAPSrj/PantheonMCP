@@ -31,6 +31,11 @@ export {
 } from "./operations.ts";
 
 export {
+  forgetProjectEntryWithLifecycleCoercion,
+  type ProjectForgetCoercionResult,
+} from "./lifecycle.ts";
+
+export {
   PROJECT_CORE_BUDGET_BYTES,
   PROJECT_ACTIVE_BUDGET_BYTES,
   renderProjectMemory,

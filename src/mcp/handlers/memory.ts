@@ -3,7 +3,7 @@ import {
   deleteSnapshot,
   fadeEntry,
   findMemory,
-  forgetEntry,
+  forgetEntryWithLifecycleCoercion,
   getDetails,
   getEntry,
   listIndex,
@@ -136,13 +136,19 @@ export const fade_memory: Handler = async (args, ctx) => {
   return fadeEntry(ctx.paths, claimed, id);
 };
 
+/** §4 lifecycle rule: core entries and active reference-kind entries
+ * never forget directly — both coerce to `fade`. The data layer
+ * enforces the rule regardless of caller (persona, librarian, any
+ * future cleanup tool) so the invariant holds without relying on
+ * planning-side discipline. Returns `{ entry, coerced, reason? }` so
+ * callers see when the action was downgraded. */
 export const forget_memory: Handler = async (args, ctx) => {
   const claimed = ctx.session.claimedUsername;
   if (!claimed) {
     throw new ToolError("no_persona", "forget_memory requires a claimed persona.");
   }
   const id = asStringRequired(args.id, "id");
-  return forgetEntry(ctx.paths, claimed, id);
+  return forgetEntryWithLifecycleCoercion(ctx.paths, claimed, id);
 };
 
 export const list_memory: Handler = async (args, ctx) => {

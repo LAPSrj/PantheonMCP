@@ -14,7 +14,7 @@ import {
   ProjectMemoryError,
   appendProjectEntry,
   fadeProjectEntry,
-  forgetProjectEntry,
+  forgetProjectEntryWithLifecycleCoercion,
   getProjectDetails,
   getProjectEntry,
   listProjectIndex,
@@ -131,13 +131,17 @@ function doUpdate(
   );
 }
 
+/** §4 lifecycle rule (project-memory parity): core + active reference-
+ * kind entries coerce to `fade`. See src/memory/lifecycle.ts. */
 function doForget(
   args: Record<string, unknown>,
   ctx: HandlerContext,
   project: string,
 ) {
   const id = asStringRequired(args.id, "id");
-  return wrap(() => forgetProjectEntry(ctx.paths, project, id));
+  return wrap(() =>
+    forgetProjectEntryWithLifecycleCoercion(ctx.paths, project, id),
+  );
 }
 
 function doFade(

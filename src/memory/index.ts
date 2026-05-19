@@ -51,6 +51,12 @@ export {
 } from "./snapshots.ts";
 
 export {
+  REFERENCE_KINDS,
+  forgetEntryWithLifecycleCoercion,
+  type ForgetCoercionResult,
+} from "./lifecycle.ts";
+
+export {
   HANDOFF_TTL_MS,
   HANDOFF_KIND,
   defaultHandoffExpiresAt,
