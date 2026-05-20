@@ -773,10 +773,14 @@ export const TOOLS: readonly ToolDef[] = [
           additionalProperties: false,
           required: ["for", "text"],
           description:
-            "Optional handoff slot — write a `kind: \"handoff\"` core memory entry + DM the target.",
+            "Optional handoff slot — write a `kind: \"handoff\"` memory entry (auto 7-day TTL) + DM the target. A good handoff treats the next session as a competent stranger with your memory but none of your conversation context. Put PROSE in `text` — in-flight work threads, decisions you made and why, lessons learned, operational gotchas. Put the machine-usable, decay-free parts in the structured fields below (`trust_posture`, `pickup`, `memory_refs`, `prohibitions`); the next session's boot payload surfaces those directly so the agent can act in its first 5 minutes without re-reading a blob.",
           properties: {
             for: { type: "string", description: "Persona handle to receive the handoff DM." },
-            text: { type: "string", description: "Handoff body — written to memory + sent as DM." },
+            text: {
+              type: "string",
+              description:
+                "Handoff body (prose) — written to memory + sent as DM. Cover the narrative sections: in-flight work threads (what / status / owner / next action), decisions you made and the reasoning, lessons learned this session (the miss + the future-you maxim), and operational gotchas. Cite memory ids rather than re-summarizing entries.",
+            },
             summary: {
               type: "string",
               description:
@@ -792,6 +796,40 @@ export const TOOLS: readonly ToolDef[] = [
               type: "boolean",
               description:
                 "When true, fade ALL of this persona's other active handoffs — the convenient form for self-handoff continuity chains where picking up means everything prior is moot. Combine with `supersedes` or use alone. Default false.",
+            },
+            trust_posture: {
+              type: "string",
+              description:
+                "The trust posture the user set this session — ideally a verbatim quote (e.g. \"audit rigor stays full\", \"good enough tonight, steer later\", \"user AFK, decide without pause\"). Decay-free; it dictates how the next session makes calls. Surfaces at the top of the next boot.",
+            },
+            pickup: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Ordered \"first 30 minutes\" checklist for the next session — the literal first few actions, unambiguous. The next session can deviate once context-loaded, but should not have to think about move #1.",
+            },
+            memory_refs: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["id", "why"],
+                properties: {
+                  id: { type: "string", description: "Memory entry id to read." },
+                  why: {
+                    type: "string",
+                    description: "One-line load-bearing reason this entry matters. Not a re-summary.",
+                  },
+                },
+              },
+              description:
+                "Memory entries the next session must read, each with the one-line reason it matters — most-critical first. This is the curated reading list; the next boot surfaces it ahead of the recency-sorted index.",
+            },
+            prohibitions: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Explicit \"do NOT do X\" directives for the next session, with the why where it matters (e.g. \"don't auto-commit without a verbatim quote — Leandro per-action approval carve-out\").",
             },
           },
         },

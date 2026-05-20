@@ -2,6 +2,7 @@ import type { Paths } from "../storage/index.ts";
 import { loadStore, mutateStore } from "./store.ts";
 import {
   MemoryError,
+  type HandoffMeta,
   type MemoryEntry,
   type MemoryIndexEntry,
   type MemoryStatus,
@@ -35,6 +36,9 @@ export interface AppendInput {
   /** §6 MEDIUM annotations: entry ids cited inline at end of
    * synopsis. Each must exist. */
   see_also?: string[];
+  /** Structured handoff metadata — set only for `kind: "handoff"`
+   * entries written via `rest({ handoff })`. */
+  handoff?: HandoffMeta;
 }
 
 export interface UpdateInput {
@@ -85,6 +89,7 @@ export function appendEntry(
         ? { summoner_username: input.summoner_username }
         : {}),
       ...(input.expires_at !== undefined ? { expires_at: input.expires_at } : {}),
+      ...(input.handoff !== undefined ? { handoff: input.handoff } : {}),
       ...(input.replies_to !== undefined ? { replies_to: input.replies_to } : {}),
       ...(input.see_also !== undefined && input.see_also.length > 0
         ? { see_also: [...input.see_also] }

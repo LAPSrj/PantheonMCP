@@ -41,6 +41,30 @@ export interface MemoryEntry {
   /** §6 MEDIUM. Entry ids cited inline at the end of the synopsis
    * (`[id1] [id2]`). Validated at write time. */
   see_also?: string[];
+  /** Structured handoff metadata — populated only on `kind: "handoff"`
+   * entries written via `rest({ handoff })`. The free-form `text`
+   * carries the prose (in-flight threads, decisions, lessons); this
+   * carries the parts a reconnecting session can consume directly.
+   * Surfaces structured in the next session's boot payload. */
+  handoff?: HandoffMeta;
+}
+
+/** The machine-usable slice of a context handoff (see the canonical
+ * shape in the `write-handoff` skill). Everything here is optional —
+ * an agent fills what it has. The prose-shaped sections (in-flight
+ * threads, decisions made, lessons learned, gotchas) stay in the
+ * entry's `text`; they don't structure usefully. */
+export interface HandoffMeta {
+  /** The trust posture the user set this session — ideally a verbatim
+   * quote. Decay-free; dictates how the next session makes calls. */
+  trust_posture?: string;
+  /** Ordered "first 30 minutes" checklist for the next session. */
+  pickup?: string[];
+  /** Memory entries the next session must read, each with the
+   * one-line load-bearing reason. The boot path can resolve these. */
+  memory_refs?: { id: string; why: string }[];
+  /** Explicit "do NOT do X" directives carried into the next session. */
+  prohibitions?: string[];
 }
 
 export interface MemoryStore {

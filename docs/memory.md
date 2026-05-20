@@ -209,14 +209,41 @@ fades every other active handoff this persona owns — the convenient
 form for self-handoff continuity chains. Faded ids come back in the
 `rest` response as `superseded_handoffs`.
 
+### Structured handoff fields
+
+The free-form `text` carries the *prose* of a handoff — in-flight work
+threads, decisions made and why, lessons learned, operational gotchas.
+The `handoff` slot also takes four **structured** fields — the
+machine-usable, decay-free slice of the canonical handoff shape (see
+the `write-handoff` skill for the full discipline):
+
+- `trust_posture` (string) — the trust context the user set, ideally
+  a verbatim quote. Dictates how the next session makes calls.
+- `pickup` (string[]) — the ordered "first 30 minutes" checklist.
+- `memory_refs` (`{id, why}[]`) — the curated reading list: entries
+  the next session must read, each with its load-bearing reason.
+- `prohibitions` (string[]) — explicit "do NOT do X" directives.
+
+These persist on the entry under `MemoryEntry.handoff` (a `HandoffMeta`
+object) and travel inline on the `resume_summary.handoffs` ref — so the
+next session's boot payload surfaces them *structured*, without a
+`recall_memory` round trip. Empty fields are pruned: a handoff written
+with no structured fields carries no `handoff` block at all.
+
 The handoff entry shape (`buildHandoffSeed`):
 
 ```json
 {
   "kind": "handoff",
-  "text": "<handoff body>",
+  "text": "<handoff prose body>",
   "summary": "<caller highlight, or boilerplate>",
-  "expires_at": "<now + 7 days, ms epoch>"
+  "expires_at": "<now + 7 days, ms epoch>",
+  "handoff": {
+    "trust_posture": "<verbatim trust quote>",
+    "pickup": ["<first action>", "<second action>"],
+    "memory_refs": [{ "id": "<slug>", "why": "<reason>" }],
+    "prohibitions": ["<don't do X>"]
+  }
 }
 ```
 

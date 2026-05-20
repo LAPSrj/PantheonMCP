@@ -60,6 +60,28 @@ test("buildHandoffSeed: blank summary falls back to boilerplate", () => {
   expect(seed.summary).toContain("moth-whistle");
 });
 
+test("buildHandoffSeed: structured meta is attached, trimmed, and pruned", () => {
+  const seed = buildHandoffSeed("x", "body", 1_000_000, "sum", {
+    trust_posture: "  full audit rigor  ",
+    pickup: ["login", "read memory"],
+    memory_refs: [{ id: "rule-a", why: "load-bearing" }],
+    prohibitions: [],
+  });
+  expect(seed.handoff).toEqual({
+    trust_posture: "full audit rigor",
+    pickup: ["login", "read memory"],
+    memory_refs: [{ id: "rule-a", why: "load-bearing" }],
+  });
+});
+
+test("buildHandoffSeed: all-empty meta drops the handoff block entirely", () => {
+  const seed = buildHandoffSeed("x", "body", 1_000_000, "sum", {
+    trust_posture: "   ",
+    pickup: [],
+  });
+  expect(seed.handoff).toBeUndefined();
+});
+
 test("defaultHandoffExpiresAt = now + HANDOFF_TTL_MS", () => {
   expect(defaultHandoffExpiresAt(2000)).toBe(2000 + HANDOFF_TTL_MS);
 });

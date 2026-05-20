@@ -1,7 +1,7 @@
 import { listPersonas } from "../identity/index.ts";
 import type { Paths } from "../storage/index.ts";
 import { mutateStore } from "./store.ts";
-import type { MemoryEntry } from "./types.ts";
+import type { HandoffMeta, MemoryEntry } from "./types.ts";
 
 /** §6 MEDIUM idle-handoff slot — TTL constants + sweep. */
 export const HANDOFF_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -25,6 +25,7 @@ export interface HandoffSeed {
   summary: string;
   kind: typeof HANDOFF_KIND;
   expires_at: number;
+  handoff?: HandoffMeta;
 }
 
 export function buildHandoffSeed(
@@ -32,6 +33,7 @@ export function buildHandoffSeed(
   text: string,
   now: number = Date.now(),
   summary?: string,
+  meta?: HandoffMeta,
 ): HandoffSeed {
   // A caller-supplied `summary` is the handoff's highlight — it lets a
   // reconnecting agent see what the handoff is ABOUT (in the boot
@@ -39,6 +41,9 @@ export function buildHandoffSeed(
   // omitted, fall back to boilerplate naming the recipient + TTL.
   const trimmed = summary?.trim();
   const ttlDays = (HANDOFF_TTL_MS / (24 * 60 * 60 * 1000)).toFixed(0);
+  // Drop the structured block entirely when no field is populated, so
+  // a bare handoff doesn't carry an empty `handoff: {}`.
+  const cleanMeta = meta ? pruneHandoffMeta(meta) : undefined;
   return {
     text,
     summary:
@@ -47,7 +52,25 @@ export function buildHandoffSeed(
         : `Handoff to ${forUsername} — auto-fades after ${ttlDays} days`,
     kind: HANDOFF_KIND,
     expires_at: defaultHandoffExpiresAt(now),
+    ...(cleanMeta ? { handoff: cleanMeta } : {}),
   };
+}
+
+/** Strip empty fields from a `HandoffMeta`; return undefined when
+ * nothing meaningful is left. */
+function pruneHandoffMeta(meta: HandoffMeta): HandoffMeta | undefined {
+  const out: HandoffMeta = {};
+  if (meta.trust_posture && meta.trust_posture.trim().length > 0) {
+    out.trust_posture = meta.trust_posture.trim();
+  }
+  if (meta.pickup && meta.pickup.length > 0) out.pickup = meta.pickup;
+  if (meta.memory_refs && meta.memory_refs.length > 0) {
+    out.memory_refs = meta.memory_refs;
+  }
+  if (meta.prohibitions && meta.prohibitions.length > 0) {
+    out.prohibitions = meta.prohibitions;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /** Daemon-tick sweep: walk all personas; fade ANY active entry whose

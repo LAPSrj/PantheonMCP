@@ -524,6 +524,51 @@ test("rest handoff: supersede_prior fades every other active handoff", async () 
   expect(h.map((e) => e.id)).toEqual([r.payload.handoff_entry_id as string]);
 });
 
+test("rest handoff: structured fields surface in the next boot payload", async () => {
+  await call("register", {
+    username: "vellumpike",
+    project: "pantheon",
+    cwd: "/work",
+    claim_after: true,
+  });
+  await call("allow_rest");
+  const r = await call("rest", {
+    reason: "user_done",
+    handoff: {
+      for: "vellumpike",
+      text: "prose body — in-flight threads and lessons",
+      trust_posture: "audit rigor stays full",
+      pickup: ["login", "get_memory", "status-check the fleet"],
+      memory_refs: [{ id: "some-rule", why: "the commit-auth scope" }],
+      prohibitions: ["don't push without a verbatim quote"],
+    },
+  });
+  expect(r.ok).toBe(true);
+  const h = buildResumeSummary(ctx.paths, "vellumpike").handoffs[0];
+  expect(h?.handoff).toEqual({
+    trust_posture: "audit rigor stays full",
+    pickup: ["login", "get_memory", "status-check the fleet"],
+    memory_refs: [{ id: "some-rule", why: "the commit-auth scope" }],
+    prohibitions: ["don't push without a verbatim quote"],
+  });
+});
+
+test("rest handoff: a handoff with no structured fields carries no handoff block", async () => {
+  await call("register", {
+    username: "vellumpike",
+    project: "pantheon",
+    cwd: "/work",
+    claim_after: true,
+  });
+  await call("allow_rest");
+  await call("rest", {
+    reason: "user_done",
+    handoff: { for: "vellumpike", text: "just prose" },
+  });
+  const h = buildResumeSummary(ctx.paths, "vellumpike").handoffs[0];
+  expect(h?.handoff).toBeUndefined();
+});
+
 test("extend_rest reasons about minimum 60min and rearms watchdog", async () => {
   await call("register", {
     username: "vellumpike",

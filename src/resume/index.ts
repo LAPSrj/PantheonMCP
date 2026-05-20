@@ -39,7 +39,7 @@ import { loadStore } from "../memory/store.ts";
 import { HANDOFF_KIND } from "../memory/handoffs.ts";
 import { listTopics as listNotebookTopics } from "../notebook/index.ts";
 import { listProjectTopics } from "../project-notebook/index.ts";
-import type { MemoryEntry } from "../memory/types.ts";
+import type { HandoffMeta, MemoryEntry } from "../memory/types.ts";
 
 export interface ResumeSummary {
   /** Persona's last `status` line, when set. Read from the registry
@@ -119,15 +119,20 @@ export interface MemoryIndexRef {
   summary: string;
 }
 
-/** A pending handoff, surfaced bodyless on the boot path. The agent
- * scans `summary` to decide which handoff (if any) is relevant, then
- * pulls the full body via `recall_memory(id)`. `expires_at` is the
- * epoch-ms TTL deadline (handoffs auto-fade ~7 days after write). */
+/** A pending handoff, surfaced on the boot path. The agent scans
+ * `summary` to decide which handoff is relevant, then pulls the full
+ * prose body via `recall_memory(id)`. `expires_at` is the epoch-ms
+ * TTL deadline (handoffs auto-fade ~7 days after write). `handoff`
+ * carries the structured, machine-usable slice (trust posture, pickup
+ * checklist, curated memory refs, prohibitions) inline — so the next
+ * session can act on it without a `recall_memory` round trip. Only
+ * present when the handoff was written with structured fields. */
 export interface HandoffRef {
   id: string;
   date: string;
   summary: string;
   expires_at: number | null;
+  handoff?: HandoffMeta;
 }
 
 /** A core memory entry surfaced with its FULL body on the boot path
@@ -207,9 +212,10 @@ export function buildResumeSummary(
     byKind[key] = (byKind[key] ?? 0) + 1;
   }
 
-  // Pending handoffs — active `kind: "handoff"` entries, newest-first,
-  // bodyless refs. Byte-capped: a persona with a large handoff pile
-  // would otherwise blow the boot payload one ref at a time.
+  // Pending handoffs — active `kind: "handoff"` entries, newest-first.
+  // Byte-capped: a persona with a large handoff pile would otherwise
+  // blow the boot payload one ref at a time. Cost is the SERIALIZED
+  // ref so a handoff carrying a structured block is counted in full.
   const allHandoffs = active
     .filter((e) => e.kind === HANDOFF_KIND)
     .sort((a, b) => {
@@ -219,11 +225,12 @@ export function buildResumeSummary(
   const handoffs: HandoffRef[] = [];
   let handoffBytes = 0;
   for (const e of allHandoffs) {
-    const cost = Buffer.byteLength(e.id + e.date + e.summary, "utf8");
+    const ref = toHandoffRef(e);
+    const cost = Buffer.byteLength(JSON.stringify(ref), "utf8");
     if (handoffs.length > 0 && handoffBytes + cost > HANDOFFS_BUDGET_BYTES) {
       break;
     }
-    handoffs.push(toHandoffRef(e));
+    handoffs.push(ref);
     handoffBytes += cost;
   }
 
@@ -386,6 +393,7 @@ function toHandoffRef(e: MemoryEntry): HandoffRef {
     date: e.date,
     summary: e.summary,
     expires_at: e.expires_at ?? null,
+    ...(e.handoff !== undefined ? { handoff: e.handoff } : {}),
   };
 }
 

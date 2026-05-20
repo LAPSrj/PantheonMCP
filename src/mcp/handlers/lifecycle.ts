@@ -31,6 +31,24 @@ import {
   ToolError,
 } from "../types.ts";
 
+/** Parse `handoff.memory_refs` — an array of `{ id, why }` pairs the
+ * next session should read. Defensive: keeps only well-formed pairs,
+ * returns undefined when nothing valid is present. */
+function parseMemoryRefs(
+  v: unknown,
+): { id: string; why: string }[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out: { id: string; why: string }[] = [];
+  for (const r of v) {
+    if (typeof r !== "object" || r === null) continue;
+    const { id, why } = r as Record<string, unknown>;
+    if (typeof id === "string" && typeof why === "string") {
+      out.push({ id, why });
+    }
+  }
+  return out.length > 0 ? out : undefined;
+}
+
 /** Self-exit gate. Returns the structured rejection payload when the
  * spawning summoner set `block_self_exit: true` (delivered as
  * `PANTHEON_BLOCK_SELF_EXIT=1` in the spawned process's env, captured
@@ -106,12 +124,26 @@ export const rest: Handler = async (args, ctx) => {
     const handoffSummary = asString(handoff.summary);
     const supersedesIds = asStringArray(handoff.supersedes) ?? [];
     const supersedePrior = asBoolean(handoff.supersede_prior) ?? false;
+    // Structured handoff metadata — the machine-usable slice of the
+    // canonical handoff shape. `buildHandoffSeed` prunes empty fields,
+    // so an unstructured handoff carries no `handoff` block.
+    const trustPosture = asString(handoff.trust_posture);
+    const pickup = asStringArray(handoff.pickup);
+    const prohibitions = asStringArray(handoff.prohibitions);
+    const memoryRefs = parseMemoryRefs(handoff.memory_refs);
+    const handoffMeta = {
+      ...(trustPosture !== undefined ? { trust_posture: trustPosture } : {}),
+      ...(pickup !== undefined ? { pickup } : {}),
+      ...(prohibitions !== undefined ? { prohibitions } : {}),
+      ...(memoryRefs !== undefined ? { memory_refs: memoryRefs } : {}),
+    };
     try {
       const seed = buildHandoffSeed(
         handoffFor,
         handoffText,
         Date.now(),
         handoffSummary,
+        handoffMeta,
       );
       const entry = appendEntry(ctx.paths, claimed, seed);
       handoff_entry_id = entry.id;
