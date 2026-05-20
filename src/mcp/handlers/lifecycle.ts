@@ -6,16 +6,25 @@ import {
   writeRestRequest,
   type RestRequestKind,
 } from "../../lifecycle/index.ts";
-import { appendEntry, buildHandoffSeed } from "../../memory/index.ts";
+import {
+  appendEntry,
+  buildHandoffSeed,
+  fadeEntry,
+  getEntry,
+  HANDOFF_KIND,
+  loadStore,
+} from "../../memory/index.ts";
 import {
   DEFAULT_REST_TIMEOUT_SECONDS,
   MIN_REST_TIMEOUT_SECONDS,
   WatchdogError,
 } from "../../watchdog/index.ts";
 import {
+  asBoolean,
   asNumber,
   asObject,
   asString,
+  asStringArray,
   asStringRequired,
   type Handler,
   type HandlerContext,
@@ -90,11 +99,20 @@ export const rest: Handler = async (args, ctx) => {
   let handoff_entry_id: string | null = null;
   let handoff_dm_message_id: string | null = null;
   const handoff_warnings: string[] = [];
+  const superseded_handoffs: string[] = [];
   if (handoff) {
     const handoffFor = asStringRequired(handoff.for, "handoff.for");
     const handoffText = asStringRequired(handoff.text, "handoff.text");
+    const handoffSummary = asString(handoff.summary);
+    const supersedesIds = asStringArray(handoff.supersedes) ?? [];
+    const supersedePrior = asBoolean(handoff.supersede_prior) ?? false;
     try {
-      const seed = buildHandoffSeed(handoffFor, handoffText);
+      const seed = buildHandoffSeed(
+        handoffFor,
+        handoffText,
+        Date.now(),
+        handoffSummary,
+      );
       const entry = appendEntry(ctx.paths, claimed, seed);
       handoff_entry_id = entry.id;
     } catch (err) {
@@ -121,6 +139,37 @@ export const rest: Handler = async (args, ctx) => {
         `handoff_dm: no chat session bound (call \`login\` to enable DMs).`,
       );
     }
+
+    // Supersede prior handoffs — fade entries this new handoff makes
+    // obsolete, so the next session's `resume_summary.handoffs` list
+    // only shows what still matters. `supersede_prior` widens the set
+    // to every other active handoff this persona owns.
+    const toFade = new Set(supersedesIds);
+    if (supersedePrior) {
+      const store = loadStore(ctx.paths, claimed);
+      for (const e of store.entries) {
+        if (e.kind === HANDOFF_KIND && e.status === "active") toFade.add(e.id);
+      }
+    }
+    for (const id of toFade) {
+      if (id === handoff_entry_id) continue; // never fade the new one
+      try {
+        const entry = getEntry(ctx.paths, claimed, id);
+        if (!entry) {
+          handoff_warnings.push(`supersede: ${id} not found`);
+          continue;
+        }
+        if (entry.kind !== HANDOFF_KIND) {
+          handoff_warnings.push(`supersede: ${id} is not a handoff — skipped`);
+          continue;
+        }
+        if (entry.status !== "active") continue; // already faded/forgotten
+        fadeEntry(ctx.paths, claimed, id);
+        superseded_handoffs.push(id);
+      } catch (err) {
+        handoff_warnings.push(`supersede: ${id} — ${(err as Error).message}`);
+      }
+    }
   }
 
   transitionRestEnter(ctx.session);
@@ -132,6 +181,7 @@ export const rest: Handler = async (args, ctx) => {
     note: "Session state flipped to resting. Call `exit()` to close the tab.",
     ...(handoff_entry_id !== null ? { handoff_entry_id } : {}),
     ...(handoff_dm_message_id !== null ? { handoff_dm_message_id } : {}),
+    ...(superseded_handoffs.length > 0 ? { superseded_handoffs } : {}),
     ...(handoff_warnings.length > 0 ? { handoff_warnings } : {}),
   };
 };

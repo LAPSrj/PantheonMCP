@@ -12,12 +12,18 @@ export function defaultHandoffExpiresAt(now: number = Date.now()): number {
 }
 
 /** Build the standardized handoff entry shape for a `rest({ handoff })`
- * call. Caller passes to `appendEntry`. */
+ * call. Caller passes to `appendEntry`.
+ *
+ * Handoffs are deliberately NOT `core` — a handoff is an ephemeral
+ * continuity note (7-day TTL, auto-faded), not a durable foundational
+ * rail. Marking it `core` was core-inflation: it forced handoffs into
+ * the Core render tier and the `core_memory` boot payload, where
+ * multi-KB session snapshots crowded out actual rules. Handoffs
+ * surface on their own via `resume_summary.handoffs` instead. */
 export interface HandoffSeed {
   text: string;
   summary: string;
   kind: typeof HANDOFF_KIND;
-  core: true;
   expires_at: number;
 }
 
@@ -25,35 +31,48 @@ export function buildHandoffSeed(
   forUsername: string,
   text: string,
   now: number = Date.now(),
+  summary?: string,
 ): HandoffSeed {
+  // A caller-supplied `summary` is the handoff's highlight — it lets a
+  // reconnecting agent see what the handoff is ABOUT (in the boot
+  // payload's `handoffs` list) without reading the full body. When
+  // omitted, fall back to boilerplate naming the recipient + TTL.
+  const trimmed = summary?.trim();
+  const ttlDays = (HANDOFF_TTL_MS / (24 * 60 * 60 * 1000)).toFixed(0);
   return {
     text,
-    summary: `Handoff to ${forUsername} — auto-fades after ${(HANDOFF_TTL_MS / (24 * 60 * 60 * 1000)).toFixed(0)} days`,
+    summary:
+      trimmed && trimmed.length > 0
+        ? trimmed
+        : `Handoff to ${forUsername} — auto-fades after ${ttlDays} days`,
     kind: HANDOFF_KIND,
-    core: true,
     expires_at: defaultHandoffExpiresAt(now),
   };
 }
 
-/** Daemon-tick sweep: walk all personas; fade `kind: "handoff"`
- * entries whose `expires_at` is in the past and `status: "active"`.
- * Returns a count of faded entries.
+/** Daemon-tick sweep: walk all personas; fade ANY active entry whose
+ * `expires_at` is in the past. Returns a count of faded entries.
+ *
+ * Not handoff-specific — handoffs are simply the kind that sets
+ * `expires_at` by default. Any entry written with an explicit
+ * `expires_at` (via `append_memory`) participates in the same sweep.
  *
  * Status mutation here is acceptable per §4: the auto-fade is the
- * EXPLICIT contract of the handoff slot — the entry sets
- * `expires_at` precisely so the daemon can fade it. The §4 "status
- * NEVER auto-mutates" rule is about render-time budget enforcement
- * not modifying status; explicit TTL-driven fades remain the user's
- * intent. */
-export function expireHandoffs(paths: Paths, now: number = Date.now()): number {
+ * EXPLICIT contract of `expires_at` — the entry carries the timestamp
+ * precisely so the daemon can fade it. The §4 "status NEVER
+ * auto-mutates" rule is about render-time budget enforcement not
+ * modifying status; explicit TTL-driven fades remain the user's
+ * intent. The sweep only ever FADES (never forgets), so it is safe
+ * even for `core` entries that opted into a TTL. */
+export function expireEntries(paths: Paths, now: number = Date.now()): number {
   let total = 0;
   for (const persona of listPersonas(paths)) {
-    total += expireHandoffsFor(paths, persona.username, now);
+    total += expireEntriesFor(paths, persona.username, now);
   }
   return total;
 }
 
-export function expireHandoffsFor(
+export function expireEntriesFor(
   paths: Paths,
   username: string,
   now: number = Date.now(),
@@ -63,7 +82,6 @@ export function expireHandoffsFor(
     let mutated = false;
     const entries: MemoryEntry[] = store.entries.map((entry) => {
       if (
-        entry.kind === HANDOFF_KIND &&
         entry.status === "active" &&
         entry.expires_at !== undefined &&
         entry.expires_at < now
