@@ -344,6 +344,11 @@ export const TOOLS: readonly ToolDef[] = [
         details: { type: "string", description: "Unbounded payload, ≤5 MB. Never inlined at startup." },
         kind: { type: "string" },
         core: { type: "boolean" },
+        expires_at: {
+          oneOf: [{ type: "number" }, { type: "null" }],
+          description:
+            "Optional ms-epoch TTL. The daemon-tick auto-fades the entry once this time passes — use it for time-boxed entries (a branch note good until a PR merges, a scratch fact). A `kind: \"handoff\"` entry auto-gets a 7-day TTL when this field is OMITTED; pass `expires_at: null` to opt a handoff out of auto-expiry. Non-handoff entries without `expires_at` never auto-fade. The sweep only fades (never forgets), so a faded entry is still recoverable via `recall_memory`.",
+        },
         summoner_username: { type: "string" },
         replies_to: {
           type: "string",
@@ -751,7 +756,9 @@ export const TOOLS: readonly ToolDef[] = [
       "**Optional `handoff` slot** writes a `kind: \"handoff\"` core " +
       "memory entry (auto-fades after 7 days via the daemon-tick) and, " +
       "when chat is bound, DMs the target with the same text — atomic " +
-      "with the rest call so you don't have to coordinate two calls.",
+      "with the rest call so you don't have to coordinate two calls. " +
+      "Pass `handoff.summary` with a one-line highlight so the next " +
+      "session can see what the handoff is about before reading it.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -770,6 +777,22 @@ export const TOOLS: readonly ToolDef[] = [
           properties: {
             for: { type: "string", description: "Persona handle to receive the handoff DM." },
             text: { type: "string", description: "Handoff body — written to memory + sent as DM." },
+            summary: {
+              type: "string",
+              description:
+                "Optional one-line highlight of what the handoff is ABOUT (<=240 chars). Surfaces in the next session's boot payload (`resume_summary.handoffs`) so the reconnecting agent can tell which handoff is relevant before reading the full body. Defaults to boilerplate naming the recipient.",
+            },
+            supersedes: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Optional handoff entry ids that this new handoff makes obsolete — each is faded so the next session's `resume_summary.handoffs` list only shows what still matters. Use this when continuing work described by a prior handoff (ids come from `resume_summary.handoffs[].id`). Non-handoff or already-faded ids are skipped with a warning.",
+            },
+            supersede_prior: {
+              type: "boolean",
+              description:
+                "When true, fade ALL of this persona's other active handoffs — the convenient form for self-handoff continuity chains where picking up means everything prior is moot. Combine with `supersedes` or use alone. Default false.",
+            },
           },
         },
       },

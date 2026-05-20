@@ -61,7 +61,7 @@ export {
   HANDOFF_KIND,
   defaultHandoffExpiresAt,
   buildHandoffSeed,
-  expireHandoffs,
-  expireHandoffsFor,
+  expireEntries,
+  expireEntriesFor,
   type HandoffSeed,
 } from "./handoffs.ts";

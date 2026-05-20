@@ -1,13 +1,16 @@
 import {
   appendEntry,
   deleteSnapshot,
+  defaultHandoffExpiresAt,
   fadeEntry,
   findMemory,
   forgetEntryWithLifecycleCoercion,
   getDetails,
   getEntry,
+  HANDOFF_KIND,
   listIndex,
   listSnapshots,
+  loadStore,
   recallEntry,
   renderForPrompt,
   restoreMemory,
@@ -64,22 +67,60 @@ export const append_memory: Handler = async (args, ctx) => {
   const details = asString(args.details);
   const kind = asString(args.kind);
   const core = asBoolean(args.core);
+  // `expires_at`: a number sets an explicit TTL. When the field is
+  // OMITTED entirely, a `kind: "handoff"` entry auto-gets the 7-day
+  // handoff TTL — so a hand-written handoff still fades like one made
+  // via `rest({ handoff })`. Passing `expires_at: null` explicitly
+  // opts out (no TTL even for a handoff).
+  let expiresAt = asNumber(args.expires_at);
+  if (
+    expiresAt === undefined &&
+    !("expires_at" in args) &&
+    kind === HANDOFF_KIND
+  ) {
+    expiresAt = defaultHandoffExpiresAt();
+  }
   const summonerOverride = asString(args.summoner_username);
   const summoner = summonerOverride ?? ctx.summoner_username ?? undefined;
   const repliesTo = asString(args.replies_to);
   const seeAlso = Array.isArray(args.see_also)
     ? (args.see_also.filter((v) => typeof v === "string") as string[])
     : undefined;
-  return appendEntry(ctx.paths, claimed, {
+  const created = appendEntry(ctx.paths, claimed, {
     text,
     ...(summary !== undefined ? { summary } : {}),
     ...(details !== undefined ? { details } : {}),
     ...(kind !== undefined ? { kind } : {}),
     ...(core !== undefined ? { core } : {}),
+    ...(expiresAt !== undefined ? { expires_at: expiresAt } : {}),
     ...(summoner !== undefined ? { summoner_username: summoner } : {}),
     ...(repliesTo !== undefined ? { replies_to: repliesTo } : {}),
     ...(seeAlso !== undefined ? { see_also: seeAlso } : {}),
   });
+
+  // A handoff written through `append_memory` bypasses the dedicated
+  // `rest({ handoff })` slot (which sets a TTL, can DM the recipient,
+  // and supersedes prior handoffs). When other active handoffs
+  // already exist, nudge the agent to prune the pile.
+  if (kind === HANDOFF_KIND) {
+    const others = loadStore(ctx.paths, claimed).entries.filter(
+      (e) =>
+        e.kind === HANDOFF_KIND &&
+        e.status === "active" &&
+        e.id !== created.id,
+    );
+    if (others.length > 0) {
+      return {
+        ...created,
+        hint:
+          `${others.length} other active handoff${others.length === 1 ? "" : "s"} on file. ` +
+          `Handoffs are continuity notes, not durable memory — fade stale ones with ` +
+          `\`fade_memory\`, or write handoffs via \`rest({ handoff })\` and pass ` +
+          `\`supersedes\` / \`supersede_prior\` to fade superseded ones automatically.`,
+      };
+    }
+  }
+  return created;
 };
 
 export const update_memory: Handler = async (args, ctx) => {

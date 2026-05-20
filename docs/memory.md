@@ -67,14 +67,19 @@ The `MemoryStatus` field changes ONLY through:
   user intent).
 - `updateEntry({ status })` — for completeness; surfaced as
   `update_memory({ status })` in the MCP layer.
-- **`expireHandoffs` daemon-tick sweep** — the one explicit
-  exception (see "Idle handoff slot" below). The exception is
-  consistent with §4 because the **caller set `expires_at`
-  precisely to declare TTL-driven fade**. §4's "status NEVER
-  auto-mutates" rule is meant to prevent the daemon from
+- **`expireEntries` daemon-tick sweep** — the one explicit
+  exception (see "Idle handoff slot" below). It fades ANY active
+  entry whose `expires_at` is in the past — not just handoffs;
+  handoffs are simply the kind that sets `expires_at` by default,
+  while any entry can opt in via `append_memory({ expires_at })`.
+  The exception is consistent with §4 because the **caller set
+  `expires_at` precisely to declare TTL-driven fade**. §4's "status
+  NEVER auto-mutates" rule is meant to prevent the daemon from
   guessing-and-fading at render time without the user asking;
-  TTL fades are user-stated intent expressed via the
-  `expires_at` field, not daemon-side guessing.
+  TTL fades are user-stated intent expressed via the `expires_at`
+  field, not daemon-side guessing. The sweep only ever FADES (never
+  forgets), so it is safe even for a `core` entry that opted into a
+  TTL.
 
 Render-time budget enforcement does not call any of these. §4 is
 explicit on this point: collapse is a **render-time** transformation,
@@ -169,40 +174,72 @@ both confirmed with semaphoremole:
   the core list has `entries.length ≤ CORE_HEAD_KEEP + CORE_TAIL_KEEP`
   (six or fewer entries), there is no middle region; nothing is
   collapsed. If the head + tail alone exceed 10 KB the warning
-  shape becomes `⚠ Core total (X.X KB) exceeds 10 KB cap` so the
+  shape becomes `Warning: Core total (X.X KB) exceeds 10 KB cap` so the
   agent knows trimming is needed but their core entries themselves
   weren't touched. Auto-fading user-pinned core content is
   explicitly forbidden (§4 / §11b).
 
 ## Idle handoff slot (§6 MEDIUM)
 
-`rest({ handoff?: { for, text } })` writes a `kind: "handoff"` core
-memory entry with a 7-day TTL via the `expires_at` field, and
-optionally DMs the handoff target with the same text — atomic with
-the rest call so the user doesn't have to coordinate two calls.
+`rest({ handoff?: { for, text, summary?, supersedes?, supersede_prior? } })`
+writes a `kind: "handoff"` memory entry with a 7-day TTL via the
+`expires_at` field, and optionally DMs the handoff target with the
+same text — atomic with the rest call so the user doesn't have to
+coordinate two calls.
+
+A handoff is **deliberately not `core`**. It is an ephemeral
+continuity note, not a durable foundational rail — marking it core
+forced multi-KB session snapshots into the Core render tier and the
+`core_memory` boot payload (see below). Handoffs surface on their own
+via `resume_summary.handoffs`.
+
+The optional `summary` is the handoff's **highlight**: a one-line
+description of what the handoff is about. It surfaces in the next
+session's boot payload (`resume_summary.handoffs`) so a reconnecting
+agent can tell which handoff is relevant before reading the full
+body. When omitted, `summary` falls back to boilerplate naming the
+recipient.
+
+The optional `supersedes` (array of handoff ids) and `supersede_prior`
+(boolean) fade obsolete handoffs as the new one is written, so the
+next session's `resume_summary.handoffs` list only shows what still
+matters. `supersedes` fades the named ids (non-handoff / already-faded
+ids are skipped with a `handoff_warnings` entry); `supersede_prior`
+fades every other active handoff this persona owns — the convenient
+form for self-handoff continuity chains. Faded ids come back in the
+`rest` response as `superseded_handoffs`.
 
 The handoff entry shape (`buildHandoffSeed`):
 
 ```json
 {
   "kind": "handoff",
-  "core": true,
   "text": "<handoff body>",
-  "summary": "Handoff to <for> — auto-fades after 7 days",
+  "summary": "<caller highlight, or boilerplate>",
   "expires_at": "<now + 7 days, ms epoch>"
 }
 ```
 
 `expires_at` is a schema-additive optional field on `MemoryEntry`.
-Entries without it never auto-fade.
+Entries without it never auto-fade. Any entry can carry one — pass
+`expires_at` to `append_memory` to give a time-boxed entry (a branch
+note good until a PR merges, a scratch fact) its own TTL.
+
+**Handoffs auto-expire.** When `append_memory` is called with
+`kind: "handoff"` and `expires_at` is omitted, the handler stamps the
+default 7-day TTL — so a hand-written handoff fades like one made via
+`rest({ handoff })`, instead of piling up forever. Pass
+`expires_at: null` explicitly to opt a handoff out of auto-expiry.
+Appending a handoff while other active handoffs exist also returns a
+`hint` nudging the agent to fade the stale ones.
 
 ### Auto-fade sweep
 
 The MCP server's daemon-tick (`setInterval(30_000)` that also
-prunes stale subscribers + tombstones) calls
-`expireHandoffs(paths)` which walks every persona, finds
-`kind: "handoff"` entries whose `expires_at < now` and
-`status: "active"`, and fades them via `mutateStore`.
+prunes stale subscribers + tombstones) calls `expireEntries(paths)`
+which walks every persona, finds **any** `status: "active"` entry
+whose `expires_at < now` (regardless of `kind`), and fades them via
+`mutateStore`.
 
 This is the **one explicit exception** to the §4 "status NEVER
 auto-mutates" rule. The exception is fine because:
@@ -292,6 +329,48 @@ foundational notes without their working-set context.
 The collapse + budget warnings still fire as normal for Core.
 `recall_memory(id)` also still works for any entry; only_core only
 gates what gets rendered, not what's reachable.
+
+## Boot payload — `core_memory` + `handoffs` + `memory_index`
+
+`manifest` and `claim` hand a reconnecting agent its memory state up
+front, so it doesn't have to scan with `list_memory` / `recall_memory`
+or read an on-disk tool-result file. Every section is byte-bounded
+and walked newest-first; when a section overflows it emits a
+`{ total, shown }` truncation marker and the rest stays reachable via
+`list_memory`. The bounds hold even for a persona with a badly
+inflated store (e.g. `righthand`: 98 core entries + 52 handoffs ⇒ a
+~36 KB payload, vs. the ~77 KB that overflows the MCP token limit).
+
+- **`core_memory`** (sibling field on the response) — active
+  `core: true` entries WITH their full `text`, so `core`'s "always
+  load this" semantics are honored on boot. `kind: "handoff"`
+  entries are excluded — a handoff is a one-time continuity note,
+  not a durable rail. Bodies are kept newest-first until the 12 KB
+  total budget (`CORE_MEMORY_TOTAL_BUDGET_BYTES`); a body over the
+  4 KB per-entry cap (`CORE_MEMORY_PER_ENTRY_CAP_BYTES`) is skipped.
+  Core entries that don't fit are **not** emitted here at all (no
+  collapsed refs — that is what bloated the payload); they are
+  counted in the sibling `core_memory_truncated` field and remain
+  discoverable as refs in `memory_index`.
+
+- **`resume_summary.handoffs`** — active `kind: "handoff"` entries as
+  bodyless refs (`id`, `date`, `summary`, `expires_at`), newest-first,
+  byte-bounded (`HANDOFFS_BUDGET_BYTES`, 6 KB) with
+  `handoffs_truncated`. The `summary` is the handoff's highlight; the
+  agent scans the list, picks the relevant handoff, and pulls its
+  body via `recall_memory(id)`. Bodies are never inlined — handoffs
+  can be multi-KB session snapshots.
+
+- **`resume_summary.memory_index`** — the complete title catalog:
+  every active non-handoff entry (core included) as a bodyless
+  `{id, date, summary}` ref, grouped by `kind` (`_unspecified` for
+  entries with no kind). This is the discovery surface — the agent
+  scans the summaries on boot to see WHAT it knows, no `recall_memory`
+  round trip and no file read, then pulls the bodies it needs.
+  Bounded by `MEMORY_INDEX_BUDGET_BYTES` (12 KB) with
+  `memory_index_truncated`.
+
+`buildCoreMemory` and `buildResumeSummary` live in `src/resume/`.
 
 ## `find_memory` cross-agent search (§6 LOW)
 

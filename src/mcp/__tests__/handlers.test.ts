@@ -6,6 +6,9 @@ import { resolvePaths } from "../../storage/index.ts";
 import { Session, createPersona } from "../../identity/index.ts";
 import { Watchdog } from "../../watchdog/index.ts";
 import { createContext } from "../context.ts";
+import { appendEntry } from "../../memory/operations.ts";
+import { expireEntries } from "../../memory/index.ts";
+import { buildResumeSummary } from "../../resume/index.ts";
 import { dispatch } from "../dispatch.ts";
 import type { HandlerContext } from "../types.ts";
 
@@ -105,6 +108,29 @@ test("manifest auto-claims on a sole cwd match", async () => {
   expect(r.ok).toBe(true);
   expect(r.payload.reason).toBe("sole-match");
   expect(ctx.session.claimedUsername).toBe("vellumpike");
+});
+
+test("manifest returns core_memory with full text for core entries", async () => {
+  createPersona(ctx.paths, {
+    username: "vellumpike",
+    project: "pantheon",
+    cwd: "/auto",
+    platform: "linux",
+  });
+  appendEntry(ctx.paths, "vellumpike", {
+    summary: "the rail",
+    text: "full core body",
+    core: true,
+  });
+  appendEntry(ctx.paths, "vellumpike", { summary: "note", text: "ephemeral" });
+  const r = await call("manifest", { cwd: "/auto" });
+  expect(r.ok).toBe(true);
+  const coreMemory = r.payload.core_memory as Array<Record<string, unknown>>;
+  expect(coreMemory).toHaveLength(1);
+  expect(coreMemory[0]).toMatchObject({
+    summary: "the rail",
+    text: "full core body",
+  });
 });
 
 test("become flips identity; not_registered leaves session unchanged", async () => {
@@ -230,6 +256,80 @@ test("append_memory + get_memory + recall_memory round-trip", async () => {
   expect(recalled.payload.status).toBe("active");
 });
 
+test("append_memory persists expires_at; the sweep fades it once past", async () => {
+  await call("register", {
+    username: "vellumpike",
+    project: "pantheon",
+    cwd: "/work",
+    claim_after: true,
+  });
+  const append = await call("append_memory", {
+    text: "branch note — good until the PR merges",
+    kind: "log",
+    expires_at: 1_000,
+  });
+  expect(append.ok).toBe(true);
+  expect(append.payload.expires_at).toBe(1_000);
+  // Sweep with a now well past the TTL — the entry fades.
+  expireEntries(ctx.paths, 9_999_999_999_999);
+  const faded = buildResumeSummary(ctx.paths, "vellumpike");
+  expect(faded.active_memory_count).toBe(0);
+});
+
+test("append_memory: kind:handoff auto-gets a 7-day TTL when expires_at omitted", async () => {
+  await call("register", {
+    username: "vellumpike",
+    project: "pantheon",
+    cwd: "/work",
+    claim_after: true,
+  });
+  const before = Date.now();
+  const r = await call("append_memory", { text: "handoff body", kind: "handoff" });
+  expect(r.ok).toBe(true);
+  expect(r.payload.expires_at as number).toBeGreaterThan(before);
+});
+
+test("append_memory: expires_at:null opts a handoff out of auto-TTL", async () => {
+  await call("register", {
+    username: "vellumpike",
+    project: "pantheon",
+    cwd: "/work",
+    claim_after: true,
+  });
+  const r = await call("append_memory", {
+    text: "permanent handoff",
+    kind: "handoff",
+    expires_at: null,
+  });
+  expect(r.ok).toBe(true);
+  expect(r.payload.expires_at).toBeUndefined();
+});
+
+test("append_memory: non-handoff without expires_at gets no TTL", async () => {
+  await call("register", {
+    username: "vellumpike",
+    project: "pantheon",
+    cwd: "/work",
+    claim_after: true,
+  });
+  const r = await call("append_memory", { text: "a fact", kind: "fact" });
+  expect(r.ok).toBe(true);
+  expect(r.payload.expires_at).toBeUndefined();
+});
+
+test("append_memory: handoff hints about fading when other handoffs exist", async () => {
+  await call("register", {
+    username: "vellumpike",
+    project: "pantheon",
+    cwd: "/work",
+    claim_after: true,
+  });
+  const first = await call("append_memory", { text: "h1", kind: "handoff" });
+  expect(first.payload.hint).toBeUndefined(); // no prior handoffs
+  const second = await call("append_memory", { text: "h2", kind: "handoff" });
+  expect(second.payload.hint as string).toContain("1 other active handoff");
+});
+
 test("append_memory respects 5MB details cap", async () => {
   await call("register", {
     username: "vellumpike",
@@ -353,6 +453,75 @@ test("rest: leaves resume_session_id null when neither arg nor ctx provides one"
   await call("rest", { reason: "user_done" });
   const { readPersona } = await import("../../identity/index.ts");
   expect(readPersona(ctx.paths, "vellumpike")?.resume_session_id).toBeNull();
+});
+
+test("rest handoff: supersedes fades the named prior handoffs", async () => {
+  await call("register", {
+    username: "vellumpike",
+    project: "pantheon",
+    cwd: "/work",
+    claim_after: true,
+  });
+  const old1 = appendEntry(ctx.paths, "vellumpike", {
+    summary: "old handoff 1",
+    text: "x",
+    kind: "handoff",
+  });
+  const old2 = appendEntry(ctx.paths, "vellumpike", {
+    summary: "old handoff 2",
+    text: "y",
+    kind: "handoff",
+  });
+  await call("allow_rest");
+  const r = await call("rest", {
+    reason: "user_done",
+    handoff: {
+      for: "vellumpike",
+      text: "new handoff body",
+      summary: "picking up where old1 left off",
+      supersedes: [old1.id],
+    },
+  });
+  expect(r.ok).toBe(true);
+  expect(r.payload.superseded_handoffs).toEqual([old1.id]);
+  const h = buildResumeSummary(ctx.paths, "vellumpike").handoffs;
+  // old1 faded out; old2 + the new handoff remain active.
+  expect(h.map((e) => e.id).sort()).toEqual(
+    [old2.id, r.payload.handoff_entry_id as string].sort(),
+  );
+});
+
+test("rest handoff: supersede_prior fades every other active handoff", async () => {
+  await call("register", {
+    username: "vellumpike",
+    project: "pantheon",
+    cwd: "/work",
+    claim_after: true,
+  });
+  appendEntry(ctx.paths, "vellumpike", {
+    summary: "old A",
+    text: "x",
+    kind: "handoff",
+  });
+  appendEntry(ctx.paths, "vellumpike", {
+    summary: "old B",
+    text: "y",
+    kind: "handoff",
+  });
+  await call("allow_rest");
+  const r = await call("rest", {
+    reason: "user_done",
+    handoff: {
+      for: "vellumpike",
+      text: "fresh start",
+      supersede_prior: true,
+    },
+  });
+  expect(r.ok).toBe(true);
+  expect((r.payload.superseded_handoffs as string[]).length).toBe(2);
+  const h = buildResumeSummary(ctx.paths, "vellumpike").handoffs;
+  // Only the new handoff survives.
+  expect(h.map((e) => e.id)).toEqual([r.payload.handoff_entry_id as string]);
 });
 
 test("extend_rest reasons about minimum 60min and rearms watchdog", async () => {

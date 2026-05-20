@@ -13,7 +13,7 @@ import { stampRested, transitionClaim } from "../identity/index.ts";
 import { ChatRouter, pruneStale } from "../chat/index.ts";
 import { pruneStaleRestRequests } from "../lifecycle/index.ts";
 import { consumeForceLifecycleRequests } from "./handlers/lifecycle.ts";
-import { expireHandoffs } from "../memory/index.ts";
+import { expireEntries } from "../memory/index.ts";
 import { openChatDb, resolvePaths } from "../storage/index.ts";
 import { importLegacySchemas } from "../schemas/index.ts";
 import {
@@ -327,7 +327,7 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
       // best-effort
     }
     try {
-      expireHandoffs(ctx.paths);
+      expireEntries(ctx.paths);
     } catch {
       // best-effort — memory sweep failures shouldn't crash the daemon
     }
