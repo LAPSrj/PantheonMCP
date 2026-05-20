@@ -14,7 +14,8 @@ import {
   type PermissionMode,
 } from "../../identity/index.ts";
 import { loadStore } from "../../memory/index.ts";
-import { buildResumeSummary } from "../../resume/index.ts";
+import { buildResumeSummary, buildCoreMemory } from "../../resume/index.ts";
+import type { Paths } from "../../storage/index.ts";
 import {
   type Handler,
   ToolError,
@@ -107,6 +108,21 @@ export const register: Handler = async (args, ctx) => {
   };
 };
 
+/** Build the `core_memory` (+ optional `core_memory_truncated`)
+ * fields for a boot response. `buildCoreMemory` returns the entries
+ * that fit the byte budget plus a truncation count; spread the result
+ * of this helper into the manifest/claim payload. */
+function coreMemoryFields(
+  paths: Paths,
+  username: string,
+): Record<string, unknown> {
+  const core = buildCoreMemory(paths, username);
+  return {
+    core_memory: core.entries,
+    ...(core.truncated ? { core_memory_truncated: core.truncated } : {}),
+  };
+}
+
 export const claim: Handler = async (args, ctx) => {
   const username = asStringRequired(args.username, "username");
   const persona = transitionClaim(ctx.paths, ctx.session, username);
@@ -117,6 +133,7 @@ export const claim: Handler = async (args, ctx) => {
     resume_summary: buildResumeSummary(ctx.paths, persona.username, {
       project: persona.project,
     }),
+    ...coreMemoryFields(ctx.paths, persona.username),
   };
 };
 
@@ -132,6 +149,7 @@ export const manifest: Handler = async (args, ctx) => {
       resume_summary: buildResumeSummary(ctx.paths, persona.username, {
         project: persona.project,
       }),
+      ...coreMemoryFields(ctx.paths, persona.username),
     };
   }
   const cwd = asString(args.cwd) ?? process.cwd();
@@ -148,6 +166,7 @@ export const manifest: Handler = async (args, ctx) => {
         result.matched.persona.username,
         { project: result.matched.persona.project },
       ),
+      ...coreMemoryFields(ctx.paths, result.matched.persona.username),
     };
   }
   if ("ambiguous" in result) {
