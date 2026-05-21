@@ -3,11 +3,12 @@
  * The calling agent's context has gotten unwieldy (long /compact run,
  * working tree the agent no longer trusts, drift, etc.). Instead of
  * closing and re-summoning by hand, `remanifest` spawns a fresh
- * incarnation of the SAME persona into a sibling pane (or new tab),
- * passes a handoff text the new incarnation will see in its first
- * turn, and arranges for the OLD session to close as soon as the new
- * one has logged into chat. The new session reclaims the canonical
- * chat handle automatically once the old's presence row is gone.
+ * incarnation of the SAME persona into a NEW TAB of the SAME window
+ * the calling session is in, passes a handoff text the new
+ * incarnation will see in its first turn, and arranges for the OLD
+ * session to close as soon as the new one has logged into chat. The
+ * new session reclaims the canonical chat handle automatically once
+ * the old's presence row is gone.
  *
  * Implementation reuses existing primitives:
  *
@@ -22,14 +23,13 @@
  *   4. The new session's prune-tick auto-reclaims the canonical
  *      handle once the old's presence row clears.
  *
- * Default `inherit_pane: true` resolves the launcher target as
- * split-pane on adapters that support it (wt / kitty / tmux). Falls
- * back to a new tab on adapters that don't. */
+ * Target shape is fixed: `mode: "new-tab-here"` always. Split-pane
+ * and new-window are not reachable from remanifest (Leandro,
+ * 2026-05-21). */
 
 import { readPersona } from "../../identity/index.ts";
 import { spawnPersona } from "./spawn.ts";
 import {
-  asBoolean,
   asString,
   asStringRequired,
   type Handler,
@@ -40,35 +40,43 @@ import {
 /** Pure resolver: pick the spawn target shape for remanifest given
  * what we know about the calling session.
  *
- * Three cases, in priority order:
- *   1. Pantheon-spawned + inherit_pane: split-pane in the named
- *      window from spawn_metadata.
- *   2. Manually-started in Windows Terminal: new tab in the parent
- *      WT window, identified by WT_SESSION env var.
- *   3. Anything else: mode-only new-tab-here (wt resolves -w 0 to
- *      "most recently used" window; other adapters do their own
- *      fallback).
+ * Mode is ALWAYS `"new-tab-here"` — remanifest opens a new tab in
+ * the SAME window as the calling session, never a new window and
+ * never a split pane (Leandro 2026-05-21). The three branches below
+ * differ only in HOW we identify "the same window":
+ *
+ *   1. Pantheon-spawned: `spawn_metadata.window_name` is the durable
+ *      named window the agent was launched into. Target it directly
+ *      → wt opens a new tab in the same named window.
+ *   2. Windows Terminal session without spawn_metadata (manual
+ *      start): target the user's CURRENT WT window via `-w 0`. The
+ *      wt adapter resolves `window: "current"` → `-w 0` (most-
+ *      recently-used window). Best-effort — when the user has the
+ *      agent's tab focused at remanifest time this lands correctly;
+ *      when focused elsewhere it opens in the wrong window. WT
+ *      gives no per-session way to read "which window am I in"
+ *      from inside, so MRU is the only signal available.
+ *   3. Other adapters: mode-only, let the adapter pick its own
+ *      "same window" semantics (tmux: same session; kitty: same OS
+ *      window via --match; generic: spawn-in-place).
  *
  * Exported for unit testing — the truth table here is the spec. */
 export function resolveRemanifestTarget(
-  inherit_pane: boolean,
   spawn_metadata: SpawnMetadata | null,
   spawn_env: NodeJS.ProcessEnv,
-): { window?: string; mode: "split-pane" | "new-tab-here" } {
+): { window?: string; mode: "new-tab-here" } {
   const oldWindowName = spawn_metadata?.window_name;
-  if (inherit_pane && oldWindowName) {
-    return { window: oldWindowName, mode: "split-pane" };
+  if (oldWindowName) {
+    return { window: oldWindowName, mode: "new-tab-here" };
   }
-  const wtSession = spawn_env.WT_SESSION;
-  if (wtSession) {
-    return { window: wtSession, mode: "new-tab-here" };
+  if (spawn_env.WT_SESSION) {
+    return { window: "current", mode: "new-tab-here" };
   }
   return { mode: "new-tab-here" };
 }
 
 export const remanifest: Handler = async (args, ctx) => {
   const handoff = asStringRequired(args.handoff, "handoff");
-  const inherit_pane = asBoolean(args.inherit_pane) ?? true;
   const reason = asString(args.reason);
   const username = ctx.session.claimedUsername;
   if (!username) {
@@ -91,13 +99,10 @@ export const remanifest: Handler = async (args, ctx) => {
     );
   }
 
-  // Build the spawn args via the pure resolver above. The fallback
-  // mode here is `"new-tab-here"` (a valid SpawnMode enum value);
-  // earlier code passed `"new-tab"` which is NOT in the enum and
-  // silently triggered the dispatch downgrade ladder starting at
-  // split-pane — wrong target shape on manually-started sessions.
+  // Build the spawn args via the pure resolver above. Mode is fixed
+  // at "new-tab-here" — the resolver only chooses which window we're
+  // landing the new tab in.
   const target = resolveRemanifestTarget(
-    inherit_pane,
     ctx.spawn_metadata,
     ctx.spawn_env,
   );
@@ -179,7 +184,6 @@ export const remanifest: Handler = async (args, ctx) => {
     ok: true,
     remanifested: persona.username,
     handoff_length: handoff.length,
-    inherit_pane,
     reason: reason ?? null,
     new_session: {
       spawn_pid: result.spawn_pid ?? null,

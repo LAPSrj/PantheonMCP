@@ -1555,7 +1555,7 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "remanifest",
     description:
-      "Spawn a fresh incarnation of THIS persona into a sibling pane (or new tab) and arrange for the current session to close as soon as the new one logs into chat. The `handoff` text is rendered above the new session's bootstrap so it picks up cleanly. inherit_pane (default true) splits the current window where supported; falls back to a new tab when the adapter can't split. The new session boots auto-suffixed (e.g. `<persona>2`) and reclaims the canonical handle on the next prune tick once the old session's presence row clears.",
+      "Spawn a fresh incarnation of THIS persona in a NEW TAB of the SAME window the calling session is in, and arrange for the current session to close as soon as the new one logs into chat. The `handoff` text is rendered above the new session's bootstrap so it picks up cleanly. Target is always new-tab-here — never a split pane or a new window. The new session boots auto-suffixed (e.g. `<persona>2`) and reclaims the canonical handle on the next prune tick once the old session's presence row clears.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -1564,10 +1564,6 @@ export const TOOLS: readonly ToolDef[] = [
         handoff: {
           type: "string",
           description: "What the new incarnation needs to know to pick up cleanly. Rendered verbatim above the bootstrap.",
-        },
-        inherit_pane: {
-          type: "boolean",
-          description: "Default true — split the current window. false → new tab/window.",
         },
         reason: { type: "string", description: "Optional human-readable reason (logged in the response)." },
       },

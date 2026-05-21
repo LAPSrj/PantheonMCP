@@ -113,7 +113,6 @@ test("remanifest: self-evicts OLD's chat presence after a successful spawn", asy
 
   const r = await call("remanifest", {
     handoff: "context got unwieldy; new incarnation taking over",
-    inherit_pane: false,
   });
   expect(r.ok).toBe(true);
   expect(r.payload.remanifested).toBe("wraith");
@@ -150,7 +149,6 @@ test("remanifest: skips self-eviction when spawn fails (no spawn_pid)", async ()
 
   const r = await call("remanifest", {
     handoff: "spawn-fail simulation",
-    inherit_pane: false,
   });
   expect(r.ok).toBe(true);
   // self_evicted MUST be false on the failure path — agent stays
@@ -176,7 +174,6 @@ test("remanifest: emits a system 'remanifesting' message into the project on sel
 
   await call("remanifest", {
     handoff: "context refresh",
-    inherit_pane: false,
   });
 
   const { tailOnce } = await import("../../../chat/index.ts");
