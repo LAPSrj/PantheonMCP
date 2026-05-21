@@ -34,6 +34,12 @@ export interface LibrarianSnapshot {
     /** Only set for project-memory dreams. */
     author_username?: string;
   }>;
+  /** Total active+faded entries in the store before the per-pass cap
+   * (see `MAX_SNAPSHOT_ENTRIES`). When greater than `entries.length`
+   * the snapshot is a stalest-first slice and the remainder is
+   * deferred to the next dream pass. Omitted by callers that build a
+   * snapshot literal without capping. */
+  total_candidates?: number;
 }
 
 export interface LibrarianOptions {

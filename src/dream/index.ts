@@ -25,5 +25,7 @@ export {
   applyPersonaPlan,
   applyProjectPlan,
   REFERENCE_KINDS,
+  MAX_SNAPSHOT_ENTRIES,
+  MAX_SNAPSHOT_BYTES,
   summarizePlan,
 } from "./apply.ts";

@@ -213,6 +213,12 @@ export async function renderLibrarianPrompt(input: {
   resultPath: string;
 }): Promise<string> {
   const skill = await readFile(LIBRARIAN_SKILL_PATH, "utf8");
+  const shown = input.snapshot.entries.length;
+  const total = input.snapshot.total_candidates ?? shown;
+  const entriesLine =
+    shown < total
+      ? `- **Entries in snapshot**: ${shown} of ${total} — a stalest-first slice (faded entries, then oldest active). The remaining ${total - shown} are deferred to the next dream pass by design; you are not missing them by mistake and do not need to account for them.`
+      : `- **Entries in snapshot**: ${shown}`;
   return [
     skill,
     "",
@@ -222,7 +228,7 @@ export async function renderLibrarianPrompt(input: {
     "",
     `- **Scope**: ${input.snapshot.scope}`,
     `- **Target**: ${input.snapshot.target}`,
-    `- **Entries in snapshot**: ${input.snapshot.entries.length}`,
+    entriesLine,
     `- **Snapshot file**: ${input.snapshotPath}`,
     `- **Result file** (write here when done): ${input.resultPath}`,
     "",

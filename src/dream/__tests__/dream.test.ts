@@ -19,6 +19,7 @@ import {
   buildPersonaSnapshot,
   defaultLibrarianTimeout,
   parseAndValidateLibrarianOutput,
+  MAX_SNAPSHOT_ENTRIES,
   type DreamPlan,
 } from "../index.ts";
 
@@ -76,6 +77,56 @@ test("buildPersonaSnapshot omits forgotten entries; keeps active + faded", async
   const ids = snap.entries.map((e) => e.id).sort();
   expect(ids).not.toContain(dead.id);
   expect(snap.entries.find((e) => e.id === faded.id)?.status).toBe("faded");
+});
+
+test("buildPersonaSnapshot caps at MAX_SNAPSHOT_ENTRIES and reports the pre-cap total", () => {
+  const n = MAX_SNAPSHOT_ENTRIES + 12;
+  for (let i = 0; i < n; i++) {
+    appendPersonaEntry(paths, "vellumpike", {
+      text: `entry ${i}`,
+      summary: `entry ${i}`,
+    });
+  }
+  const snap = buildPersonaSnapshot(paths, "vellumpike");
+  expect(snap.entries).toHaveLength(MAX_SNAPSHOT_ENTRIES);
+  // total_candidates surfaces the full count so the librarian knows
+  // it's seeing a slice.
+  expect(snap.total_candidates).toBe(n);
+});
+
+test("buildPersonaSnapshot orders stalest-first — faded entries lead", async () => {
+  const { fadeEntry } = await import("../../memory/index.ts");
+  const ids: string[] = [];
+  for (let i = 0; i < 6; i++) {
+    ids.push(
+      appendPersonaEntry(paths, "vellumpike", {
+        text: `e${i}`,
+        summary: `e${i}`,
+      }).id,
+    );
+  }
+  // Fade two entries from the middle of the batch.
+  fadeEntry(paths, "vellumpike", ids[2]!);
+  fadeEntry(paths, "vellumpike", ids[4]!);
+  const snap = buildPersonaSnapshot(paths, "vellumpike");
+  const fadedPositions = snap.entries
+    .map((e, idx) => ({ idx, faded: e.status === "faded" }))
+    .filter((x) => x.faded)
+    .map((x) => x.idx);
+  // Both faded entries occupy the two leading positions.
+  expect(fadedPositions).toEqual([0, 1]);
+});
+
+test("buildPersonaSnapshot caps on the byte budget when entries are large", () => {
+  const big = "x".repeat(120_000);
+  for (let i = 0; i < 5; i++) {
+    appendPersonaEntry(paths, "vellumpike", { text: big, summary: `big ${i}` });
+  }
+  const snap = buildPersonaSnapshot(paths, "vellumpike");
+  // ~120 KB bodies → the 300 KB byte budget binds well before the
+  // 80-entry count cap.
+  expect(snap.entries.length).toBeLessThan(5);
+  expect(snap.total_candidates).toBe(5);
 });
 
 test("applyPersonaPlan: fade flips status to faded; forget tombstones; consolidate appends + forgets sources", () => {

@@ -194,6 +194,13 @@ the dream subsystem (and letting it run on schedule) vs. distrusting it
   and the entry has no `see_also` or `replies_to`, it's probably safe;
   if either is non-empty, treat it as load-bearing.
 
+- **The delegated triage.** The snapshot looked too big for your
+  context, so you handed the read-and-triage to a subagent and applied
+  its recommendations. → You just acted on a summary of the bodies, not
+  the bodies — the summary-only forget, one level removed. Read the
+  snapshot in chunks yourself instead (Mechanics step 1). The skill
+  only works when the deciding agent is the reading agent.
+
 - **The skipped consolidate.** You forgot 5 entries individually
   because each looked like an "old session log." → If they cite the
   same artifact, that's an arc; consolidate it. One arc summary >
@@ -232,6 +239,25 @@ sequence:
 
 1. **Read the snapshot** via the `Read` tool. Don't infer entries from
    memory — work from the file.
+
+   The snapshot is ordered **stalest-first** — faded entries, then the
+   oldest-dated active entries — and may be **capped**. The "This pass"
+   section below tells you whether you are seeing every candidate or a
+   slice (`N of M`). Entries beyond the cap are deferred to the next
+   dream pass by design: you are not missing them by mistake, and you
+   do not need to account for them.
+
+   If the snapshot is large, read it in **chunks within your own
+   context** — `Read` with `offset`/`limit`, or pull entry batches with
+   a JSON query tool — and triage + apply each batch before moving to
+   the next, so the whole file never has to be resident at once.
+
+   **Do NOT delegate the read or the triage to a subagent.** The agent
+   that issues `fade` / `forget` / `consolidate` must be the agent that
+   read the bodies. A subagent's triage report is itself a summary;
+   acting on it is the summary-only-forget anti-pattern one level
+   removed. Chunked reading keeps you within budget without breaking
+   the read-then-decide chain — use it.
 
 2. **Triage each entry** per the load-bearing test + typology + cluster
    detection rules above. Group your decisions:

@@ -69,12 +69,56 @@ export const REFERENCE_KINDS: ReadonlySet<string> = new Set([
   "posture-rail",
 ]);
 
+/** A single librarian session cannot reliably read + triage an
+ * unbounded snapshot. Observed in the wild on a 249-entry / ~960 KB
+ * `righthand` snapshot (2026-05-21): the librarian read ~12% of the
+ * bodies before its own context filled, then stopped. So the snapshot
+ * is sorted stalest-first and capped — entries beyond the cap are
+ * left for the next dream pass. Oldest-first ordering means each pass
+ * deterministically attacks the stalest entries; repeated passes
+ * (the 24h auto-cadence, or `force: true`) chip the backlog down. */
+export const MAX_SNAPSHOT_ENTRIES = 80;
+
+/** Byte budget for a snapshot's entry bodies (summary + text), applied
+ * alongside the entry-count cap — whichever binds first wins. Guards
+ * against a handful of very large entries (handoffs run 10-20 KB)
+ * blowing the librarian's context even under the entry-count cap. At
+ * least one entry is always kept, even if it alone exceeds the
+ * budget. */
+export const MAX_SNAPSHOT_BYTES = 300_000;
+
+type SnapshotEntry = LibrarianSnapshot["entries"][number];
+
+/** Sort stalest-first (faded entries before active, then oldest date
+ * first) and truncate to the per-pass caps. Returns the kept slice
+ * plus the pre-cap total so the caller can tell the librarian when
+ * it is seeing only a slice. */
+function capStalestFirst<T extends SnapshotEntry>(
+  entries: T[],
+): { kept: T[]; total: number } {
+  const sorted = [...entries].sort((a, b) => {
+    if (a.status !== b.status) return a.status === "faded" ? -1 : 1;
+    return a.date < b.date ? -1 : a.date > b.date ? 1 : 0;
+  });
+  const kept: T[] = [];
+  let bytes = 0;
+  for (const e of sorted) {
+    if (kept.length >= MAX_SNAPSHOT_ENTRIES) break;
+    const eBytes =
+      Buffer.byteLength(e.summary, "utf8") + Buffer.byteLength(e.text, "utf8");
+    if (kept.length > 0 && bytes + eBytes > MAX_SNAPSHOT_BYTES) break;
+    kept.push(e);
+    bytes += eBytes;
+  }
+  return { kept, total: entries.length };
+}
+
 export function buildPersonaSnapshot(
   paths: Paths,
   username: string,
 ): LibrarianSnapshot {
   const store = loadPersonaStore(paths, username);
-  const entries = store.entries
+  const all = store.entries
     .filter((e) => e.status === "active" || e.status === "faded")
     .map((e) => ({
       id: e.id,
@@ -85,7 +129,13 @@ export function buildPersonaSnapshot(
       ...(e.kind !== undefined ? { kind: e.kind } : {}),
       ...(e.core !== undefined ? { core: e.core } : {}),
     }));
-  return { scope: "persona", target: username, entries };
+  const { kept, total } = capStalestFirst(all);
+  return {
+    scope: "persona",
+    target: username,
+    entries: kept,
+    total_candidates: total,
+  };
 }
 
 export function buildProjectSnapshot(
@@ -93,7 +143,7 @@ export function buildProjectSnapshot(
   project: string,
 ): LibrarianSnapshot {
   const store = loadProjectMemoryStore(paths, project);
-  const entries = store.entries
+  const all = store.entries
     .filter((e) => e.status === "active" || e.status === "faded")
     .map((e) => ({
       id: e.id,
@@ -107,7 +157,13 @@ export function buildProjectSnapshot(
         ? { author_username: e.author_username }
         : {}),
     }));
-  return { scope: "project", target: project, entries };
+  const { kept, total } = capStalestFirst(all);
+  return {
+    scope: "project",
+    target: project,
+    entries: kept,
+    total_candidates: total,
+  };
 }
 
 export function applyPersonaPlan(
