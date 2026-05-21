@@ -595,6 +595,56 @@ test("send_message: DM to an offline target fails recipient_offline + does NOT p
   expect(r.payload.message_id).toBeUndefined();
 });
 
+// --- inverse guard: `target` on a non-dm send is a misdirected DM -- //
+
+test("send_message: target + default (project) scope is rejected with target_requires_dm", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  // A live peer named `beta` exists — irrelevant; the guard fires on
+  // scope, not on recipient liveness.
+  ctx.chat!.add({ username: "beta", project: "X", transient: false });
+  const r = await call("send_message", { text: "meant for beta", target: "beta" });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("target_requires_dm");
+  // Nothing persisted — the guard is pre-addMessage.
+  expect(r.payload.message_id).toBeUndefined();
+});
+
+test("send_message: target + scope='global' is rejected with target_requires_dm", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const r = await call("send_message", {
+    text: "meant for beta",
+    scope: "global",
+    target: "beta",
+  });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("target_requires_dm");
+});
+
+test("send_message: target + scope='dm' still succeeds (guard does not over-fire)", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const target = ctx.chat!.add({ username: "beta", project: "X", transient: false });
+  const r = await call("send_message", { text: "psst", scope: "dm", target: "beta" });
+  expect(r.ok).toBe(true);
+  expect(ctx.chat!.takeMessages(target.agent_id).messages.map((m) => m.text)).toContain("psst");
+});
+
+test("send_message: no target + project scope still succeeds (guard does not over-fire)", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const r = await call("send_message", { text: "hello team" });
+  expect(r.ok).toBe(true);
+});
+
+test("send_structured: target + non-dm scope is rejected with target_requires_dm", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const r = await call("send_structured", {
+    kind: "pushback",
+    payload: { x: 1 },
+    target: "beta",
+  });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("target_requires_dm");
+});
+
 // --- DM resolver: educational errors for agent_id-as-target -------- //
 
 test("send_message: DM with agent_id (full UUID) where live subscriber exists → agent_id_not_username", async () => {

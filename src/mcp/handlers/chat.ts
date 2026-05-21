@@ -140,6 +140,31 @@ function assertDMRecipient(
   }
 }
 
+/** Reject a `target` supplied on a non-`dm` send. A `target` paired
+ * with `scope:"project"`/`"global"` is silently ignored by delivery —
+ * the watcher's project/global visibility filter (`isVisibleRow`)
+ * never reads `target_username` — so the message broadcasts to the
+ * WHOLE scope instead of the one intended recipient. That is a
+ * confidentiality + inbox-noise leak that looks like a successful DM
+ * to the sender (the send returns ok). Catch it at the source with a
+ * teaching error rather than letting the misdirected broadcast land. */
+function assertTargetScopeConsistent(
+  scope: string,
+  target: string | undefined,
+): void {
+  if (target && scope !== "dm") {
+    throw new ChatError(
+      "target_requires_dm",
+      `\`target: "${target}"\` is only valid with \`scope: "dm"\`. You sent ` +
+        `\`scope: "${scope}"\`, which ignores \`target\` and broadcasts to the ` +
+        `entire ${scope} scope — every agent there would see this message. ` +
+        `Use \`scope: "dm", target: "${target}"\` to reach only them, or drop ` +
+        `\`target\` if you intended a public broadcast.`,
+      { scope, target },
+    );
+  }
+}
+
 /** Heuristic warning: a project-scope broadcast addressed to exactly
  * one peer via `@username` mention is almost always a misdirected DM.
  * Returns a warning string when triggered; null otherwise. Only
@@ -697,6 +722,9 @@ export const send_message: Handler = async (args, ctx) => {
   if (scope === "dm" && !target) {
     throw new ChatError("missing_target", "scope='dm' requires a target username.");
   }
+  // Inverse guard: a `target` on a non-dm send is a misdirected DM —
+  // reject before it broadcasts to the whole scope.
+  assertTargetScopeConsistent(scope, target);
   // DM delivery contract: refuse the send when the recipient isn't
   // online (no offline-DM queue). Also catches the agent-id-as-target
   // confusion and surfaces an educational error instead of the
@@ -706,7 +734,9 @@ export const send_message: Handler = async (args, ctx) => {
     from_agent_id: agentId,
     scope,
     text,
-    ...(target !== undefined ? { target } : {}),
+    // `target` only ever rides a dm-scope row — the guard above
+    // rejects it on any other scope, so it can never persist stale.
+    ...(scope === "dm" && target !== undefined ? { target } : {}),
     ...(replyTo !== undefined ? { reply_to: replyTo } : {}),
   });
   // Optional staleness nudge — surfaces in the response `hints` field
@@ -869,6 +899,9 @@ export const send_structured: Handler = async (args, ctx) => {
   if (scope === "dm" && !target) {
     throw new ChatError("missing_target", "scope='dm' requires a target username.");
   }
+  // Inverse guard: a `target` on a non-dm send is a misdirected DM —
+  // reject before it broadcasts to the whole scope.
+  assertTargetScopeConsistent(scope, target);
   // Same offline-DM contract as `send_message`: refuse rather than
   // silently persist a message the recipient will never see. Also
   // catches the agent-id-as-target confusion with an educational
@@ -881,7 +914,9 @@ export const send_structured: Handler = async (args, ctx) => {
     text,
     user_kind: kind,
     payload,
-    ...(target !== undefined ? { target } : {}),
+    // `target` only ever rides a dm-scope row — the guard above
+    // rejects it on any other scope, so it can never persist stale.
+    ...(scope === "dm" && target !== undefined ? { target } : {}),
     ...(replyTo !== undefined ? { reply_to: replyTo } : {}),
   });
   const hints: string[] = [];

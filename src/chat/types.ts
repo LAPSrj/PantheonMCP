@@ -194,6 +194,7 @@ export type ChatErrorCode =
   | "answer_unknown"
   | "respondent_disconnected"
   | "missing_target"
+  | "target_requires_dm"
   | "recipient_offline"
   | "agent_id_not_username"
   | "ambiguous_agent_id"

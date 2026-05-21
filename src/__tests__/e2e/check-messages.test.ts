@@ -62,11 +62,12 @@ test("cross-process: cursor reset after disconnect (full backlog on rejoin)", as
   await call(fix.procB, "login", { username: "beta", project: "p", transient: false });
 
   // procA writes a project-scoped message visible to all project-p
-  // members (including beta while she's online).
+  // members (including beta while she's online). No `target` on a
+  // project broadcast — the inverse-guard rejects target on non-dm
+  // sends.
   await call(fix.procA, "send_message", {
     text: "before logout",
     scope: "project",
-    target: "p",
   });
 
   // beta logs out (subscribers row deleted; cursor goes with it).
@@ -79,7 +80,6 @@ test("cross-process: cursor reset after disconnect (full backlog on rejoin)", as
   await call(fix.procA, "send_message", {
     text: "after logout",
     scope: "project",
-    target: "p",
   });
 
   // beta logs in again — fresh agent_id, cursor starts at 0, sees backlog.
