@@ -254,6 +254,13 @@ export async function spawnPersona(
   // (provisional / agent re-reading on a /compact) can re-render it
   // even after the initial bootstrap is gone from CC's context.
   if (remanifestHandoff) execEnv.PANTHEON_REMANIFEST_HANDOFF = remanifestHandoff;
+  // Profile preservation — persist the per-call `--profile` so a later
+  // `remanifest` of this agent can recover and re-thread it. Without
+  // this, the per-call profile lives only in `launchArgs` (consumed by
+  // the wrapper at exec time) and is invisible to the spawned process;
+  // a remanifest then drops `--profile`, loses CLAUDE_CONFIG_DIR, and
+  // silently relaunches under the default ~/.claude account.
+  if (profile) execEnv.PANTHEON_PROFILE = profile;
 
   // WSL targets need the wt adapter to wrap exec in `wsl.exe -d
   // <distro> -- bash -lc 'cd <cwd> && exec ...'` (see wt.ts notes

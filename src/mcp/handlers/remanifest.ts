@@ -101,6 +101,17 @@ export const remanifest: Handler = async (args, ctx) => {
     ctx.spawn_metadata,
     ctx.spawn_env,
   );
+  // Profile preservation — recover the `--profile` this agent was
+  // launched under (spawnPersona persists it into PANTHEON_PROFILE)
+  // and thread it so the new incarnation relaunches under the SAME
+  // profile, i.e. the same CLAUDE_CONFIG_DIR / account. Without this
+  // the remanifest drops `--profile` and the new session silently
+  // runs on the default ~/.claude account instead of e.g. the
+  // work-digital (digital@takt.com) identity. Agents summoned before
+  // this fix shipped have no PANTHEON_PROFILE in env — their
+  // remanifest still can't recover the profile; this is forward-only.
+  const inheritedProfile = asString(ctx.spawn_env.PANTHEON_PROFILE);
+
   const spawnArgs: Record<string, unknown> = {
     username: persona.username,
     remanifest_of: ctx.chat_agent_id,
@@ -110,6 +121,9 @@ export const remanifest: Handler = async (args, ctx) => {
     // process — block_self_exit defaults to off here regardless of
     // whether the calling agent was launched with the block.
     block_self_exit: false,
+    // Preserve the calling agent's profile (account identity). Omitted
+    // when unknown so spawnPersona's cascade still applies cleanly.
+    ...(inheritedProfile ? { profile: inheritedProfile } : {}),
     // Use the same model + permission_mode the calling persona had,
     // by virtue of falling through spawnPersona's cascade.
   };
