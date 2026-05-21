@@ -401,6 +401,40 @@ test("auto-suffix: walks past taken slots", async () => {
   expect((payload.auto_suffixed as { assigned: string }).assigned).toBe("alice4");
 });
 
+test("auto-suffix: explicit chat_username_suffix collision falls through to next free canonical slot (no double-concat)", async () => {
+  // A summoned agent's bootstrap embeds `chat_username_suffix` so it
+  // logs into chat as `<persona><N>` while its MCP session still
+  // claims the CANONICAL persona. When that suffixed handle is taken,
+  // the auto-suffix correction must walk the next-free-numeric scan
+  // rooted on the canonical base — NOT concatenate onto the already-
+  // suffixed handle (`righthand2` -> `righthand22`).
+  await registerAndClaim(ctx, "righthand", "p");
+  await call("login", { username: "righthand", project: "p" });
+  // Peers hold righthand2 / righthand3 / righthand4; righthand5 free.
+  ctx.chat!.add({ username: "righthand2", project: "p", transient: false });
+  ctx.chat!.add({ username: "righthand3", project: "p", transient: false });
+  ctx.chat!.add({ username: "righthand4", project: "p", transient: false });
+
+  const ctx2 = createContext({
+    paths: ctx.paths,
+    session: new Session("s2"),
+    watchdog: ctx.watchdog,
+    parent_pid: ctx.parent_pid,
+    platform: ctx.platform,
+    chat: ctx.chat,
+  });
+  // ctx2 claims the CANONICAL persona (env-claim equivalent), then
+  // logs in as the suffixed handle the bootstrap told it to use.
+  await dispatch("claim", { username: "righthand" }, ctx2);
+  const r = await dispatch("login", { username: "righthand2", project: "p" }, ctx2);
+  const payload = JSON.parse(r.content[0]!.text) as Record<string, unknown>;
+  expect(payload.username).toBe("righthand5");
+  const auto = payload.auto_suffixed as { intended: string; assigned: string };
+  expect(auto.assigned).toBe("righthand5");
+  // `intended` reports the CANONICAL persona, not the suffixed request.
+  expect(auto.intended).toBe("righthand");
+});
+
 test("auto-suffix: does NOT trigger for guest (transient) logins", async () => {
   // Guest collisions stay on the manual-options error path — guests
   // have no persona ownership, so picking <base>2 silently could

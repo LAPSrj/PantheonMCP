@@ -1,6 +1,7 @@
 import {
   ChatError,
   getMessageById,
+  incarnationBase,
   promoteInPlace,
   type ChatErrorCode,
   type PromoteFields,
@@ -354,13 +355,33 @@ export const login: Handler = async (args, ctx) => {
     // `username_prefix_collision`, or `subscriber_prefix_collision`
     // (caller's intended handle isn't <peer><N>; auto-renaming would
     // change their intent radically).
+    //
+    // Two shapes of caller qualify:
+    //   1. canonical login — `login({username: <persona>})` with the
+    //      persona claimed: `claimedPersona === username`.
+    //   2. explicit-suffix login — a summoned agent whose bootstrap
+    //      embeds `chat_username_suffix`, so it logs in as
+    //      `<persona><N>` while its session still claims the canonical
+    //      `<persona>`: `incarnationBase(username) === claimedPersona`.
+    // Both walk the SAME next-free-numeric scan rooted at the CANONICAL
+    // base. Scanning from the already-suffixed `username` would
+    // double-concatenate (`righthand2` -> `righthand22`) instead of
+    // falling through to the next sibling slot (`righthand5`).
+    // `canonicalBase` is non-null only when one of the two shapes
+    // applies — it doubles as the qualifying gate and the scan root.
+    const canonicalBase: string | null =
+      claimedPersona && claimedPersona === username
+        ? claimedPersona
+        : claimedPersona && incarnationBase(username) === claimedPersona
+          ? claimedPersona
+          : null;
     if (
       code === "username_taken" &&
       reason === "subscriber_taken" &&
-      claimedPersona === username
+      canonicalBase !== null
     ) {
-      const suggested = router.nextAvailableIncarnation(username, {
-        claimed_persona: claimedPersona,
+      const suggested = router.nextAvailableIncarnation(canonicalBase, {
+        claimed_persona: canonicalBase,
       });
       if (suggested) {
         try {
@@ -370,9 +391,14 @@ export const login: Handler = async (args, ctx) => {
             transient,
             status,
             supports_channels: supportsChannels,
-            claimed_persona: claimedPersona,
+            claimed_persona: canonicalBase,
           });
-          autoSuffixed = { intended: username, assigned: suggested };
+          // `intended` is the CANONICAL persona handle — the
+          // auto-suffix note and join broadcast describe it as the
+          // registry identity. For an explicit-suffix retry the
+          // requested `username` was already `<persona><N>`; reporting
+          // that as the canonical handle would be wrong.
+          autoSuffixed = { intended: canonicalBase, assigned: suggested };
         } catch {
           // Suffix race — a peer claimed the same suffix between our
           // walk and our add. Fall through to the manual-options
@@ -396,7 +422,13 @@ export const login: Handler = async (args, ctx) => {
         code === "already_registered" ||
         code === "username_prefix_collision"
       ) {
-        const baseForSuffix = (e.extra?.["conflicting"] as string | undefined) ?? username;
+        // Root the next-free-numeric scan on the CANONICAL base, never
+        // on an already-suffixed handle — scanning from `righthand2`
+        // would suggest `righthand22` (double-concat). Prefer the
+        // claimed persona; otherwise strip any digit suffix off the
+        // conflicting handle so a guest collision still roots cleanly.
+        const conflictingHandle = (e.extra?.["conflicting"] as string | undefined) ?? username;
+        const baseForSuffix = claimedPersona ?? incarnationBase(conflictingHandle);
         const suggestedSuffix = router.nextAvailableIncarnation(baseForSuffix, {
           ...(claimedPersona ? { claimed_persona: claimedPersona } : {}),
         });

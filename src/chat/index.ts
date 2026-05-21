@@ -20,6 +20,7 @@ export {
 
 export {
   isHandleAvailable,
+  incarnationBase,
   validateChatUsername,
   personaExists,
   type AvailabilityResult,
