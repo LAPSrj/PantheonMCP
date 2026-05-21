@@ -50,15 +50,15 @@ catch-all final entry.
 
 | Adapter        | Status | Notes |
 |----------------|--------|-------|
-| wt             | ✅ full | Wraps `wt.exe` via Windows interop. Color via named-hex map. |
-| kitty          | ✅ full | `kitty @ launch` when `KITTY_LISTEN_ON` set; else `kitten @ launch`. |
-| tmux           | ✅ full | Universal across host terminals. `escape_tmux` to leave the session. |
-| alacritty      | ✅ full | Single mode (new-window) via `--working-directory` + `-e`. |
-| generic        | ✅ full | Spawns the exec command directly. No tabs/splits/color. |
-| wezterm        | 🟡 stub | Detect works; `buildSpawnPlan` errors `adapter_not_implemented`. |
-| iterm2         | 🟡 stub | Same. AppleScript wiring TBD. |
-| gnome          | 🟡 stub | Same. `gnome-terminal --tab/--window` wiring TBD. |
-| terminal_app   | 🟡 stub | Same. AppleScript wiring TBD. |
+| wt             | full | Wraps `wt.exe` via Windows interop. Color via named-hex map. |
+| kitty          | full | `kitty @ launch` when `KITTY_LISTEN_ON` set; else `kitten @ launch`. |
+| tmux           | full | Universal across host terminals. `escape_tmux` to leave the session. |
+| alacritty      | full | Single mode (new-window) via `--working-directory` + `-e`. |
+| generic        | full | Spawns the exec command directly. No tabs/splits/color. |
+| wezterm        | stub | Detect works; `buildSpawnPlan` errors `adapter_not_implemented`. |
+| iterm2         | stub | Same. AppleScript wiring TBD. |
+| gnome          | stub | Same. `gnome-terminal --tab/--window` wiring TBD. |
+| terminal_app   | stub | Same. AppleScript wiring TBD. |
 
 Stubs are fully detectable so future implementations swap into
 `adapters/<name>.ts` and update `adapters/index.ts` without touching
@@ -138,7 +138,7 @@ the spawn):
 > grow wider). Otherwise add a ROW to the leftmost column with the
 > smallest row count.
 
-Verify by hand: at `[2, 2]` (n=4), cols=2, all rows=2 ≥ 2 ✓ → add
+Verify by hand: at `[2, 2]` (n=4), cols=2, all rows=2 ≥ 2 → add
 column → `[2, 2, 1]`. At `[2, 2, 1]` (n=5), cols=3 → first clause
 fails → add row to leftmost-smallest col (col 2, row count 1) →
 `[2, 2, 2]`.

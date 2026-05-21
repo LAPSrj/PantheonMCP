@@ -209,14 +209,14 @@ Per §9b, the plugin only ships what vanilla MCP can't do alone:
 
 | Surface                           | Vanilla MCP | Plugin           |
 |-----------------------------------|-------------|------------------|
-| Tools (persona/memory/chat/spawn) | ✅          | —                |
-| Slash commands                    | —           | ✅               |
-| Statusline                        | —           | ✅ (via CLI)     |
-| Watchdog reset on CC tool-use     | —           | ✅ (wired)       |
-| Settings.json templates           | —           | ✅               |
-| `/color` binding                  | —           | 🟡 stub (CC exposure needed) |
-| Auto-context-pct nudge            | surrogate   | 🟡 stub (CC exposure needed) |
-| Tab-title-from-status (Win)       | —           | 🟡 stub (daemon model needed) |
+| Tools (persona/memory/chat/spawn) | yes         | —                |
+| Slash commands                    | —           | yes              |
+| Statusline                        | —           | yes (via CLI)    |
+| Watchdog reset on CC tool-use     | —           | yes (wired)      |
+| Settings.json templates           | —           | yes              |
+| `/color` binding                  | —           | stub (CC exposure needed) |
+| Auto-context-pct nudge            | surrogate   | stub (CC exposure needed) |
+| Tab-title-from-status (Win)       | —           | stub (daemon model needed) |
 
 Vanilla MCP carries the full feature surface (per §9b). Plugin
 extras are pure ergonomics.

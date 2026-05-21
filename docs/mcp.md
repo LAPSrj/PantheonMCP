@@ -29,45 +29,45 @@ src/mcp/
 
 | Tool | Status | Notes |
 |------|--------|-------|
-| `whoami` | ✅ | Per-cwd lookup. Returns matches + a hint string. |
-| `register` | ✅ | **`claim_after` defaults `false`** (§13 identity-leak fix). |
-| `claim` | ✅ | Errors `not_registered` if no entry. |
-| `manifest` | ✅ | Auto-claims sole match; ambiguity resolved via `hint`. |
-| `become` | ✅ | Errors `not_registered`; session unchanged on failure. |
-| `update_profile` | ✅ | Clears `provisional` once description+expertise+owns are all set. |
-| `unregister` | ✅ | Drops memory unless `keep_memory: true`. |
-| `list` | ✅ | Optional `query` fuzzy match across registry fields. |
-| `session_info` | ✅ | id, parent pid, platform, claim/guest/rest state. |
-| `get_memory` | ✅ | Three-tier render with `warning` for Core collapse. |
-| `append_memory` | ✅ | summary/text/details/kind/core/summoner_username. 5MB details cap. |
-| `update_memory` | ✅ | `details: null` clears; `core: false` demotes. |
-| `set_memory` | ✅ | Replace-all. |
-| `recall_memory` | ✅ | Returns full text; flips faded → active. |
-| `fade_memory` | ✅ | Explicit user call only. |
-| `forget_memory` | ✅ | Explicit user call only. |
-| `list_memory` | ✅ | Index shape; date-desc; filters: status/core/kind/since/filter. |
-| `get_memory_details` | ✅ | Returns ONLY `details` field. |
-| `allow_rest` | ✅ | Authorizes rest in non-summoned sessions. |
-| `rest` | ✅ | Calls `transitionRestEnter` + `stampRested("auto_rest_timeout"…)`. |
-| `extend_rest` | ✅ | Rearms watchdog with `minutes * 60`s (≥3600). |
-| `exit` | ✅ | Schedules SIGTERM via context's `scheduleExit`. |
-| `allow_idle` | ⚠ deprecated | Alias → `allow_rest`. Surfaces `deprecation` field. |
-| `idle` | ⚠ deprecated | Alias → `rest`. |
-| `extend_idle` | ⚠ deprecated | Alias → `extend_rest`. |
-| `summon` | ✅ | Composes registry → resolveSpawnPlan → executeSpawnPlan (200ms stderr probe) → recordSpawn → stampSummoned → watchdog.register. |
-| `summon_any` | ✅ | Bypasses caller-target project equality (§9b). |
-| `conjure` | ✅ | Atomic register-then-spawn. Persona stays registered if spawn fails. |
-| `conjure_any` | ✅ | Same; bypasses project gate. |
-| `login` | 🟡 stub | Schema includes `transient` + `promote` per §10. (§11c) |
-| `logout` | 🟡 stub | (§11c) |
-| `send_message` | 🟡 stub | Scope: project / dm / global. (§11c) |
-| `ask` | 🟡 stub | `correlation_id` + timeout. (§11c) |
-| `answer` | 🟡 stub | (§11c) |
-| `set_mode` | 🟡 stub | all / quiet / project / dm. (§11c) |
-| `update_status` | 🟡 stub | (§11c) |
-| `check_messages` | 🟡 stub | (§11c) |
-| `list_agents` | 🟡 stub | (§11c) |
-| `find_role` | 🟡 stub | Joins registry + connected agents. (§11c) |
+| `whoami` | yes | Per-cwd lookup. Returns matches + a hint string. |
+| `register` | yes | **`claim_after` defaults `false`** (§13 identity-leak fix). |
+| `claim` | yes | Errors `not_registered` if no entry. |
+| `manifest` | yes | Auto-claims sole match; ambiguity resolved via `hint`. |
+| `become` | yes | Errors `not_registered`; session unchanged on failure. |
+| `update_profile` | yes | Clears `provisional` once description+expertise+owns are all set. |
+| `unregister` | yes | Drops memory unless `keep_memory: true`. |
+| `list` | yes | Optional `query` fuzzy match across registry fields. |
+| `session_info` | yes | id, parent pid, platform, claim/guest/rest state. |
+| `get_memory` | yes | Three-tier render with `warning` for Core collapse. |
+| `append_memory` | yes | summary/text/details/kind/core/summoner_username. 5MB details cap. |
+| `update_memory` | yes | `details: null` clears; `core: false` demotes. |
+| `set_memory` | yes | Replace-all. |
+| `recall_memory` | yes | Returns full text; flips faded → active. |
+| `fade_memory` | yes | Explicit user call only. |
+| `forget_memory` | yes | Explicit user call only. |
+| `list_memory` | yes | Index shape; date-desc; filters: status/core/kind/since/filter. |
+| `get_memory_details` | yes | Returns ONLY `details` field. |
+| `allow_rest` | yes | Authorizes rest in non-summoned sessions. |
+| `rest` | yes | Calls `transitionRestEnter` + `stampRested("auto_rest_timeout"…)`. |
+| `extend_rest` | yes | Rearms watchdog with `minutes * 60`s (≥3600). |
+| `exit` | yes | Schedules SIGTERM via context's `scheduleExit`. |
+| `allow_idle` | deprecated | Alias → `allow_rest`. Surfaces `deprecation` field. |
+| `idle` | deprecated | Alias → `rest`. |
+| `extend_idle` | deprecated | Alias → `extend_rest`. |
+| `summon` | yes | Composes registry → resolveSpawnPlan → executeSpawnPlan (200ms stderr probe) → recordSpawn → stampSummoned → watchdog.register. |
+| `summon_any` | yes | Bypasses caller-target project equality (§9b). |
+| `conjure` | yes | Atomic register-then-spawn. Persona stays registered if spawn fails. |
+| `conjure_any` | yes | Same; bypasses project gate. |
+| `login` | stub | Schema includes `transient` + `promote` per §10. (§11c) |
+| `logout` | stub | (§11c) |
+| `send_message` | stub | Scope: project / dm / global. (§11c) |
+| `ask` | stub | `correlation_id` + timeout. (§11c) |
+| `answer` | stub | (§11c) |
+| `set_mode` | stub | all / quiet / project / dm. (§11c) |
+| `update_status` | stub | (§11c) |
+| `check_messages` | stub | (§11c) |
+| `list_agents` | stub | (§11c) |
+| `find_role` | stub | Joins registry + connected agents. (§11c) |
 
 Stubs return:
 
