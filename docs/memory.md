@@ -193,6 +193,13 @@ forced multi-KB session snapshots into the Core render tier and the
 `core_memory` boot payload (see below). Handoffs surface on their own
 via `resume_summary.handoffs`.
 
+This is enforced structurally, not by convention: `appendEntry` /
+`setMemory` / `updateEntry` drop `core` whenever the entry's `kind` is
+`"handoff"` — so `append_memory({ kind: "handoff", core: true })`, or
+an `update_memory` that flips an existing core entry's kind to
+`handoff`, both yield a non-core entry. A handoff cannot be Core by any
+write path.
+
 The optional `summary` is the handoff's **highlight**: a one-line
 description of what the handoff is about. It surfaces in the next
 session's boot payload (`resume_summary.handoffs`) so a reconnecting

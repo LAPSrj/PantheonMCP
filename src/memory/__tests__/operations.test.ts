@@ -63,6 +63,57 @@ test("appendEntry honors explicit summary, kind, core, summoner_username, detail
   expect(entry.details).toBe("verbatim quote here");
 });
 
+// --- handoffs are structurally barred from Core ---
+
+test("appendEntry: a handoff can never be core — core:true is dropped", () => {
+  const entry = appendEntry(paths, USER, {
+    text: "handoff body",
+    kind: "handoff",
+    core: true,
+  });
+  expect(entry.kind).toBe("handoff");
+  expect(entry.core).toBeUndefined();
+});
+
+test("appendEntry: core:true is still honored for non-handoff kinds", () => {
+  const entry = appendEntry(paths, USER, {
+    text: "standing rule",
+    kind: "decision",
+    core: true,
+  });
+  expect(entry.core).toBe(true);
+});
+
+test("setMemory: a handoff can never be core", () => {
+  const entry = setMemory(paths, USER, {
+    text: "handoff body",
+    kind: "handoff",
+    core: true,
+  });
+  expect(entry.core).toBeUndefined();
+});
+
+test("updateEntry: changing kind to handoff strips an existing core flag", () => {
+  const entry = appendEntry(paths, USER, {
+    text: "was a decision",
+    kind: "decision",
+    core: true,
+  });
+  expect(entry.core).toBe(true);
+  const updated = updateEntry(paths, USER, entry.id, { kind: "handoff" });
+  expect(updated.kind).toBe("handoff");
+  expect(updated.core).toBeUndefined();
+});
+
+test("updateEntry: core:true on an existing handoff is ignored", () => {
+  const entry = appendEntry(paths, USER, {
+    text: "handoff body",
+    kind: "handoff",
+  });
+  const updated = updateEntry(paths, USER, entry.id, { core: true });
+  expect(updated.core).toBeUndefined();
+});
+
 test("appendEntry rejects missing text", () => {
   let err: unknown;
   try {

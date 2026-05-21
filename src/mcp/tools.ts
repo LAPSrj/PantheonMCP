@@ -332,7 +332,7 @@ export const TOOLS: readonly ToolDef[] = [
     description:
       "Create a new active memory entry. `text` is required. `summary` (≤240 ch) is auto-derived from text when omitted; provide explicitly when the first line isn't a good headline. `details` (≤5 MB) is the unbounded-payload field — never inlined at startup; only via `get_memory_details(id)`. " +
       "Common `kind` values: 'decision', 'gotcha', 'handoff', 'fact', 'log'. " +
-      "Pass `core: true` for foundational entries (rendered in full at startup, subject to 10 KB middle-out cap). " +
+      "Pass `core: true` for foundational entries (rendered in full at startup, subject to 10 KB middle-out cap). `core` is ignored for `kind: \"handoff\"` entries — handoffs are ephemeral continuity notes, never Core, and surface via `resume_summary.handoffs`. " +
       "`summoner_username` is auto-populated when this session was spawned by another agent's `summon`; you can override.",
     inputSchema: {
       type: "object",
@@ -753,7 +753,7 @@ export const TOOLS: readonly ToolDef[] = [
       "Save state and prepare to shut down. Before calling, save anything " +
       "future-you needs via `append_memory`. Does NOT kill the process — " +
       "call `exit()` last. Replaces summon-mcp's `idle`. " +
-      "**Optional `handoff` slot** writes a `kind: \"handoff\"` core " +
+      "**Optional `handoff` slot** writes a `kind: \"handoff\"` " +
       "memory entry (auto-fades after 7 days via the daemon-tick) and, " +
       "when chat is bound, DMs the target with the same text — atomic " +
       "with the rest call so you don't have to coordinate two calls. " +

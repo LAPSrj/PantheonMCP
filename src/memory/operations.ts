@@ -15,6 +15,27 @@ export const DETAILS_MAX_BYTES = 5 * 1024 * 1024;
 /** §4 — summary upper bound; rejected at API. */
 export const SUMMARY_MAX_CHARS = 240;
 
+/** Kind tag for handoff entries. Mirrors `HANDOFF_KIND` in
+ * `handoffs.ts` — kept as a local literal here to avoid an import
+ * cycle through the handoff → identity modules. */
+const HANDOFF_KIND = "handoff";
+
+/** Handoffs are structurally barred from the Core tier. A handoff is
+ * an ephemeral 7-day continuity note, not a durable foundational rail:
+ * `core: true` on a handoff is core-inflation — it forces multi-KB
+ * session snapshots into the Core render tier and the boot payload,
+ * where they crowd out the actual standing rules Core exists for.
+ * Handoffs surface on their own via `resume_summary.handoffs`.
+ *
+ * Enforced here at the data layer (not just one handler) so the
+ * invariant holds for every write path: `append_memory`,
+ * `rest({ handoff })`, dream consolidation, direct `update_memory`.
+ * Coercion is silent — like the lifecycle forget→fade coercion, it's
+ * a structural invariant, not a caller error. */
+function coreAllowedForKind(kind: string | undefined): boolean {
+  return kind !== HANDOFF_KIND;
+}
+
 export interface AppendInput {
   /** Optional ≤240 char headline. When omitted, derived from `text`'s
    * first non-empty line. */
@@ -84,7 +105,7 @@ export function appendEntry(
       status: "active",
       ...(input.details !== undefined ? { details: input.details } : {}),
       ...(input.kind !== undefined ? { kind: input.kind } : {}),
-      ...(input.core ? { core: true } : {}),
+      ...(input.core && coreAllowedForKind(input.kind) ? { core: true } : {}),
       ...(input.summoner_username !== undefined
         ? { summoner_username: input.summoner_username }
         : {}),
@@ -183,6 +204,13 @@ export function updateEntry(
       if (patch.core) next.core = true;
       else delete next.core;
     }
+    // Handoffs can never be Core (see `coreAllowedForKind`). If this
+    // update leaves the entry a handoff — whether it already was one
+    // or `kind` was just changed to "handoff" — strip core regardless
+    // of what the patch or the prior entry carried.
+    if (next.core && !coreAllowedForKind(next.kind)) {
+      delete next.core;
+    }
     if (patch.replies_to === null) {
       delete next.replies_to;
     } else if (patch.replies_to !== undefined) {
@@ -280,7 +308,7 @@ export function setMemory(
     status: "active",
     ...(input.details !== undefined ? { details: input.details } : {}),
     ...(input.kind !== undefined ? { kind: input.kind } : {}),
-    ...(input.core ? { core: true } : {}),
+    ...(input.core && coreAllowedForKind(input.kind) ? { core: true } : {}),
     ...(input.summoner_username !== undefined
       ? { summoner_username: input.summoner_username }
       : {}),
