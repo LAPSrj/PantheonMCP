@@ -8,6 +8,7 @@ import { Watchdog, realScheduler } from "../../watchdog/index.ts";
 import { ChatRouter } from "../../chat/index.ts";
 import { createContext } from "../context.ts";
 import { dispatch } from "../dispatch.ts";
+import { statuslineSidecarPath } from "../../cli/statusline-sidecar.ts";
 import type { HandlerContext } from "../types.ts";
 import type { Database } from "bun:sqlite";
 
@@ -1523,4 +1524,94 @@ test("send_structured: payload failing schema is rejected", async () => {
   });
   expect(r.ok).toBe(false);
   expect(r.payload.error).toBe("schema_validation_failed");
+});
+
+// --- statusline sidecar (CC-session-keyed file the prompt bar cats) ---
+
+function readSidecar(c: HandlerContext, sid: string): Record<string, string> {
+  return JSON.parse(fs.readFileSync(statuslineSidecarPath(c.paths, sid), "utf8"));
+}
+
+test("login writes the statusline sidecar keyed by claude_session_id", async () => {
+  const sid = "26ec40d3-d750-42f3-9b24-6f4d83c179b2";
+  const c = createContext({
+    paths: ctx.paths,
+    session: new Session("sl-login"),
+    watchdog: ctx.watchdog,
+    parent_pid: ctx.parent_pid,
+    platform: ctx.platform,
+    chat: ctx.chat,
+    claude_session_id: sid,
+  });
+  await dispatch(
+    "login",
+    { username: "slalice", project: "ops", transient: true, status: "exploring" },
+    c,
+  );
+  expect(readSidecar(c, sid)).toEqual({
+    persona: "slalice",
+    chat: "slalice",
+    status: "exploring",
+  });
+});
+
+test("update_status refreshes the sidecar status field", async () => {
+  const sid = "11111111-2222-3333-4444-555555555555";
+  const c = createContext({
+    paths: ctx.paths,
+    session: new Session("sl-status"),
+    watchdog: ctx.watchdog,
+    parent_pid: ctx.parent_pid,
+    platform: ctx.platform,
+    chat: ctx.chat,
+    claude_session_id: sid,
+  });
+  await dispatch(
+    "login",
+    { username: "slbob", project: "ops", transient: true, status: "first" },
+    c,
+  );
+  await dispatch("update_status", { status: "second", confirmed: true }, c);
+  const parsed = readSidecar(c, sid);
+  expect(parsed.status).toBe("second");
+  expect(parsed.chat).toBe("slbob");
+});
+
+test("logout removes the sidecar", async () => {
+  const sid = "99999999-8888-7777-6666-555555555555";
+  const c = createContext({
+    paths: ctx.paths,
+    session: new Session("sl-logout"),
+    watchdog: ctx.watchdog,
+    parent_pid: ctx.parent_pid,
+    platform: ctx.platform,
+    chat: ctx.chat,
+    claude_session_id: sid,
+  });
+  await dispatch(
+    "login",
+    { username: "slcarol", project: "ops", transient: true, status: "up" },
+    c,
+  );
+  expect(fs.existsSync(statuslineSidecarPath(c.paths, sid))).toBe(true);
+  await dispatch("logout", {}, c);
+  expect(fs.existsSync(statuslineSidecarPath(c.paths, sid))).toBe(false);
+});
+
+test("login without a claude_session_id skips the sidecar (no crash)", async () => {
+  const c = createContext({
+    paths: ctx.paths,
+    session: new Session("sl-nosid"),
+    watchdog: ctx.watchdog,
+    parent_pid: ctx.parent_pid,
+    platform: ctx.platform,
+    chat: ctx.chat,
+    // claude_session_id omitted -> null
+  });
+  const r = await dispatch(
+    "login",
+    { username: "sldave", project: "ops", transient: true, status: "up" },
+    c,
+  );
+  expect(r.isError).toBeFalsy();
 });

@@ -20,6 +20,10 @@ import {
 } from "../../identity/index.ts";
 import { getResponseTemplate, PANTHEON_FETCH_BIN } from "../../responses/templates.ts";
 import {
+  writeStatuslineSidecar,
+  deleteStatuslineSidecar,
+} from "../../cli/statusline-sidecar.ts";
+import {
   asBoolean,
   asNumber,
   asObject,
@@ -268,6 +272,14 @@ export const login: Handler = async (args, ctx) => {
           // status-update hiccup.
         }
       }
+      // Refresh the statusline sidecar — a re-login (e.g. post-/compact
+      // re-bootstrap) may carry a fresh status, and the sidecar may
+      // have been swept since the original login.
+      writeStatuslineSidecar(ctx.paths, ctx.claude_session_id, {
+        persona: ctx.session.claimedUsername ?? existing.username,
+        chat: existing.username,
+        status: existing.status ?? "",
+      });
       const supportsChannels = asBoolean(args.supports_channels) ?? false;
       const claimed = ctx.session.claimedUsername;
       const resumeSummary =
@@ -637,6 +649,18 @@ export const login: Handler = async (args, ctx) => {
   // initial bootstrap is gone (e.g. post-/compact re-bootstrap). The
   // env var is set by spawnPersona; we keep it set across logins.
   const remanifestHandoffEnv = process.env.PANTHEON_REMANIFEST_HANDOFF;
+
+  // Statusline sidecar — drop a per-CC-session file the CC statusline
+  // command can `cat` to render the tab-owner row. persona is the
+  // canonical registry handle; chat is the live (possibly
+  // auto-suffixed) handle; status is the current chat status.
+  // Best-effort + no-op when not in a CC session.
+  writeStatuslineSidecar(ctx.paths, ctx.claude_session_id, {
+    persona: claimedPersona ?? subscriber.username,
+    chat: subscriber.username,
+    status: subscriber.status ?? "",
+  });
+
   return {
     ok: true,
     agent_id: subscriber.agent_id,
@@ -702,6 +726,7 @@ export const logout: Handler = async (_args, ctx) => {
     });
   }
   ctx.setChatAgentId(null);
+  deleteStatuslineSidecar(ctx.paths, ctx.claude_session_id);
   return { ok: true, removed: removed?.username ?? null };
 };
 
@@ -1070,6 +1095,14 @@ export const update_status: Handler = async (args, ctx) => {
   if (patch.status !== undefined) {
     router.markStatusChanged(agentId);
   }
+  // Refresh the statusline sidecar so the CC statusline picks up the
+  // new status without a chat.db read. persona/chat are unchanged
+  // here; we re-derive them from the (possibly renamed) subscriber.
+  writeStatuslineSidecar(ctx.paths, ctx.claude_session_id, {
+    persona: ctx.session.claimedUsername ?? sub.username,
+    chat: sub.username,
+    status: sub.status ?? "",
+  });
   return {
     username: sub.username,
     project: sub.project,

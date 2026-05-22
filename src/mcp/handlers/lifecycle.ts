@@ -1,6 +1,7 @@
 import { listActive } from "../../chat/index.ts";
 import { stampRested, transitionRestEnter } from "../../identity/index.ts";
 import { recordExit } from "../../launcher/index.ts";
+import { deleteStatuslineSidecar } from "../../cli/statusline-sidecar.ts";
 import {
   consumePendingRestRequests,
   writeRestRequest,
@@ -206,6 +207,10 @@ export const rest: Handler = async (args, ctx) => {
 
   transitionRestEnter(ctx.session);
   stampRested(ctx.paths, claimed, reason, sessionId);
+  // Drop the statusline sidecar — a resting agent no longer actively
+  // owns the tab. (exit() also clears it; clearing here too keeps the
+  // resting-but-not-yet-exited window clean.)
+  deleteStatuslineSidecar(ctx.paths, ctx.claude_session_id);
   return {
     ok: true,
     rest_reason: reason,
@@ -265,6 +270,7 @@ export const exit: Handler = async (args, ctx) => {
       // best-effort
     }
   }
+  deleteStatuslineSidecar(ctx.paths, ctx.claude_session_id);
   ctx.scheduleExit(Math.max(0, delay), "explicit_exit");
   return {
     ok: true,
@@ -486,6 +492,7 @@ function applyRestTeardown(
     }
     ctx.setChatAgentId(null);
   }
+  deleteStatuslineSidecar(ctx.paths, ctx.claude_session_id);
   ctx.scheduleExit(2, variant.exit_reason);
 }
 
@@ -579,6 +586,7 @@ function applyForceExit(ctx: HandlerContext): void {
     }
     ctx.setChatAgentId(null);
   }
+  deleteStatuslineSidecar(ctx.paths, ctx.claude_session_id);
   ctx.scheduleExit(2, "force_exit");
 }
 
