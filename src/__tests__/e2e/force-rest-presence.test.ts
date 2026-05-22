@@ -84,6 +84,11 @@ test("force_rest: target's chat subscriber row is removed after the prune-tick c
   const consumed = consumeForceLifecycleRequests(fix.procB.ctx);
   expect(consumed.consumed).toBe(1);
   expect(consumed.rested).toBe(true);
+  // force_rest now also schedules SIGTERM (mirroring force_exit's
+  // teardown), so the consumer signals exiting=true. Without this,
+  // the OS process leaked indefinitely after force_rest — state
+  // flipped to resting but the `claude` parent kept running.
+  expect(consumed.exiting).toBe(true);
 
   // Post-condition: subscriber row is gone.
   expect(
@@ -170,6 +175,54 @@ test("self-rest does NOT remove chat presence (asymmetric semantics)", async () 
       (s) => s.agent_id === alphaAgentId,
     ),
   ).toBe(true);
+});
+
+test("force_rest schedules SIGTERM so the parent CC process exits", async () => {
+  // Regression: pre-fix, applyForceRest flipped the lifecycle state
+  // and dropped chat presence but never called ctx.scheduleExit.
+  // The parent `claude` process kept running indefinitely, leaking
+  // ~250-400MB per leaked session. Over a multi-agent run this
+  // starved the VM (observed: ~20 lingering claude processes for 7
+  // connected agents, swap exhausted, next build OOM).
+  //
+  // Now applyForceRest mirrors applyForceExit's teardown: SIGTERM
+  // scheduled with a 2s delay. The "rest" semantics survive via
+  // stampRested (durable on disk, surfaces on summon --resume).
+  await call(fix.procA, "register", {
+    username: "alpha",
+    project: "pantheon",
+    cwd: "/work/alpha",
+    claim_after: true,
+  });
+  await call(fix.procB, "register", {
+    username: "beta",
+    project: "pantheon",
+    cwd: "/work/beta",
+    claim_after: true,
+  });
+  await call(fix.procA, "login", {
+    username: "alpha",
+    project: "pantheon",
+    transient: false,
+  });
+  await call(fix.procB, "login", {
+    username: "beta",
+    project: "pantheon",
+    transient: false,
+  });
+
+  expect(fix.procB.exitCalls).toEqual([]);
+
+  await call(fix.procA, "force_rest", { target_username: "beta" });
+  const consumed = consumeForceLifecycleRequests(fix.procB.ctx);
+  expect(consumed.rested).toBe(true);
+  expect(consumed.exiting).toBe(true);
+
+  // The defining assertion: scheduleExit fired so the parent process
+  // will receive SIGTERM.
+  expect(fix.procB.exitCalls.length).toBe(1);
+  expect(fix.procB.exitCalls[0]!.delay_seconds).toBe(2);
+  expect(fix.procB.exitCalls[0]!.reason).toBe("force_rest");
 });
 
 test("force_rest is idempotent when target session is already resting", async () => {

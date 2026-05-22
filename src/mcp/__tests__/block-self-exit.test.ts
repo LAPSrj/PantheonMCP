@@ -284,7 +284,7 @@ test("force_rest works on a target that does NOT have block_self_exit set (gener
 
 // --- Consume from prune tick (target side) ---
 
-test("consume applies force_rest: transitions session to resting + stamps persona", async () => {
+test("consume applies force_rest: transitions session to resting + stamps persona + schedules SIGTERM", async () => {
   // Wire the target session — claim a persona and log into chat with
   // its own agent_id.
   claimPersona("supervised-agent");
@@ -309,7 +309,11 @@ test("consume applies force_rest: transitions session to resting + stamps person
   const result = consumeForceLifecycleRequests(ctx);
   expect(result.consumed).toBe(1);
   expect(result.rested).toBe(true);
-  expect(result.exiting).toBe(false);
+  // force_rest now also schedules SIGTERM (mirroring force_exit's
+  // teardown) — pre-fix the OS process leaked indefinitely. The
+  // "rest" semantics survive via stampRested below; the process
+  // termination is what makes force_rest actually clean up.
+  expect(result.exiting).toBe(true);
 
   // Pending now zero — consume DELETEs the row.
   expect(pendingRestRequests(chatDb, myAgentId).length).toBe(0);
@@ -320,6 +324,13 @@ test("consume applies force_rest: transitions session to resting + stamps person
   expect(persona?.last_rested_at).not.toBeNull();
   expect(persona?.rest_reason).toContain("force_rest");
   expect(persona?.rest_reason).toContain("audit complete");
+
+  // SIGTERM scheduled. This is what closes the leaked-process bug —
+  // the asymmetry from force_exit is only the stampRested above
+  // (durable resume signal).
+  expect(exitCalls.length).toBe(1);
+  expect(exitCalls[0]!.delay).toBe(2);
+  expect(exitCalls[0]!.reason).toBe("force_rest");
 });
 
 test("consume applies force_exit: schedules SIGTERM via ctx.scheduleExit", async () => {

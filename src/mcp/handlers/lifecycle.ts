@@ -415,6 +415,17 @@ export const force_exit_any: Handler = async (args, ctx) =>
  * themselves remain DM-able and can resume. Force-rest is asymmetric
  * because the peer/admin's intent is "make this agent go away."
  *
+ * "Make this agent go away" means the OS process too — not just the
+ * state flip. Pre-fix, applyForceRest left the parent CC process
+ * running indefinitely (no SIGTERM), leaking ~250-400MB per leaked
+ * `claude` process. The state row flipped to resting but the tab
+ * stayed open and memory was never reclaimed. Now we mirror
+ * `applyForceExit`'s teardown — watchdog unregister + window-
+ * registry decrement + SIGTERM via `scheduleExit` — keeping only the
+ * meaningful asymmetry from force_exit: `stampRested` persists the
+ * rest reason + resume_session_id on disk, so a later `summon
+ * --resume` can pick the session back up. Force_exit does not stamp.
+ *
  * Symmetric with logout: emits a system "left" message into the
  * project so peers see the eviction in their chat. */
 function applyForceRest(ctx: HandlerContext, reason: string): void {
@@ -429,6 +440,18 @@ function applyForceRest(ctx: HandlerContext, reason: string): void {
     stampRested(ctx.paths, claimed, reason, ctx.claude_session_id ?? null);
   } catch {
     // best-effort
+  }
+  try {
+    ctx.watchdog.unregister(ctx.session.id);
+  } catch {
+    // best-effort
+  }
+  if (ctx.spawn_metadata) {
+    try {
+      recordExit(ctx.paths, ctx.spawn_metadata.window_name);
+    } catch {
+      // best-effort
+    }
   }
   // Drop chat presence so the watcher terminates and list_agents
   // stops surfacing the rested agent.
@@ -455,6 +478,7 @@ function applyForceRest(ctx: HandlerContext, reason: string): void {
     }
     ctx.setChatAgentId(null);
   }
+  ctx.scheduleExit(2, "force_rest");
 }
 
 /** Apply the exit pipeline directly. Schedules SIGTERM with the
@@ -538,6 +562,10 @@ export function consumeForceLifecycleRequests(ctx: HandlerContext): {
     if (req.kind === "rest") {
       applyForceRest(ctx, reasonText);
       result.rested = true;
+      // applyForceRest schedules SIGTERM too — once it runs, the
+      // process is exiting and remaining requests are moot.
+      result.exiting = true;
+      break;
     } else if (req.kind === "exit") {
       applyForceExit(ctx);
       result.exiting = true;

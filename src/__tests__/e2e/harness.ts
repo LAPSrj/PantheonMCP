@@ -24,6 +24,10 @@ export interface E2EProcess {
   ctx: HandlerContext;
   /** Captured spawn calls from this process's mock executor. */
   spawned: SpawnRecord[];
+  /** Captured scheduleExit calls — each entry is one invocation
+   * (delay_seconds, reason). Lets tests assert that a code path
+   * actually scheduled SIGTERM, not just flipped state. */
+  exitCalls: { delay_seconds: number; reason: string }[];
   db: ReturnType<typeof openChatDb>;
 }
 
@@ -79,6 +83,7 @@ function makeProcess(
   scheduler: Scheduler,
 ): E2EProcess {
   const spawned: SpawnRecord[] = [];
+  const exitCalls: { delay_seconds: number; reason: string }[] = [];
   const executor: SpawnExecutor = {
     spawn(command, args, opts: NodeSpawnOptions): SpawnedProcess {
       spawned.push({
@@ -109,8 +114,11 @@ function makeProcess(
     stderr_probe_ms: 5,
     spawn_env: {} as NodeJS.ProcessEnv,
     chat: router,
+    scheduleExit: (delay_seconds, reason) => {
+      exitCalls.push({ delay_seconds, reason });
+    },
   });
-  return { ctx, spawned, db };
+  return { ctx, spawned, exitCalls, db };
 }
 
 /** Convenience: dispatch a tool and parse the JSON result. */
