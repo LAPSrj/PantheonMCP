@@ -1,7 +1,8 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
-import { makeFixture, type E2EFixture } from "./harness.ts";
-import { defaultOnDeadline, type Scheduler, type TimerHandle } from "../../watchdog/index.ts";
-import { stampRested } from "../../identity/index.ts";
+import { call, makeFixture, type E2EFixture } from "./harness.ts";
+import { type Scheduler, type TimerHandle } from "../../watchdog/index.ts";
+import { applyAutoRest } from "../../mcp/handlers/lifecycle.ts";
+import { listActive } from "../../chat/presence.ts";
 
 class FakeScheduler implements Scheduler {
   private nowMs = 0;
@@ -42,8 +43,8 @@ afterEach(() => {
   fix.cleanup();
 });
 
-test("auto-rest fires after rest_timeout with no qualifying activity", async () => {
-  // Register + claim alpha.
+test("auto-rest fires after rest_timeout: state flips, persona stamped, chat dropped, SIGTERM scheduled", async () => {
+  // Register + claim alpha + log into chat.
   const { transitionRegister } = await import("../../identity/index.ts");
   transitionRegister(
     fix.paths,
@@ -56,29 +57,57 @@ test("auto-rest fires after rest_timeout with no qualifying activity", async () 
     },
     { claim_after: true },
   );
+  const login = await call(fix.procA, "login", {
+    username: "alpha",
+    project: "pantheon",
+    transient: false,
+  });
+  const alphaAgentId = login.payload.agent_id as string;
 
-  // Arm the watchdog with the minimum rest_timeout (3600s).
+  // Arm the watchdog wired the way the production server wires it
+  // (server.ts): the deadline runs applyAutoRest, which handles
+  // state transition + stampRested + watchdog teardown + chat
+  // presence drop + SIGTERM. Pre-fix this lambda only flipped state
+  // — the parent CC process kept running indefinitely after the
+  // 60-min rest_timeout fired.
   fix.procA.ctx.watchdog.register({
     session: fix.procA.ctx.session,
     rest_timeout: 3600,
-    onDeadline: (s) => {
-      defaultOnDeadline(s);
-      if (s.claimedUsername) {
-        stampRested(fix.paths, s.claimedUsername, "auto_rest_timeout", null);
-      }
-    },
+    onDeadline: () => applyAutoRest(fix.procA.ctx),
   });
 
-  // Advance the fake clock past the deadline without any qualifying
-  // activity. The deadline should fire and stamp the registry.
+  // Pre-conditions.
   expect(fix.procA.ctx.session.isResting).toBe(false);
+  expect(fix.procA.exitCalls).toEqual([]);
+  expect(
+    listActive(fix.procA.db, { stale_threshold_ms: 60_000 }).some(
+      (s) => s.agent_id === alphaAgentId,
+    ),
+  ).toBe(true);
+
+  // Advance past the deadline.
   fakeA.advance(3600 * 1000);
+
+  // State flipped.
   expect(fix.procA.ctx.session.isResting).toBe(true);
 
+  // Persona registry stamped.
   const { readPersona } = await import("../../identity/index.ts");
   const persona = readPersona(fix.paths, "alpha");
   expect(persona?.rest_reason).toBe("auto_rest_timeout");
   expect(persona?.last_rested_at).not.toBeNull();
+
+  // Chat presence dropped (peers see the agent leave).
+  expect(
+    listActive(fix.procA.db, { stale_threshold_ms: 60_000 }).some(
+      (s) => s.agent_id === alphaAgentId,
+    ),
+  ).toBe(false);
+
+  // SIGTERM scheduled — the bug fix. Pre-fix the process leaked.
+  expect(fix.procA.exitCalls.length).toBe(1);
+  expect(fix.procA.exitCalls[0]!.delay_seconds).toBe(2);
+  expect(fix.procA.exitCalls[0]!.reason).toBe("auto_rest");
 });
 
 test("auto-rest does NOT fire when qualifying activity touches the watchdog", async () => {

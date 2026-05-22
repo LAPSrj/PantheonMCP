@@ -400,35 +400,36 @@ export const force_exit_any: Handler = async (args, ctx) =>
 
 // --- Force-rest consumer (called from the prune tick) ---
 
-/** Apply the rest pipeline directly — bypasses the self-rest
- * preconditions (block_self_exit, allow_rest_authorized, summoned).
- * The force-* request IS the authorization.
+/** Shared rest-teardown body — every "transition this session to
+ * resting AND tear down the process" path runs through here:
  *
- * Also drops the chat subscriber row so the target vanishes from
- * `list_agents`. Without this step the target's chat watcher would
- * keep heartbeating (it runs in a separate CC `Monitor` task, not in
- * this MCP process), `pruneStale`'s 60s TTL would never expire, and
- * `list_agents` would show the rested agent as live indefinitely.
- * Removing the subscriber row causes the watcher's next refresh to
- * surface `SessionExpiredError`, terminating the loop cleanly.
- * Self-`rest` deliberately does NOT do this — agents resting
- * themselves remain DM-able and can resume. Force-rest is asymmetric
- * because the peer/admin's intent is "make this agent go away."
+ *   - peer-triggered `force_rest` (applyForceRest below)
+ *   - watchdog rest_timeout deadline (applyAutoRest below)
  *
- * "Make this agent go away" means the OS process too — not just the
- * state flip. Pre-fix, applyForceRest left the parent CC process
- * running indefinitely (no SIGTERM), leaking ~250-400MB per leaked
- * `claude` process. The state row flipped to resting but the tab
- * stayed open and memory was never reclaimed. Now we mirror
- * `applyForceExit`'s teardown — watchdog unregister + window-
- * registry decrement + SIGTERM via `scheduleExit` — keeping only the
- * meaningful asymmetry from force_exit: `stampRested` persists the
- * rest reason + resume_session_id on disk, so a later `summon
- * --resume` can pick the session back up. Force_exit does not stamp.
+ * Both produce the same end state: state flipped to resting, persona
+ * registry stamped (so `summon --resume` can pick up), watchdog
+ * unregistered, window-registry decremented, chat presence dropped
+ * with a system "leave" message, and SIGTERM scheduled via
+ * `ctx.scheduleExit`. Distinct from `applyForceExit` only in that
+ * this path persists `rest_reason` + `resume_session_id` to disk.
  *
- * Symmetric with logout: emits a system "left" message into the
- * project so peers see the eviction in their chat. */
-function applyForceRest(ctx: HandlerContext, reason: string): void {
+ * Self-`rest()` deliberately does NOT run this — agents resting
+ * themselves stay DM-able for a follow-up `exit()` call. */
+interface RestTeardownVariant {
+  /** Goes into `stampRested(..., reason, ...)` — surfaces as
+   * `persona.rest_reason`. */
+  stamp_reason: string;
+  /** Passed to `scheduleExit(delay, reason)` for log/audit. */
+  exit_reason: string;
+  /** Renders the chat system "leave" message body. Receives the
+   * username (with the `*` suffix already appended when transient). */
+  leave_text: (display_username: string) => string;
+}
+
+function applyRestTeardown(
+  ctx: HandlerContext,
+  variant: RestTeardownVariant,
+): void {
   const claimed = ctx.session.claimedUsername;
   if (!claimed) return; // can't rest without a claimed persona
   try {
@@ -437,7 +438,12 @@ function applyForceRest(ctx: HandlerContext, reason: string): void {
     // session already resting — idempotent no-op.
   }
   try {
-    stampRested(ctx.paths, claimed, reason, ctx.claude_session_id ?? null);
+    stampRested(
+      ctx.paths,
+      claimed,
+      variant.stamp_reason,
+      ctx.claude_session_id ?? null,
+    );
   } catch {
     // best-effort
   }
@@ -465,7 +471,9 @@ function applyForceRest(ctx: HandlerContext, reason: string): void {
             from_agent_id: "system",
             scope: "project",
             project: removed.project,
-            text: `${removed.username}${removed.transient ? "*" : ""} was force-rested.`,
+            text: variant.leave_text(
+              `${removed.username}${removed.transient ? "*" : ""}`,
+            ),
             system: true,
             system_kind: "leave",
           });
@@ -478,7 +486,44 @@ function applyForceRest(ctx: HandlerContext, reason: string): void {
     }
     ctx.setChatAgentId(null);
   }
-  ctx.scheduleExit(2, "force_rest");
+  ctx.scheduleExit(2, variant.exit_reason);
+}
+
+/** Apply the peer-triggered force_rest pipeline — bypasses the
+ * self-rest preconditions (block_self_exit, allow_rest_authorized,
+ * summoned). The force-* request IS the authorization.
+ *
+ * Distinct from `applyForceExit` only in that this path persists
+ * `rest_reason` + `resume_session_id` to disk via `stampRested`,
+ * so a later `summon --resume` can pick the session back up.
+ * Force_exit does not stamp. */
+function applyForceRest(ctx: HandlerContext, reason: string): void {
+  applyRestTeardown(ctx, {
+    stamp_reason: reason,
+    exit_reason: "force_rest",
+    leave_text: (who) => `${who} was force-rested.`,
+  });
+}
+
+/** Apply the watchdog rest_timeout pipeline — fired when no
+ * qualifying activity has touched this session in rest_timeout
+ * seconds. Same teardown as `applyForceRest` with auto-rest-specific
+ * reasons.
+ *
+ * Pre-fix, the watchdog deadline only ran `defaultOnDeadline` +
+ * `stampRested` — state flipped to resting but the parent CC
+ * process kept running indefinitely (same leak pattern as
+ * pre-fix applyForceRest). The 60-min-idle agent stayed in memory
+ * forever. Now the deadline also drops chat presence + schedules
+ * SIGTERM, so an idle agent that doesn't proactively `rest()` +
+ * `exit()` (e.g. block_self_exit-blocked, or just unresponsive)
+ * still gets reaped. */
+export function applyAutoRest(ctx: HandlerContext): void {
+  applyRestTeardown(ctx, {
+    stamp_reason: "auto_rest_timeout",
+    exit_reason: "auto_rest",
+    leave_text: (who) => `${who} auto-rested after rest_timeout idle.`,
+  });
 }
 
 /** Apply the exit pipeline directly. Schedules SIGTERM with the

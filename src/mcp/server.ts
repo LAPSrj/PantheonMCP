@@ -5,14 +5,14 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import {
-  DEFAULT_REST_TIMEOUT_SECONDS,
-  defaultOnDeadline,
-} from "../watchdog/index.ts";
-import { stampRested, transitionClaim } from "../identity/index.ts";
+import { DEFAULT_REST_TIMEOUT_SECONDS } from "../watchdog/index.ts";
+import { transitionClaim } from "../identity/index.ts";
 import { ChatRouter, pruneStale } from "../chat/index.ts";
 import { pruneStaleRestRequests } from "../lifecycle/index.ts";
-import { consumeForceLifecycleRequests } from "./handlers/lifecycle.ts";
+import {
+  applyAutoRest,
+  consumeForceLifecycleRequests,
+} from "./handlers/lifecycle.ts";
 import { expireEntries } from "../memory/index.ts";
 import { openChatDb, resolvePaths } from "../storage/index.ts";
 import { importLegacySchemas } from "../schemas/index.ts";
@@ -144,27 +144,23 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
   // Arm the watchdog with the per-summon rest_timeout if our spawner
   // set PANTHEON_REST_TIMEOUT (the env contract from §14 / spawn handler);
   // otherwise the 60-min default per §14.
+  //
+  // applyAutoRest handles the full teardown: state flip,
+  // stampRested (with claude_session_id for `summon --resume`),
+  // watchdog unregister, chat presence drop, SIGTERM via
+  // ctx.scheduleExit. Pre-fix this lambda only flipped state and
+  // stamped — the parent CC process kept running indefinitely (same
+  // leak pattern as pre-fix applyForceRest), so a 60-min-idle agent
+  // stayed in memory forever.
   const restTimeout = readRestTimeoutFromEnv();
   ctx.watchdog.register({
     session: ctx.session,
     rest_timeout: restTimeout,
-    onDeadline: (s) => {
-      defaultOnDeadline(s);
-      if (s.claimedUsername) {
-        try {
-          // Stamp the real CC session UUID (when known) so a future
-          // `summon --resume` lands on the same conversation. Falls
-          // through to null when pantheon was launched outside a CC
-          // session — `--resume` simply won't fire that summon.
-          stampRested(
-            ctx.paths,
-            s.claimedUsername,
-            "auto_rest_timeout",
-            ctx.claude_session_id,
-          );
-        } catch {
-          // best-effort — never let the watchdog crash the daemon
-        }
+    onDeadline: () => {
+      try {
+        applyAutoRest(ctx);
+      } catch {
+        // best-effort — never let the watchdog crash the daemon
       }
     },
   });
