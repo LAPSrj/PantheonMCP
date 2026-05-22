@@ -143,8 +143,8 @@ export const remanifest: Handler = async (args, ctx) => {
   // saw OLD's row in `allKnownSubscribers` (heartbeat-fresh in
   // SQLite) and auto-suffixed to `<persona>2`; canonical reclaim
   // then waited 60-90s for OLD's row to age out. Now OLD drops its
-  // own presence row + clears chat_agent_id, so NEW's first login
-  // finds canonical free and boots as `<persona>` from message one.
+  // own presence row, so NEW's first login finds canonical free and
+  // boots as `<persona>` from message one.
   //
   // Gated on a successful spawn_pid — if the spawn failed, leave
   // OLD's chat presence intact so the user isn't silently evicted
@@ -152,6 +152,19 @@ export const remanifest: Handler = async (args, ctx) => {
   // Heartbeat scheduler checks `subscribers.has(id)` before
   // upserting, so the in-memory remove is enough to stop further
   // heartbeats from re-inserting the row.
+  //
+  // CRITICAL: `ctx.chat_agent_id` MUST stay set after self-evict.
+  // The OLD process exits via the rest_requests pipeline — NEW
+  // writes a row addressed to OLD's agent_id on first login, and
+  // OLD's prune-tick (`consumeForceLifecycleRequests`) reads
+  // `ctx.chat_agent_id` to claim that row. Pre-fix, clearing the
+  // id at self-evict made the consumer no-op (early-return on
+  // null id), the kill row was never claimed, SIGTERM never fired,
+  // and the OLD `claude` process leaked indefinitely (the row got
+  // garbage-collected by `pruneStaleRestRequests` after 5 min). The
+  // other readers of `chat_agent_id` (heartbeat, send, status
+  // update) all guard via `subscribers.has(id)`, so they no-op
+  // gracefully once the router row is gone.
   let self_evicted = false;
   if (result.spawn_pid && ctx.chat && ctx.chat_agent_id) {
     const agentId = ctx.chat_agent_id;
@@ -177,7 +190,6 @@ export const remanifest: Handler = async (args, ctx) => {
       // (NEW auto-suffixes and reclaim-canonical sweep cleans up
       // when OLD's row eventually ages out).
     }
-    ctx.setChatAgentId(null);
   }
 
   return {

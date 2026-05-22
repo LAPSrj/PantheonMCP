@@ -14,6 +14,8 @@ import {
 import { createContext } from "../../context.ts";
 import { dispatch } from "../../dispatch.ts";
 import type { HandlerContext } from "../../types.ts";
+import { writeRestRequest } from "../../../lifecycle/index.ts";
+import { consumeForceLifecycleRequests } from "../lifecycle.ts";
 
 /** Commit 2 of the canonical-handle reclaim fix: the `remanifest`
  * handler self-evicts from chat once `spawnPersona` confirms a valid
@@ -29,6 +31,7 @@ let tmpDir: string;
 let ctx: HandlerContext;
 let db: ReturnType<typeof openChatDb>;
 let mockPid: number | null;
+let exitCalls: { delay_seconds: number; reason: string }[];
 
 function makeMockExecutor(): SpawnExecutor {
   return {
@@ -45,6 +48,7 @@ function makeMockExecutor(): SpawnExecutor {
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pantheon-remanifest-"));
   mockPid = 23456;
+  exitCalls = [];
   const paths = resolvePaths({ PANTHEON_HOME: tmpDir } as NodeJS.ProcessEnv);
   db = openChatDb(paths.chatDbPath);
   const router = new ChatRouter({ paths, db });
@@ -58,6 +62,9 @@ beforeEach(() => {
     stderr_probe_ms: 5,
     spawn_env: {} as NodeJS.ProcessEnv,
     chat: router,
+    scheduleExit: (delay_seconds, reason) => {
+      exitCalls.push({ delay_seconds, reason });
+    },
   });
 });
 
@@ -126,9 +133,12 @@ test("remanifest: self-evicts OLD's chat presence after a successful spawn", asy
       (s) => s.agent_id === oldAgentId,
     ),
   ).toBe(false);
-  // ctx.chat_agent_id cleared so subsequent heartbeats / chat calls
-  // no-op rather than re-upserting the row.
-  expect(ctx.chat_agent_id).toBeNull();
+  // ctx.chat_agent_id is KEPT (not nulled) — the OLD process exits
+  // via the rest_requests pipeline; NEW writes a row addressed to
+  // this agent_id and OLD's prune-tick consumer reads
+  // ctx.chat_agent_id to claim it. Heartbeat/send/status all guard
+  // on `subscribers.has`, so the dangling id is harmless.
+  expect(ctx.chat_agent_id).toBe(oldAgentId);
 });
 
 test("remanifest: skips self-eviction when spawn fails (no spawn_pid)", async () => {
@@ -161,6 +171,58 @@ test("remanifest: skips self-eviction when spawn fails (no spawn_pid)", async ()
     ),
   ).toBe(true);
   expect(ctx.chat_agent_id).toBe(oldAgentId);
+});
+
+test("remanifest: OLD's prune-tick consumes the kill-signal NEW writes after self-evict", async () => {
+  // Regression: pre-fix, remanifest's self-evict cleared
+  // `ctx.chat_agent_id` along with dropping chat presence. NEW's
+  // login wrote a `rest_requests(target=OLD_agent_id, kind=exit)`
+  // row, but OLD's prune-tick consumer first-checked
+  // `ctx.chat_agent_id` and early-returned on null. The kill row
+  // was never claimed, scheduleExit never fired, and the OLD
+  // `claude` process leaked (the row got garbage-collected by
+  // `pruneStaleRestRequests` after 5 min).
+  //
+  // Post-fix: `chat_agent_id` is retained after self-evict. The
+  // chat presence row is gone (so NEW boots canonical), but the
+  // local id reference survives long enough for the consumer to
+  // claim the kill-signal row. SIGTERM scheduled — process exits.
+  // This is the path block_self_exit-blocked agents rely on, since
+  // they cannot call `exit()` themselves.
+  makePersona();
+  await call("claim", { username: "wraith" });
+  const login = await call("login", {
+    username: "wraith",
+    project: "pantheon",
+    transient: false,
+  });
+  const oldAgentId = login.payload.agent_id as string;
+
+  const r = await call("remanifest", { handoff: "ctx refresh" });
+  expect(r.payload.self_evicted).toBe(true);
+  // OLD's chat_agent_id stayed set — the kill-signal pipeline needs it.
+  expect(ctx.chat_agent_id).toBe(oldAgentId);
+
+  // Simulate NEW's first-login behavior: write a kill-signal row
+  // addressed to OLD's chat agent_id (kind=exit).
+  writeRestRequest(db, {
+    target_agent_id: oldAgentId,
+    from_agent_id: "simulated-new-session",
+    kind: "exit",
+    reason: "remanifest_complete: wraith is up",
+  });
+
+  expect(exitCalls).toEqual([]);
+
+  // OLD's prune-tick consumes.
+  const consumed = consumeForceLifecycleRequests(ctx);
+  expect(consumed.consumed).toBe(1);
+  expect(consumed.exiting).toBe(true);
+
+  // The defining assertion: SIGTERM scheduled. OLD's claude parent
+  // exits, the tab closes, the memory leak is resolved.
+  expect(exitCalls.length).toBe(1);
+  expect(exitCalls[0]!.reason).toBe("force_exit");
 });
 
 test("remanifest: emits a system 'remanifesting' message into the project on self-evict", async () => {
