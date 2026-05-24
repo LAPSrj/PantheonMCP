@@ -145,13 +145,12 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
   // set PANTHEON_REST_TIMEOUT (the env contract from §14 / spawn handler);
   // otherwise the 60-min default per §14.
   //
-  // applyAutoRest handles the full teardown: state flip,
-  // stampRested (with claude_session_id for `summon --resume`),
-  // watchdog unregister, chat presence drop, SIGTERM via
-  // ctx.scheduleExit. Pre-fix this lambda only flipped state and
-  // stamped — the parent CC process kept running indefinitely (same
-  // leak pattern as pre-fix applyForceRest), so a 60-min-idle agent
-  // stayed in memory forever.
+  // applyAutoRest handles the full teardown for SUMMONED sessions:
+  // state flip, stampRested (with claude_session_id for `summon
+  // --resume`), watchdog unregister, chat presence drop, SIGTERM via
+  // ctx.scheduleExit. Non-summoned sessions short-circuit inside
+  // applyAutoRest (no teardown, no SIGTERM) — the user owns the tab
+  // and the deadline must not yank it out from under them.
   const restTimeout = readRestTimeoutFromEnv();
   ctx.watchdog.register({
     session: ctx.session,

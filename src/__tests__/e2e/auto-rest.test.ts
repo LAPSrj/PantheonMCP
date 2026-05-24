@@ -44,6 +44,11 @@ afterEach(() => {
 });
 
 test("auto-rest fires after rest_timeout: state flips, persona stamped, chat dropped, SIGTERM scheduled", async () => {
+  // Summoned-session marker — applyAutoRest gates on this. Non-
+  // summoned (user-owned) sessions short-circuit; the dedicated
+  // non-summoned test below covers that path.
+  fix.procA.ctx.summoner_username = "beta";
+
   // Register + claim alpha + log into chat.
   const { transitionRegister } = await import("../../identity/index.ts");
   transitionRegister(
@@ -108,6 +113,55 @@ test("auto-rest fires after rest_timeout: state flips, persona stamped, chat dro
   expect(fix.procA.exitCalls.length).toBe(1);
   expect(fix.procA.exitCalls[0]!.delay_seconds).toBe(2);
   expect(fix.procA.exitCalls[0]!.reason).toBe("auto_rest");
+});
+
+test("auto-rest is a no-op for non-summoned sessions: no SIGTERM, state stays awake, chat presence retained", async () => {
+  // Default fixture leaves summoner_username = null — the user-owned
+  // (manually-started CC) path. applyAutoRest must short-circuit; the
+  // watchdog deadline firing must not SIGTERM the parent CC process
+  // out from under the user.
+  expect(fix.procA.ctx.summoner_username).toBeNull();
+
+  const { transitionRegister } = await import("../../identity/index.ts");
+  transitionRegister(
+    fix.paths,
+    fix.procA.ctx.session,
+    {
+      username: "alpha",
+      project: "pantheon",
+      cwd: "/work",
+      platform: "linux",
+    },
+    { claim_after: true },
+  );
+  const login = await call(fix.procA, "login", {
+    username: "alpha",
+    project: "pantheon",
+    transient: false,
+  });
+  const alphaAgentId = login.payload.agent_id as string;
+
+  fix.procA.ctx.watchdog.register({
+    session: fix.procA.ctx.session,
+    rest_timeout: 3600,
+    onDeadline: () => applyAutoRest(fix.procA.ctx),
+  });
+
+  fakeA.advance(3600 * 1000);
+
+  // No teardown ran.
+  expect(fix.procA.ctx.session.isResting).toBe(false);
+  expect(fix.procA.exitCalls).toEqual([]);
+  // Persona was never stamped with auto_rest_timeout.
+  const { readPersona } = await import("../../identity/index.ts");
+  const persona = readPersona(fix.paths, "alpha");
+  expect(persona?.rest_reason ?? null).not.toBe("auto_rest_timeout");
+  // Chat presence still there.
+  expect(
+    listActive(fix.procA.db, { stale_threshold_ms: 60_000 }).some(
+      (s) => s.agent_id === alphaAgentId,
+    ),
+  ).toBe(true);
 });
 
 test("auto-rest does NOT fire when qualifying activity touches the watchdog", async () => {

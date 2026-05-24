@@ -517,15 +517,25 @@ function applyForceRest(ctx: HandlerContext, reason: string): void {
  * seconds. Same teardown as `applyForceRest` with auto-rest-specific
  * reasons.
  *
- * Pre-fix, the watchdog deadline only ran `defaultOnDeadline` +
+ * Gated on `summoner_username`: non-summoned sessions are
+ * user-owned (the human launched CC manually, owns the tab, and
+ * controls when to close it). Auto-reaping them would SIGTERM the
+ * parent CC process out from under the user — particularly painful
+ * when the plugin-mode PreToolUse `watchdog-reset.sh` hook isn't
+ * wired into `~/.claude/settings.json`, since then non-pantheon
+ * tool-use (Read/Edit/Bash/...) doesn't refresh the deadline and
+ * an actively-working session can hit it. Summoned sessions still
+ * get reaped because a peer expects them to eventually release
+ * (block_self_exit-blocked agents have no other release path).
+ *
+ * Pre-9ebd86c, the watchdog deadline only ran `defaultOnDeadline` +
  * `stampRested` — state flipped to resting but the parent CC
- * process kept running indefinitely (same leak pattern as
- * pre-fix applyForceRest). The 60-min-idle agent stayed in memory
- * forever. Now the deadline also drops chat presence + schedules
- * SIGTERM, so an idle agent that doesn't proactively `rest()` +
- * `exit()` (e.g. block_self_exit-blocked, or just unresponsive)
- * still gets reaped. */
+ * process kept running indefinitely. 9ebd86c added the SIGTERM teardown
+ * to fix that leak for summoned agents; this gate keeps the leak fix
+ * for the path it was needed on (summoned) while restoring the prior
+ * harmless-no-op behavior for the user-owned path. */
 export function applyAutoRest(ctx: HandlerContext): void {
+  if (ctx.summoner_username === null) return;
   applyRestTeardown(ctx, {
     stamp_reason: "auto_rest_timeout",
     exit_reason: "auto_rest",
