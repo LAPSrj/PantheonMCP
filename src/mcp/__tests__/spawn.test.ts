@@ -671,6 +671,104 @@ test("split-pane: caller-explicit target.split overrides policy direction; focus
   expect(splitInv.args).toContain("focus-pane");
 });
 
+// --- new-tab-here mode: window-name asymmetry vs other modes ---
+
+test("summon new-tab-here from a human-launched caller renders -w 0 (current window)", async () => {
+  // Bug repro: pre-fix, the spawn handler unconditionally fell back to
+  // `summon-<persona>` as the windowName for `new-tab-here`, which wt
+  // renders as `wt.exe -w summon-<persona> new-tab ...`. WT's open-or-
+  // create semantics then spawned a fresh window with that name —
+  // exactly the wrong behavior; the semantic of new-tab-here is "land
+  // in the caller's current window." Fix: mode-gated default that
+  // falls back to "current" when the caller doesn't have a
+  // PANTHEON_WINDOW_NAME env (human-launched session).
+  ctx = createContext({
+    paths: ctx.paths,
+    session: ctx.session,
+    watchdog: ctx.watchdog,
+    parent_pid: ctx.parent_pid,
+    platform: ctx.platform,
+    spawn_executor: makeMockExecutor(() => mockStderr),
+    stderr_probe_ms: 5,
+    // WT_SESSION present (so wt adapter is detected), but no
+    // PANTHEON_WINDOW_NAME — this is a human-launched CC session.
+    spawn_env: { WT_SESSION: "test" } as NodeJS.ProcessEnv,
+  });
+  fixturePersona();
+  await call("summon", {
+    username: "moth-whistle",
+    target: { mode: "new-tab-here" },
+  });
+  const argv = recorder[0]!.args;
+  // First two args are `-w <window-arg>`. For "new-tab-here" without
+  // an explicit window override and without an inherited
+  // PANTHEON_WINDOW_NAME, the windowName resolves to "current" which
+  // the wt adapter maps to "0" (current window).
+  expect(argv[0]).toBe("-w");
+  expect(argv[1]).toBe("0");
+  // CRITICAL regression guard: NEVER fall back to `summon-<persona>`
+  // for new-tab-here. That was the bug.
+  expect(argv).not.toContain("summon-moth-whistle");
+});
+
+test("summon new-tab-here from a summoned caller inherits PANTHEON_WINDOW_NAME", async () => {
+  // When the caller is itself a summoned agent in a named window
+  // (e.g. `summon-righthand`), a `new-tab-here` summon from that
+  // caller should drop the new tab into the SAME named window — so
+  // the wt adapter argv must carry that name, not "0".
+  ctx = createContext({
+    paths: ctx.paths,
+    session: ctx.session,
+    watchdog: ctx.watchdog,
+    parent_pid: ctx.parent_pid,
+    platform: ctx.platform,
+    spawn_executor: makeMockExecutor(() => mockStderr),
+    stderr_probe_ms: 5,
+    spawn_env: {
+      WT_SESSION: "test",
+      PANTHEON_WINDOW_NAME: "summon-righthand",
+    } as NodeJS.ProcessEnv,
+  });
+  fixturePersona();
+  await call("summon", {
+    username: "moth-whistle",
+    target: { mode: "new-tab-here" },
+  });
+  const argv = recorder[0]!.args;
+  expect(argv[0]).toBe("-w");
+  expect(argv[1]).toBe("summon-righthand");
+  // Still must not derive from the SPAWNED persona; the caller's
+  // identity is the load-bearing signal.
+  expect(argv).not.toContain("summon-moth-whistle");
+});
+
+test("summon new-tab-here with caller-explicit target.window still wins", async () => {
+  // Regression guard: the mode-gated default must not override an
+  // explicit `target.window` from the caller — that field has always
+  // been the caller's escape hatch and remains authoritative.
+  ctx = createContext({
+    paths: ctx.paths,
+    session: ctx.session,
+    watchdog: ctx.watchdog,
+    parent_pid: ctx.parent_pid,
+    platform: ctx.platform,
+    spawn_executor: makeMockExecutor(() => mockStderr),
+    stderr_probe_ms: 5,
+    spawn_env: {
+      WT_SESSION: "test",
+      PANTHEON_WINDOW_NAME: "summon-righthand",
+    } as NodeJS.ProcessEnv,
+  });
+  fixturePersona();
+  await call("summon", {
+    username: "moth-whistle",
+    target: { mode: "new-tab-here", window: "my-explicit-window" },
+  });
+  const argv = recorder[0]!.args;
+  expect(argv[0]).toBe("-w");
+  expect(argv[1]).toBe("my-explicit-window");
+});
+
 test("summon: bare summon (no --prompt) STILL embeds the bootstrap so the agent logs into chat", async () => {
   fixturePersona();
   await call("summon", { username: "moth-whistle" });

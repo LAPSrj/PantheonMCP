@@ -177,7 +177,33 @@ export async function spawnPersona(
   });
   launchArgs.push(bootstrap);
   const tabTitle = `${persona.username}${persona.session_name ? ` (${persona.summon_count + 1})` : ""}`;
-  const windowName = target?.window ?? `summon-${persona.username}`;
+  // Window-name default is mode-dependent.
+  //
+  // For `new-window` / `new-tab-window` / `split-pane`, the persona-
+  // derived `summon-<persona>` is the right default — those modes
+  // create or reuse a NAMED window per persona so subsequent summons /
+  // split-pane targeting / remanifests of the same persona land in the
+  // same place.
+  //
+  // For `new-tab-here` the semantic is "land in the CALLER'S current
+  // window." Falling back to `summon-<persona>` here renders
+  // `wt.exe -w summon-<persona> new-tab ...` — WT's open-or-create
+  // semantics then spawn a fresh window with that name (no such window
+  // existed when the call originated from a human-launched session),
+  // which is the exact symptom Leandro hit. Inherit the caller's
+  // PANTHEON_WINDOW_NAME when the caller is itself a summoned agent in
+  // a named window; fall back to `"current"` (the wt adapter renders
+  // that as `-w 0`, i.e. "current window") for human-launched callers.
+  // Mirrors resolveRemanifestTarget's truth table for the same mode.
+  const mode = target?.mode ?? "new-tab-window";
+  const callerWindowName = ctx.spawn_env.PANTHEON_WINDOW_NAME;
+  const windowName =
+    target?.window ??
+    (mode === "new-tab-here"
+      ? callerWindowName && callerWindowName.length > 0
+        ? callerWindowName
+        : "current"
+      : `summon-${persona.username}`);
   // Predict the tab_index the new spawn will land on so the spawned
   // MCP server can record it for `exit`-time decrement.
   //
@@ -190,7 +216,7 @@ export async function spawnPersona(
   //   - new-tab modes → predictNextTabIndex (= current tabCount, the
   //     index wt will assign when it creates the new tab).
   // Best-effort either way; the user can close tabs externally.
-  const isSplitMode = (target?.mode ?? "") === "split-pane";
+  const isSplitMode = mode === "split-pane";
   let predictedTabIndex: number;
   if (target?.tab_index !== undefined) {
     predictedTabIndex = target.tab_index;
