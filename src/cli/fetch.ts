@@ -41,12 +41,9 @@ export async function runFetch(options: RunFetchOptions): Promise<number> {
 
   const receiver = lookupReceiver(db, parsed.agent_id);
   if (!receiver) {
-    stderr.write(
-      `pantheon-fetch: agent_id '${parsed.agent_id}' has no active presence row. ` +
-        `Did you 'login' first? Or did your presence heartbeat lapse?\n`,
-    );
+    writePresenceLapsedStderr(stderr, parsed.agent_id);
     db.close();
-    return EXIT_CODES.USER_ERROR;
+    return EXIT_CODES.PRESENCE_LAPSED;
   }
   if (parsed.mode_override) receiver.mode = parsed.mode_override;
   printBanner(receiver, stderr);
@@ -81,10 +78,7 @@ export async function runFetch(options: RunFetchOptions): Promise<number> {
     }
   } catch (err) {
     if (err instanceof SessionExpiredError) {
-      stderr.write(
-        `pantheon-fetch: ${err.message}\n` +
-          `Action: call \`login\` again, then re-spawn the watcher with the new agent_id.\n`,
-      );
+      writePresenceLapsedStderr(stderr, parsed.agent_id);
       db.close();
       process.off("SIGTERM", onSig);
       process.off("SIGINT", onSig);
@@ -181,6 +175,24 @@ Options:
 
 Reads ~/.pantheon/chat.db (PANTHEON_HOME-aware for test sandboxes).
 `,
+  );
+}
+
+/** Emit the unified `presence_lapsed` stderr message. The leading
+ * token (`pantheon-fetch: presence_lapsed agent_id=<id>`) is stable
+ * and parseable so callers (agent harnesses, shell wrappers) can
+ * detect the lapse deterministically without scraping prose. Used
+ * from both the startup-lookup-fail path and the mid-loop
+ * SessionExpiredError path so the two converge on a single contract. */
+function writePresenceLapsedStderr(
+  stderr: NodeJS.WritableStream,
+  agent_id: string,
+): void {
+  stderr.write(
+    `pantheon-fetch: presence_lapsed agent_id=${agent_id}\n` +
+      `Recovery: call mcp__pantheon__login({...}) with the same username/project. ` +
+      `Pantheon will issue a fresh agent_id; use the new Monitor command from ` +
+      `the response's \`note\` field. This watcher cannot resume.\n`,
   );
 }
 
