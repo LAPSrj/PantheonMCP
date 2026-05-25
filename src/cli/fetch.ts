@@ -88,7 +88,7 @@ export async function runFetch(options: RunFetchOptions): Promise<number> {
       db.close();
       process.off("SIGTERM", onSig);
       process.off("SIGINT", onSig);
-      return EXIT_CODES.DAEMON_NOT_RUNNING;
+      return EXIT_CODES.PRESENCE_LAPSED;
     }
     db.close();
     process.off("SIGTERM", onSig);
