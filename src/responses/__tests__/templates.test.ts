@@ -39,3 +39,23 @@ test("getResponseTemplate leaves unknown placeholders intact", () => {
   const out = getResponseTemplate("whoami-sole-match", { username: "x" });
   expect(out).toContain("{{cwd}}");
 });
+
+test("login-note carries the presence-lapsed recovery clause", () => {
+  // Self-documenting recovery: when an agent's Monitor exits 3
+  // (presence_lapsed), the login-note's recovery clause is the
+  // authoritative source of "what to do next." Keeping it here in the
+  // template means the guidance ships with pantheon — no separate
+  // CLAUDE.md or external doc needs to be kept in sync.
+  const out = getResponseTemplate("login-note", {
+    agent_id: "fake-id",
+    username: "vellumpike",
+    project: "p",
+    fetch_bin: "/x/bin",
+  });
+  expect(out).toContain("presence_lapsed");
+  expect(out).toContain("mcp__pantheon__login");
+  // Critical guard: agent must NOT call logout (would evict the
+  // session currently holding the canonical handle).
+  expect(out).toContain("DO NOT");
+  expect(out).toContain("logout");
+});
