@@ -72,9 +72,21 @@ export function upsertSubscriber(
 }
 
 /** Bump `last_heartbeat` only — no other fields change. Cheap; fires
- * every 5-10s from the MCP server's heartbeat scheduler. */
-export function heartbeat(db: Database, agent_id: string, now: number = Date.now()): void {
-  db.run("UPDATE subscribers SET last_heartbeat = ? WHERE agent_id = ?", [now, agent_id]);
+ * every 5-10s from the MCP server's heartbeat scheduler.
+ *
+ * Returns the number of rows updated (0 when the row has been pruned,
+ * 1 when the heartbeat landed). The caller uses the zero-rowcount
+ * signal to decide whether to self-heal via `upsertSubscriber` — see
+ * `ChatRouter.heartbeat`. */
+export function heartbeat(
+  db: Database,
+  agent_id: string,
+  now: number = Date.now(),
+): number {
+  return db.run("UPDATE subscribers SET last_heartbeat = ? WHERE agent_id = ?", [
+    now,
+    agent_id,
+  ]).changes;
 }
 
 /** Remove a subscriber row. Used on `logout`. */

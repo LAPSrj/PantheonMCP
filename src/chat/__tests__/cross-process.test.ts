@@ -50,6 +50,57 @@ test("router.heartbeat keeps a subscriber row live across the stale threshold", 
   expect(rows.map((s) => s.username)).toEqual(["vellumpike"]);
 });
 
+test("router.heartbeat self-heals when the row was pruned and no sibling holds the handle", () => {
+  // Scenario: this MCP process napped (computer sleep / long pause) past
+  // the prune grace; another live MCP's daemon-tick ran `pruneStale` and
+  // dropped our row. The in-memory subscriber map still has us; no one
+  // else has taken our canonical handle. When the heartbeat tick fires
+  // again it must re-insert the row so peers' `list_agents` / DM
+  // routing see us as live without forcing the agent to re-login.
+  const router = new ChatRouter({ paths, db: dbA });
+  const sub = router.add({ username: "vellumpike", project: "p", transient: false });
+
+  // Simulate the prune: drop the row directly from SQLite. Router's
+  // in-memory `subscribers` map is untouched.
+  dbA.run("DELETE FROM subscribers WHERE agent_id = ?", [sub.agent_id]);
+  expect(router.publicList()).toEqual([]);
+
+  router.heartbeat(sub.agent_id);
+
+  expect(router.publicList().map((s) => s.username)).toEqual(["vellumpike"]);
+});
+
+test("router.heartbeat does NOT self-heal when a sibling has taken the canonical handle", () => {
+  // Scenario: process A is `vellumpike` (agent_id X1). A's row gets
+  // pruned during a long lapse. While A was gone, sibling-incarnation
+  // B legitimately took the canonical `vellumpike` handle under a new
+  // agent_id X2. When A's heartbeat tick eventually fires, self-heal
+  // must SKIP — re-inserting A's row would duplicate `vellumpike` in
+  // SQLite. The agent's next `login` will auto-suffix correctly.
+  const routerA = new ChatRouter({ paths, db: dbA });
+  const routerB = new ChatRouter({ paths, db: dbB });
+
+  const subA = routerA.add({ username: "vellumpike", project: "p", transient: false });
+  // Prune A's row, then B takes the canonical name.
+  dbA.run("DELETE FROM subscribers WHERE agent_id = ?", [subA.agent_id]);
+  routerB.add({ username: "vellumpike", project: "p", transient: false });
+
+  // A's heartbeat fires. Self-heal must abstain.
+  routerA.heartbeat(subA.agent_id);
+
+  const rows = routerB.publicList();
+  expect(rows.length).toBe(1);
+  expect(rows[0]?.username).toBe("vellumpike");
+  // Only B's row exists; A's is still absent. Check SQLite directly
+  // since publicList collapses by username — the duplicate-row failure
+  // mode we're guarding against would show up as 2 SQLite rows.
+  const sqliteRows = dbA
+    .query("SELECT agent_id FROM subscribers WHERE username = ?")
+    .all("vellumpike") as Array<{ agent_id: string }>;
+  expect(sqliteRows.length).toBe(1);
+  expect(sqliteRows[0]?.agent_id).not.toBe(subA.agent_id);
+});
+
 test("logout removes the subscriber from the cross-process presence list", () => {
   const routerA = new ChatRouter({ paths, db: dbA });
   const routerB = new ChatRouter({ paths, db: dbB });

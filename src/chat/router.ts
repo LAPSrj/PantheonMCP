@@ -508,12 +508,37 @@ export class ChatRouter {
 
   /** Bump this subscriber's `last_heartbeat` in the SQLite presence
    * table. Called every 5-10s by the MCP server's heartbeat scheduler.
-   * No-op when no DB is wired (in-memory-only test routers). */
+   * No-op when no DB is wired (in-memory-only test routers).
+   *
+   * Self-heal: if the `UPDATE` matches zero rows, the row has been
+   * pruned (heartbeat lapsed past the prune grace — happens after a
+   * computer sleep, a network blip, or a daemon-tick that fired
+   * mid-gap from another live MCP). When no live peer holds our
+   * canonical handle, re-upsert from the in-memory subscriber. The
+   * watcher process (`pantheon-fetch`) still has to be restarted by
+   * the agent — but `list_agents`, DM routing, and `find_role`
+   * stop showing this session as dead the moment the heartbeat
+   * resumes. If a sibling-incarnation has already taken the canonical
+   * handle during the lapse, self-heal is skipped: re-inserting our
+   * row would produce a duplicate-username situation in SQLite and
+   * peers would race to route. In that case the agent's next `login`
+   * will auto-suffix legitimately. */
   heartbeat(agent_id: string): void {
     if (!this.db) return;
-    if (!this.subscribers.has(agent_id)) return;
+    const sub = this.subscribers.get(agent_id);
+    if (!sub) return;
     try {
-      presenceHeartbeat(this.db, agent_id, this.clock());
+      const changed = presenceHeartbeat(this.db, agent_id, this.clock());
+      if (changed === 0) {
+        const stolen = listActive(this.db, { now: this.clock() }).some(
+          (r) =>
+            r.agent_id !== agent_id &&
+            r.username.toLowerCase() === sub.username.toLowerCase(),
+        );
+        if (!stolen) {
+          upsertSubscriber(this.db, sub, this.clock());
+        }
+      }
     } catch {
       // best-effort
     }
