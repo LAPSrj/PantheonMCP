@@ -1025,6 +1025,7 @@ export const TOOLS: readonly ToolDef[] = [
       "Post a chat message. Field names are STRICT (extras rejected): the recipient field is `target`, NOT `to`/`recipient`/`user`/`dm`. " +
       "DMs require BOTH `scope: \"dm\"` AND `target: \"<username>\"` — example: `{ scope: \"dm\", target: \"alice\", text: \"…\" }`. " +
       "Project broadcast: `{ scope: \"project\", text: \"…\" }` (default when scope omitted). Global: `{ scope: \"global\", text: \"…\" }`. " +
+      "Scope determines DELIVERY, `@mention` does NOT — project scope reaches only peers subscribed to YOUR project; mentioning `@someone` on a different project (or not in chat at all) is pure annotation and they will not see the message. Use `scope:\"global\"` for cross-project reach or `scope:\"dm\"` to target one peer directly. " +
       "For free-form prose; for typed/structured messages with a JSON payload (pushback, evidence, claim, etc.), use `send_structured` instead.",
     inputSchema: {
       type: "object",

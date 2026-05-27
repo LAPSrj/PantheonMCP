@@ -74,6 +74,7 @@ type DMResolution =
 function resolveDMTarget(
   router: ReturnType<typeof requireRouter>,
   target: string,
+  paths: Parameters<Handler>[1]["paths"] | null,
 ): DMResolution {
   const online = router.onlineUsernames();
   if (online.has(target.toLowerCase())) return { kind: "ok" };
@@ -119,14 +120,44 @@ function resolveDMTarget(
     };
   }
 
-  // Doesn't look like an agent_id — treat as an unknown username.
+  // Doesn't look like an agent_id — treat as an unknown username and
+  // enrich the error with what we can learn about the name from the
+  // persona registry. A registered-but-offline persona is the
+  // informative case ("real handle, just not connected") and changes
+  // the caller's next move from "fix the typo" to "wait or fall back
+  // to global broadcast". (Case mismatch is already handled upstream:
+  // `onlineUsernames` lowercases both sides, so a case-mismatched
+  // live target resolves as `ok` before reaching here.)
+  let registered: { username: string } | null = null;
+  if (paths) {
+    try {
+      const persona = readPersona(paths, target);
+      if (persona) registered = { username: persona.username };
+    } catch {
+      // ignore — fall through to generic message
+    }
+  }
+  if (registered) {
+    return {
+      kind: "error",
+      code: "recipient_offline",
+      message:
+        `Cannot DM '${registered.username}' — registered persona but not currently in chat. ` +
+        `Pantheon has no offline-DM queue; the message was NOT persisted. Retry once they ` +
+        `connect (watch \`list_agents\`), or use \`scope:"global"\` to leave a public message ` +
+        `they'll see when they next come online.`,
+      extra: { target, registered: true },
+    };
+  }
   return {
     kind: "error",
     code: "recipient_offline",
     message:
-      `Cannot DM '${target}' — they are not currently in chat. Pantheon has no offline-DM queue; ` +
-      `the message was NOT persisted. Retry once they connect, or use scope='project'/'global' to broadcast.`,
-    extra: { target },
+      `Cannot DM '${target}' — not currently in chat and no registered persona by that name. ` +
+      `Pantheon has no offline-DM queue; the message was NOT persisted. Likely a typo or a ` +
+      `stale handle copied from old history — check \`list_agents\` for current usernames, ` +
+      `or use \`scope:"project"\`/\`"global"\` to broadcast.`,
+    extra: { target, registered: false },
   };
 }
 
@@ -136,9 +167,10 @@ function assertDMRecipient(
   router: ReturnType<typeof requireRouter>,
   scope: string,
   target: string | undefined,
+  paths: Parameters<Handler>[1]["paths"] | null,
 ): void {
   if (scope !== "dm" || !target) return;
-  const result = resolveDMTarget(router, target);
+  const result = resolveDMTarget(router, target, paths);
   if (result.kind === "error") {
     throw new ChatError(result.code, result.message, result.extra ?? {});
   }
@@ -169,18 +201,36 @@ function assertTargetScopeConsistent(
   }
 }
 
-/** Heuristic warning: a project-scope broadcast addressed to exactly
- * one peer via `@username` mention is almost always a misdirected DM.
- * Returns a warning string when triggered; null otherwise. Only
- * mentions matching a live username count (so "@bobby" who isn't in
- * chat doesn't trip the heuristic). Caller-decides — don't block. */
-function singleMentionWarning(
+/** Parse `@handle` mentions out of `text` and classify each one
+ * against the live (cross-process) subscriber set. The sender's own
+ * handle is dropped. Returns parallel buckets the warning helpers
+ * below consume — keeping the parse in one place so we don't re-walk
+ * the regex for each hint. */
+type MentionScan = {
+  /** Lowercased handle → the live subscriber's project, for mentions
+   * that match a live user OTHER than the sender. */
+  liveByProject: Map<string, string>;
+  /** Lowercased handles that look like a mention but don't match any
+   * live subscriber and aren't the sender. */
+  unknown: Set<string>;
+};
+
+function scanMentions(
   router: ReturnType<typeof requireRouter>,
   text: string,
   senderAgentId: string,
-): string | null {
-  const live = router.onlineUsernames();
-  const mentioned = new Set<string>();
+): MentionScan {
+  const liveByProject = new Map<string, string>();
+  const unknown = new Set<string>();
+  const self = router.getByAgentId(senderAgentId);
+  const selfHandle = self?.username.toLowerCase();
+  // Cross-process snapshot keyed by lowercased username → project.
+  // Iterate publicList() (no project filter) so we see every project's
+  // subscribers, not just the sender's.
+  const liveByHandle = new Map<string, string>();
+  for (const peer of router.publicList()) {
+    liveByHandle.set(peer.username.toLowerCase(), peer.project);
+  }
   // Conservative regex: `@<handle>` where handle starts with a letter
   // and contains only letters/digits/_-. Email addresses ("foo@bar")
   // are excluded by the leading word-boundary requirement.
@@ -188,21 +238,83 @@ function singleMentionWarning(
   let match: RegExpExecArray | null;
   while ((match = re.exec(text)) !== null) {
     const candidate = match[1]!.toLowerCase();
-    if (live.has(candidate)) {
-      // Exclude self-@-mention so a sender narrating their own work
-      // doesn't trip the heuristic.
-      const self = router.getByAgentId(senderAgentId);
-      if (self && self.username.toLowerCase() === candidate) continue;
-      mentioned.add(candidate);
-      if (mentioned.size > 1) return null; // 2+ → not a misdirected DM
+    if (selfHandle && candidate === selfHandle) continue;
+    const project = liveByHandle.get(candidate);
+    if (project !== undefined) {
+      liveByProject.set(candidate, project);
+    } else {
+      unknown.add(candidate);
     }
   }
-  if (mentioned.size !== 1) return null;
-  const handle = [...mentioned][0]!;
+  return { liveByProject, unknown };
+}
+
+/** Heuristic warning: a project-scope broadcast addressed to exactly
+ * one live peer via `@username` mention is almost always a misdirected
+ * DM. Caller-decides — don't block. */
+function singleMentionWarning(
+  scan: MentionScan,
+  senderProject: string,
+): string | null {
+  // Only consider mentions on the SAME project — cross-project mentions
+  // have their own dedicated warning that explains the routing issue.
+  const samePeers: string[] = [];
+  for (const [handle, project] of scan.liveByProject) {
+    if (project === senderProject) samePeers.push(handle);
+  }
+  if (samePeers.length !== 1) return null;
+  const handle = samePeers[0]!;
   return (
     `Heuristic: project broadcast addressed to exactly one peer (@${handle}). ` +
     `If you meant to reach only them, use \`scope:"dm", target:"${handle}"\`. ` +
     `Ignore if you intended public visibility.`
+  );
+}
+
+/** Warning when project-scope text @-mentions one or more live peers
+ * on a DIFFERENT project. Project broadcasts never cross projects, so
+ * those mentions are pure annotation — the peer won't see the message.
+ * Returns a single hint listing every cross-project handle + their
+ * actual project so the sender can pick the right scope to retry on. */
+function crossProjectMentionWarning(
+  scan: MentionScan,
+  senderProject: string,
+): string | null {
+  const crossings: Array<{ handle: string; project: string }> = [];
+  for (const [handle, project] of scan.liveByProject) {
+    if (project !== senderProject) crossings.push({ handle, project });
+  }
+  if (crossings.length === 0) return null;
+  const list = crossings
+    .map((c) => `@${c.handle} (project '${c.project}')`)
+    .join(", ");
+  const firstHandle = crossings[0]!.handle;
+  return (
+    `Cross-project mention: ${list} — they are NOT subscribed to project ` +
+    `'${senderProject}', so this broadcast won't reach them. Project scope ` +
+    `delivers ONLY to peers on the same project; @-mentions are annotation, ` +
+    `not routing. Use \`scope:"global"\` for cross-project reach, or ` +
+    `\`scope:"dm", target:"${firstHandle}"\` to DM one of them directly.`
+  );
+}
+
+/** Soft warning when a project-scope broadcast mentions exactly one
+ * `@handle` that doesn't match any live subscriber anywhere. Almost
+ * always either a typo or a DM intent against someone who's offline —
+ * the broadcast will be delivered to the project as written, but the
+ * mentioned peer won't be notified by name. Fires only on a single
+ * unknown mention so a passing reference like "ask @bobby when he's
+ * back, but @alice and @gamma should also know" doesn't trip it. */
+function unknownMentionWarning(scan: MentionScan): string | null {
+  // Don't double up with the cross-project / single-mention warnings.
+  if (scan.liveByProject.size > 0) return null;
+  if (scan.unknown.size !== 1) return null;
+  const handle = [...scan.unknown][0]!;
+  return (
+    `Heuristic: project broadcast mentions @${handle}, but no live subscriber ` +
+    `by that name is in chat. If you meant a DM, the recipient is currently ` +
+    `offline (pantheon has no offline-DM queue). If you meant a public ` +
+    `broadcast, check the handle spelling.`
   );
 }
 
@@ -754,7 +866,7 @@ export const send_message: Handler = async (args, ctx) => {
   // online (no offline-DM queue). Also catches the agent-id-as-target
   // confusion and surfaces an educational error instead of the
   // generic recipient_offline.
-  assertDMRecipient(router, scope, target);
+  assertDMRecipient(router, scope, target, ctx.paths);
   const msg = router.addMessage({
     from_agent_id: agentId,
     scope,
@@ -783,11 +895,16 @@ export const send_message: Handler = async (args, ctx) => {
     }
   }
   // Project-broadcast clarity warnings.
-  if (scope === "project") {
+  if (scope === "project" && me) {
     const empty = emptyProjectWarning(router, agentId);
     if (empty) hints.push(empty);
-    const singleMention = singleMentionWarning(router, text, agentId);
+    const scan = scanMentions(router, text, agentId);
+    const crossProject = crossProjectMentionWarning(scan, me.project);
+    if (crossProject) hints.push(crossProject);
+    const singleMention = singleMentionWarning(scan, me.project);
     if (singleMention) hints.push(singleMention);
+    const unknown = unknownMentionWarning(scan);
+    if (unknown) hints.push(unknown);
   }
   return {
     ok: true,
@@ -931,7 +1048,7 @@ export const send_structured: Handler = async (args, ctx) => {
   // silently persist a message the recipient will never see. Also
   // catches the agent-id-as-target confusion with an educational
   // error.
-  assertDMRecipient(router, scope, target);
+  assertDMRecipient(router, scope, target, ctx.paths);
 
   const msg = router.addMessage({
     from_agent_id: agentId,
@@ -946,10 +1063,18 @@ export const send_structured: Handler = async (args, ctx) => {
   });
   const hints: string[] = [];
   if (scope === "project") {
-    const empty = emptyProjectWarning(router, agentId);
-    if (empty) hints.push(empty);
-    const singleMention = singleMentionWarning(router, text, agentId);
-    if (singleMention) hints.push(singleMention);
+    const me = router.getByAgentId(agentId);
+    if (me) {
+      const empty = emptyProjectWarning(router, agentId);
+      if (empty) hints.push(empty);
+      const scan = scanMentions(router, text, agentId);
+      const crossProject = crossProjectMentionWarning(scan, me.project);
+      if (crossProject) hints.push(crossProject);
+      const singleMention = singleMentionWarning(scan, me.project);
+      if (singleMention) hints.push(singleMention);
+      const unknown = unknownMentionWarning(scan);
+      if (unknown) hints.push(unknown);
+    }
   }
   return {
     ok: true,
@@ -974,7 +1099,7 @@ export const ask: Handler = async (args, ctx) => {
   // caller learns the recipient isn't around without burning the
   // timeout budget. The resolver also catches agent-id-as-target
   // confusion and emits an educational error.
-  assertDMRecipient(router, "dm", target);
+  assertDMRecipient(router, "dm", target, ctx.paths);
   const result = await router.ask({
     from_agent_id: agentId,
     target_username: target,

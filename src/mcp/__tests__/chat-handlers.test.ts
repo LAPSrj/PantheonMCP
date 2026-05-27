@@ -731,6 +731,44 @@ test("send_message: DM with username-shape target that's not live → recipient_
   expect(r.payload.error).toBe("recipient_offline");
 });
 
+test("send_message: DM to a registered-but-offline persona → enriched recipient_offline", async () => {
+  const { createPersona } = await import("../../identity/registry.ts");
+  createPersona(ctx.paths, {
+    username: "righthandzero",
+    project: "Y",
+    cwd: "/tmp/righthand",
+    platform: "linux",
+    description: "remote peer",
+    expertise: [],
+    owns: [],
+  });
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const r = await call("send_message", {
+    text: "psst",
+    scope: "dm",
+    target: "righthandzero",
+  });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("recipient_offline");
+  const msg = r.payload.message as string;
+  expect(msg).toContain("registered persona but not currently in chat");
+  expect((r.payload as { registered?: boolean }).registered).toBe(true);
+});
+
+test("send_message: DM to an entirely-unknown handle → recipient_offline with registered:false", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const r = await call("send_message", {
+    text: "psst",
+    scope: "dm",
+    target: "ghosthand",
+  });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("recipient_offline");
+  const msg = r.payload.message as string;
+  expect(msg).toContain("no registered persona by that name");
+  expect((r.payload as { registered?: boolean }).registered).toBe(false);
+});
+
 // --- project-broadcast clarity warnings ---------------------------- //
 
 test("send_message: project broadcast with no peers surfaces an emptyProject warning", async () => {
@@ -820,6 +858,74 @@ test("send_message: DM scope does not trigger any project-broadcast warnings", a
   const hints = (r.payload.hints as string[] | undefined) ?? [];
   expect(hints.some((h) => h.includes("No other live subscribers"))).toBe(false);
   expect(hints.some((h) => h.includes("addressed to exactly one peer"))).toBe(false);
+});
+
+test("send_message: @mention of a live peer on a DIFFERENT project surfaces cross-project warning", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  // Local peer so the empty-project warning doesn't also fire — keeps
+  // the assertion focused on the cross-project hint.
+  ctx.chat!.add({ username: "delta", project: "X", transient: false });
+  ctx.chat!.add({ username: "righthand", project: "Y", transient: false });
+  const r = await call("send_message", {
+    text: "@righthand can you review?",
+    scope: "project",
+  });
+  expect(r.ok).toBe(true);
+  const hints = (r.payload.hints as string[] | undefined) ?? [];
+  expect(
+    hints.some(
+      (h) =>
+        h.includes("Cross-project mention") &&
+        h.includes("@righthand") &&
+        h.includes("project 'Y'") &&
+        h.includes("'X'"),
+    ),
+  ).toBe(true);
+  // Same-project single-mention warning should NOT fire — the only
+  // mention is on another project.
+  expect(hints.some((h) => h.includes("addressed to exactly one peer"))).toBe(false);
+});
+
+test("send_message: same-project @mention does NOT trigger cross-project warning", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  ctx.chat!.add({ username: "beta", project: "X", transient: false });
+  const r = await call("send_message", {
+    text: "@beta quick q",
+    scope: "project",
+  });
+  expect(r.ok).toBe(true);
+  const hints = (r.payload.hints as string[] | undefined) ?? [];
+  expect(hints.some((h) => h.includes("Cross-project mention"))).toBe(false);
+});
+
+test("send_message: single unknown @mention in project broadcast surfaces the unknown-handle hint", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  ctx.chat!.add({ username: "beta", project: "X", transient: false });
+  const r = await call("send_message", {
+    text: "@nobody have you seen the latest spec?",
+    scope: "project",
+  });
+  expect(r.ok).toBe(true);
+  const hints = (r.payload.hints as string[] | undefined) ?? [];
+  expect(
+    hints.some(
+      (h) => h.includes("@nobody") && h.includes("no live subscriber"),
+    ),
+  ).toBe(true);
+});
+
+test("send_message: unknown-handle hint is suppressed when any live mention exists", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  ctx.chat!.add({ username: "beta", project: "X", transient: false });
+  const r = await call("send_message", {
+    text: "@beta + @nobody — heads up",
+    scope: "project",
+  });
+  expect(r.ok).toBe(true);
+  const hints = (r.payload.hints as string[] | undefined) ?? [];
+  // Live mention drives the single-mention warning; unknown hint stays
+  // out of the way to avoid double-noise.
+  expect(hints.some((h) => h.includes("no live subscriber"))).toBe(false);
 });
 
 test("get_message: returns the full row by id", async () => {
