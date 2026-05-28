@@ -55,9 +55,10 @@ const BLOCK_SELF_EXIT_SCHEMA = {
     "Per-call: when true, the spawned agent CANNOT call `rest`, `exit`, or `logout` on itself — " +
     "those handlers return `self_exit_blocked` and require the caller (or any peer) to use " +
     "`force_rest` / `force_exit` to release the session. Default false. " +
-    "The watchdog `rest_timeout` still fires regardless (intentional safety valve so a dead " +
-    "supervisor can't pin a target forever). Use for long-running supervised agents, agents " +
-    "under audit, and phase-6 builders where the caller manages lifecycle.",
+    "Because a blocked agent has no self-exit path, its `rest_timeout` defaults to 3600s (60 min) " +
+    "rather than the usual \"never\" — an intentional safety valve so a dead supervisor can't pin a " +
+    "target forever. Pass `rest_timeout: \"never\"` explicitly to opt out. Use for long-running " +
+    "supervised agents, agents under audit, and phase-6 builders where the caller manages lifecycle.",
 } as const;
 
 const SPAWN_TARGET_SCHEMA = {
@@ -88,6 +89,8 @@ const SPAWN_TARGET_SCHEMA = {
 };
 
 const REST_TIMEOUT_SCHEMA = {
+  description:
+    "Per-summon auto-rest timeout. DEFAULT when omitted is \"never\" (auto-rest off — the summon runs until `exit()` or the user closes the tab); pass a number of seconds to opt into a finite idle timeout. Exception: a `block_self_exit` summon defaults to 3600s (60 min) instead of \"never\" — that agent has no self-exit path, so the timer is its safety valve against a dead supervisor.",
   oneOf: [
     {
       type: "number",

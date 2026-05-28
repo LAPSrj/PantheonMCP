@@ -151,6 +151,9 @@ function makeDefaultSpawner(ctx: HandlerContext): LibrarianSpawner {
       },
       ctx,
       persona,
+      // Librarian subagent is a fire-and-forget memory pass; don't
+      // boot-verify (it isn't a chat participant we retry).
+      { verify: false },
     );
   };
 }

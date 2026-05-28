@@ -20,13 +20,22 @@ two summons of the same persona get independent timers.
 
 | Value          | Meaning                                                |
 |----------------|--------------------------------------------------------|
-| `3600` (default) | Seconds. Minimum 3600 (60 min) per §14.              |
+| `"never"` (default) | Auto-rest off. **No timer is armed at all** — the summon runs until `exit()` or the user closes the tab. |
+| `3600`         | Seconds. Minimum 3600 (60 min) per §14.                |
 | `> 3600`       | Larger windows allowed; no upper bound.                |
-| `"never"`      | String literal disables auto-rest entirely. **No timer is armed at all** — not just a long timer. |
 
 `< 3600` is rejected (`rest_timeout_too_short`). `0`, `-1`, `null`,
-or any non-finite number is rejected (`rest_timeout_invalid`). Use
-the explicit `"never"` to disable.
+or any non-finite number is rejected (`rest_timeout_invalid`).
+
+**Default (since 2026-05-28): `"never"`.** A summon stays up
+indefinitely unless the summoner opts into a finite timeout by passing
+a number of seconds. The one exception is `block_self_exit: true`
+summons — those default to `3600` (60 min) instead, because a blocked
+agent has no self-exit path and the timer is its safety valve against a
+dead supervisor (pass `rest_timeout: "never"` to opt out). Manually
+started / hand-manifested sessions (no `PANTHEON_REST_TIMEOUT` env) also
+resolve to `"never"`, though `applyAutoRest` short-circuits them
+regardless — the user owns that tab.
 
 ## Reset triggers (§14)
 
@@ -112,10 +121,12 @@ The watchdog defends against this in `arm()`'s timer callback:
   `last_activity_at` to the wake instant and re-arm with jitter —
   do NOT call `onDeadline` this cycle.
 - The jittered rearm uses a uniform multiplier in `[0.9, 3.0]` over
-  the configured `rest_timeout`, clamped to the 3600s floor. With
-  the default 60-min timeout this spreads a cohort across roughly
+  the configured `rest_timeout`, clamped to the 3600s floor. For a
+  60-min timeout this spreads a cohort across roughly
   54-min-to-180-min, so even five agents waking at the same instant
-  have their next auto-rest deadlines >= ~1h apart.
+  have their next auto-rest deadlines >= ~1h apart. (Moot for the
+  `"never"` default — no timer is armed, so there is nothing to
+  thunder; this path only matters for summons given a finite timeout.)
 
 Both thresholds (`SLEEP_DETECT_MIN_LATENESS_MS`,
 `SLEEP_DETECT_LATENESS_FRACTION`, `SLEEP_WAKE_JITTER_DOWN`,
@@ -206,3 +217,19 @@ The `realScheduler` wraps `globalThis.setTimeout` for production.
   `hook-poller` watches the mtime and calls `Watchdog.touch(...)`
   on advance, giving plugin-mode the richer per-tool-use signal that
   vanilla MCP can't see.
+
+## Companion: summon boot-verification
+
+The watchdog catches an agent that goes *idle*. Its companion catches a
+summon that never *comes up* — an agent summoned but which never logs
+into chat / starts its watcher. This lives in `src/lifecycle/summons.ts`
+plus a sweep in the MCP server's daemon-tick, not in `src/watchdog/`,
+but it's the same family of concern.
+
+Each genuine summon records a `summons` row keyed by a per-summon nonce
+(`PANTHEON_SUMMON_ID`); the child confirms it at `login`; the summoner's
+30s tick re-spawns once (120s window) then marks `failed` and DMs the
+summoner a `summon_failed` system message. Hand-started / manually
+manifested sessions never go through `spawnPersona`, so they get no row
+and are never boot-checked. Full schema + lifecycle:
+[storage.md → Summon boot-verification](./storage.md#summon-boot-verification-summons-v8).

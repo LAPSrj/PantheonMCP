@@ -133,10 +133,12 @@ export const remanifest: Handler = async (args, ctx) => {
     // by virtue of falling through spawnPersona's cascade.
   };
 
-  const result = (await spawnPersona(spawnArgs, ctx, persona)) as Record<
-    string,
-    unknown
-  >;
+  // No boot-verification: this session self-evicts (below) the instant
+  // the new process is exec'd, so the summoner that would run the verify
+  // sweep is gone — a row would only ever leak until TTL prune.
+  const result = (await spawnPersona(spawnArgs, ctx, persona, {
+    verify: false,
+  })) as Record<string, unknown>;
 
   // Self-evict from chat the moment the NEW process has been exec'd.
   // Closes the canonical-handle reclaim race: pre-fix, NEW's `login`

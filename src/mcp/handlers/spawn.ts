@@ -29,6 +29,15 @@ import {
 import { buildSummonBootstrap } from "../../responses/bootstrap.ts";
 import { DEFAULT_REST_TIMEOUT_SECONDS } from "../../watchdog/index.ts";
 import {
+  writeSummon,
+  pendingSummonsForSummoner,
+  bumpSummonRetry,
+  markSummonFailed,
+  DEFAULT_BOOT_WINDOW_MS,
+  DEFAULT_MAX_SUMMON_RETRIES,
+  type SummonRecord,
+} from "../../lifecycle/index.ts";
+import {
   asBoolean,
   asNumber,
   asObject,
@@ -82,6 +91,20 @@ function enforceSameProject(ctx: HandlerContext, target: Persona): void {
   }
 }
 
+/** Options controlling summon boot-verification (§14 companion). */
+export interface SpawnPersonaOptions {
+  /** When false, no verification row is written and no
+   * PANTHEON_SUMMON_ID is injected — used for spawns whose child may
+   * not log into chat (dream subagents) or whose summoner exits right
+   * after spawning (remanifest), so a row would only ever leak. */
+  verify?: boolean;
+  /** Reuse an existing summon nonce instead of minting one, and skip
+   * the row INSERT — the verify-sweep sets this on a retry so the
+   * re-spawned child confirms the SAME row (it already bumped retries
+   * + reset the window). */
+  summonId?: string;
+}
+
 /** Exported so the CLI (`pantheon summon`) can call the same code
  * path the MCP `summon` handler uses. The args shape mirrors the
  * MCP tool's input — Record<string, unknown> with `prompt`,
@@ -90,7 +113,9 @@ export async function spawnPersona(
   args: Record<string, unknown>,
   ctx: HandlerContext,
   persona: Persona,
+  options: SpawnPersonaOptions = {},
 ): Promise<unknown> {
+  const verify = options.verify ?? true;
   const prompt = asString(args.prompt) ?? "";
   // Resume cascade: caller arg wins; otherwise honor `persona.mode`
   // ("resume" personas auto-resume on every summon, "fresh" personas
@@ -99,8 +124,14 @@ export async function spawnPersona(
   // `resume: true` every time.
   const resume = asBoolean(args.resume) ?? (persona.mode === "resume");
   const target = asObject(args.target) as SpawnTarget | undefined;
+  const blockSelfExit = asBoolean(args.block_self_exit) ?? false;
   const restTimeoutRaw = args.rest_timeout;
-  const restTimeout: number | "never" = parseRestTimeout(restTimeoutRaw);
+  // Default rest_timeout is "never" — summons run until `exit()` or the
+  // user closes the tab unless the summoner opts into a finite timeout.
+  // The sole exception is block_self_exit: those agents have no self-exit
+  // path, so they keep the 60-min safety valve (parseRestTimeout below)
+  // so a dead supervisor can't pin a target forever.
+  const restTimeout: number | "never" = parseRestTimeout(restTimeoutRaw, blockSelfExit);
 
   // Build the exec command from the persona profile.
   const launchCommand = persona.launch_command || "claude";
@@ -246,6 +277,39 @@ export async function spawnPersona(
     `pantheon-exit-${process.pid}-${crypto.randomUUID()}`,
   );
 
+  // Summon boot-verification (§14 companion). Mint (or reuse, on a
+  // retry) the per-summon nonce and record a pending row so the
+  // summoner's daemon-tick can verify the child logged into chat. The
+  // nonce rides into the child as PANTHEON_SUMMON_ID; the child's first
+  // `login` confirms the row by that nonce — attribution that survives
+  // auto-suffixing / sibling churn / remanifest (none carry the nonce).
+  // Skipped when `verify: false` (dream subagent may not chat-login;
+  // remanifest's summoner exits) or when no chat db is wired (can't
+  // verify presence anyway).
+  const chatDbForSummon = verify ? (ctx.chat?.chatDb() ?? null) : null;
+  let summonId: string | undefined;
+  if (chatDbForSummon) {
+    summonId = options.summonId ?? crypto.randomUUID();
+    if (!options.summonId) {
+      // Fresh summon — INSERT the pending row. Retries reuse the row
+      // the sweep already bumped, so they skip the write.
+      try {
+        writeSummon(chatDbForSummon, {
+          id: summonId,
+          summoner_agent_id: ctx.chat_agent_id ?? null,
+          target_username: persona.username,
+          target_project: persona.project,
+          spawn_args_json: JSON.stringify(args),
+        });
+      } catch {
+        // best-effort — a verification-row failure must never block the
+        // actual spawn. Lose the row → no boot-check, but the agent
+        // still gets summoned.
+        summonId = undefined;
+      }
+    }
+  }
+
   const execEnv: Record<string, string> = {
     PANTHEON_SUMMONED: "1",
     PANTHEON_USERNAME: persona.username,
@@ -259,6 +323,7 @@ export async function spawnPersona(
     PANTHEON_WINDOW_NAME: windowName,
     PANTHEON_TAB_INDEX: String(predictedTabIndex),
     PANTHEON_EXIT_SENTINEL: exitSentinelPath,
+    ...(summonId ? { PANTHEON_SUMMON_ID: summonId } : {}),
   };
   // Color export so the spawned MCP can echo it via session_info.
   if (persona.color) execEnv.PANTHEON_COLOR = persona.color;
@@ -268,7 +333,7 @@ export async function spawnPersona(
   // firing, or (b) any peer calling `force_rest` / `force_exit`
   // (which writes a rest_requests row that the spawned process's
   // prune tick consumes). Default off.
-  if (asBoolean(args.block_self_exit)) execEnv.PANTHEON_BLOCK_SELF_EXIT = "1";
+  if (blockSelfExit) execEnv.PANTHEON_BLOCK_SELF_EXIT = "1";
   // Remanifest: when the OLD session is spawning the NEW one, set the
   // old's chat agent_id so the new's first successful login writes a
   // rest_requests(exit) row addressed to the old. The old's prune-tick
@@ -429,10 +494,122 @@ export async function spawnPersona(
   };
 }
 
-function parseRestTimeout(raw: unknown): number | "never" {
+/** Summon boot-verification sweep (§14 companion). Runs on the
+ * summoner's 30s daemon-tick. For each of THIS summoner's pending
+ * summons whose boot window has elapsed without a chat login:
+ *   - retries < max  → re-spawn once, reusing the same nonce (the
+ *     re-spawned child confirms the same row on its login).
+ *   - retries == max → mark `failed` and DM the summoner.
+ *
+ * Scoped to the summoner's own agent_id so two live summoners never
+ * both retry the same row (v1). A confirmed agent clears its row at
+ * login, so it never reaches the window check here.
+ *
+ * Best-effort throughout: a failure verifying one row must not stop
+ * the others or crash the tick. */
+export async function sweepSummonVerifications(
+  ctx: HandlerContext,
+  opts: { now?: number; boot_window_ms?: number; max_retries?: number } = {},
+): Promise<void> {
+  const db = ctx.chat?.chatDb();
+  if (!db) return;
+  const summonerAgentId = ctx.chat_agent_id;
+  if (!summonerAgentId) return;
+
+  const now = opts.now ?? Date.now();
+  const window = opts.boot_window_ms ?? DEFAULT_BOOT_WINDOW_MS;
+  const maxRetries = opts.max_retries ?? DEFAULT_MAX_SUMMON_RETRIES;
+
+  const pending = pendingSummonsForSummoner(db, summonerAgentId);
+  for (const row of pending) {
+    if (now - row.spawned_at < window) continue; // still inside the window
+
+    if (row.retries >= maxRetries) {
+      markSummonFailed(db, row.id);
+      notifySummonFailed(
+        ctx,
+        row,
+        `did not log into chat within ${Math.round(window / 1000)}s ` +
+          `across ${row.retries + 1} attempt(s)`,
+      );
+      continue;
+    }
+
+    // Re-spawn. Re-resolve the persona fresh (it may have changed since
+    // the original summon) and replay the original args verbatim.
+    const persona = readPersona(ctx.paths, row.target_username);
+    if (!persona) {
+      markSummonFailed(db, row.id);
+      notifySummonFailed(ctx, row, "target persona is no longer registered");
+      continue;
+    }
+
+    let replayArgs: Record<string, unknown> = { username: row.target_username };
+    if (row.spawn_args_json) {
+      try {
+        replayArgs = JSON.parse(row.spawn_args_json) as Record<string, unknown>;
+      } catch {
+        // Corrupt args — fall back to a bare re-summon by username.
+      }
+    }
+
+    bumpSummonRetry(db, row.id, now);
+    try {
+      await spawnPersona(replayArgs, ctx, persona, { summonId: row.id });
+    } catch (err) {
+      // The re-spawn itself failed (launcher error). No point waiting
+      // another window for a spawn that never launched — fail now.
+      markSummonFailed(db, row.id);
+      notifySummonFailed(
+        ctx,
+        row,
+        `re-spawn failed: ${(err as Error).message}`,
+      );
+    }
+  }
+}
+
+/** DM the summoner a visible (non-silent) `summon_failed` system
+ * message. Best-effort. */
+function notifySummonFailed(
+  ctx: HandlerContext,
+  row: SummonRecord,
+  reason: string,
+): void {
+  const router = ctx.chat;
+  const summonerAgentId = ctx.chat_agent_id;
+  if (!router || !summonerAgentId) return;
+  const me = router.getByAgentId(summonerAgentId);
+  if (!me) return;
+  try {
+    router.addMessage({
+      from_agent_id: "system",
+      scope: "dm",
+      target: me.username,
+      text:
+        `Summon of '${row.target_username}' (${row.target_project}) ${reason}. ` +
+        `No further auto-retry — re-summon manually if still needed.`,
+      system: true,
+      system_kind: "summon_failed",
+    });
+  } catch {
+    // best-effort — never let a notification failure crash the sweep
+  }
+}
+
+function parseRestTimeout(
+  raw: unknown,
+  blockSelfExitDefault = false,
+): number | "never" {
   if (raw === "never") return "never";
   const n = asNumber(raw);
-  if (n === undefined) return DEFAULT_REST_TIMEOUT_SECONDS;
+  if (n === undefined) {
+    // No explicit rest_timeout: default to "never" (auto-rest off) so a
+    // summon stays up until `exit()` / tab close. Exception: a
+    // block_self_exit agent has no self-exit path, so it retains the
+    // 60-min safety valve to guard against a dead supervisor.
+    return blockSelfExitDefault ? DEFAULT_REST_TIMEOUT_SECONDS : "never";
+  }
   return n;
 }
 

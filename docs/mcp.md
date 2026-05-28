@@ -88,7 +88,8 @@ with `isError: true` so MCP clients see them as errors, not as silent
   `conjure_any`: `{ mode, window, tab_index, split, color, strict,
   escape_tmux }` — per §5.
 - **`rest_timeout` kwarg** on the same family: `number` (≥3600) or
-  the string `"never"`.
+  the string `"never"`. Default when omitted is `"never"` (auto-rest
+  off); `block_self_exit` summons default to `3600` as a safety valve.
 - **`transient: boolean`** + **`promote: { project, description,
   expertise, owns, cwd? }`** on `login` — per §10 promote-in-place.
 - **`claim_after: boolean`** on `register` — defaults `false` per
@@ -193,9 +194,11 @@ which:
 
 1. Reads `PANTHEON_SUMMONER` env to populate `summoner_username`.
 2. Builds the runtime `HandlerContext` via `createContext`.
-3. Arms the watchdog with `DEFAULT_REST_TIMEOUT_SECONDS` (3600). A
-   later `summon` will replace this when the launcher passes a
-   per-summon `rest_timeout` via env.
+3. Arms the watchdog from `PANTHEON_REST_TIMEOUT` env, or `"never"`
+   when the env is absent (hand-started / manually-manifested session).
+   A `summon` always sets the env explicitly, so the spawned process
+   picks up the per-summon `rest_timeout` (default `"never"`, or `3600`
+   for `block_self_exit`).
 4. Registers `ListToolsRequestSchema` → `TOOLS`.
 5. Registers `CallToolRequestSchema` → touches watchdog, calls
    `dispatch(name, args, ctx)`.
@@ -262,7 +265,7 @@ parity, plus the new fields:
   "color": "purple",
   "resolved_mode": "split-pane",
   "adapter": "wt",
-  "rest_timeout": 3600,
+  "rest_timeout": "never",
   "note": "split-pane requested; downgraded to new-tab-window."
 }
 ```

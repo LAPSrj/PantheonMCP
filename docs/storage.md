@@ -180,7 +180,7 @@ INSERT INTO schema_version (version) VALUES (1);
 | `from_transient`        | `1` when sender was a guest at send time.        |
 | `from_username_inline`  | Guest sender's handle stored inline; persona senders resolve via registry. |
 | `text`                  | Message body.                                    |
-| `kind`                  | `system_kind` ("keepalive" / "promotion" / "handle_recycled" / "profile_update" / etc.). NULL for normal user messages. |
+| `kind`                  | `system_kind` ("keepalive" / "promotion" / "handle_recycled" / "profile_update" / "summon_failed" / etc.). NULL for normal user messages. |
 | `reply_to`              | Optional message id this replies to.             |
 | `correlation_id`        | `ask_id` for ask/answer correlation.             |
 | `mentions`              | Joined table — `@user` parses recorded per row.  |
@@ -193,7 +193,57 @@ migration inside a transaction and inserting a new row on success.
 Adding a v2 migration: define `MIGRATIONS[2]` in `src/storage/sqlite.ts`
 and bump `CURRENT_SCHEMA_VERSION`. Migrations must be idempotent under
 the assumption they only ever run once (the `schema_version` insert
-guarantees that).
+guarantees that). Current head is **v8**; v6 added `rest_requests`, v7
+`schemas`, v8 `summons`.
+
+### Summon boot-verification (`summons`, v8)
+
+A first-class lifecycle record for verifying a summon actually came up —
+the SQLite-native analogue of the per-spawn `PANTHEON_EXIT_SENTINEL`
+nonce, and the §14-watchdog companion. Mirrors the `rest_requests`
+writer / sweep / TTL-prune shape (`src/lifecycle/summons.ts`).
+
+```
+CREATE TABLE summons (
+  id TEXT PRIMARY KEY,            -- per-summon nonce; injected as PANTHEON_SUMMON_ID
+  summoner_agent_id TEXT,         -- owns the verify sweep (NULL for CLI/human summons)
+  target_username TEXT NOT NULL,
+  target_project TEXT NOT NULL,
+  spawn_args_json TEXT,           -- verbatim summon args, replayed on retry
+  spawned_at INTEGER NOT NULL,    -- last (re)spawn; boot window measured from here
+  confirmed_at INTEGER,           -- set when the child logs in carrying id
+  confirmed_agent_id TEXT,        -- the child's chat agent_id (summoner<->agent link)
+  retries INTEGER NOT NULL DEFAULT 0,
+  state TEXT NOT NULL DEFAULT 'pending'   -- pending | confirmed | failed
+    CHECK (state IN ('pending','confirmed','failed')),
+  created_at INTEGER NOT NULL
+);
+```
+
+Lifecycle:
+
+1. **Write** — `spawnPersona` inserts a `pending` row and injects the
+   nonce as `PANTHEON_SUMMON_ID`. Skipped for `verify: false` spawns
+   (dream subagents, remanifest — the summoner exits) and when no chat
+   db is wired.
+2. **Confirm** — the child's first `login` runs
+   `confirmSummon(db, PANTHEON_SUMMON_ID, agent_id)`. Keyed on the
+   **nonce**, not the username, so it's correct under auto-suffixing
+   (`vellumpike` → `vellumpike2`), already-online siblings, and
+   concurrent remanifests — none of which carry the nonce. Idempotent.
+3. **Verify sweep** — the summoner's 30s daemon-tick
+   (`sweepSummonVerifications`) checks its own `pending` rows past the
+   120s boot window: `retries < 1` → re-spawn reusing the same nonce;
+   else → `failed` + a `summon_failed` system DM to the summoner.
+4. **TTL prune** — `pruneStaleSummons` drops rows whose `spawned_at` is
+   older than 10 min (terminal audit rows, or `pending` rows whose
+   summoner died before the window). Active-verification rows keep a
+   fresh `spawned_at`, so they survive.
+
+v1 scopes the sweep to the summoner's own `agent_id` (no central daemon
+to own all rows). When the dedicated daemon lands the sweep widens to
+every row with no schema change — the "summoner died before the window"
+gap closes for free.
 
 ### Hand-editing chat history
 

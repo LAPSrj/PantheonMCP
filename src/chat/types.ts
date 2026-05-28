@@ -12,7 +12,8 @@ export type SystemKind =
   | "keepalive"
   | "promotion"
   | "handle_recycled"
-  | "profile_update";
+  | "profile_update"
+  | "summon_failed";
 
 export interface Subscriber {
   /** Stable agent_id assigned by the router on `login`. */

@@ -355,7 +355,7 @@ Flags:
   --target-tab-index <n>        0-based tab index to focus before split-pane
   --target-strict               Error on unsupported capability instead of downgrading
   --target-escape-tmux          From inside tmux, dispatch to the host terminal adapter
-  --rest-timeout <secs|never>   Per-summon auto-rest deadline (≥60s; default 3600)
+  --rest-timeout <secs|never>   Per-summon auto-rest deadline (≥3600s or 'never'; default 'never', block_self_exit summons default 3600)
   --resume                      Use the persona's saved resume_session_id (if any)
   --prompt <text>               Runtime prompt forwarded to the spawned agent
   --channels <plugin:name@mkt>  Forward as --channels to claude (repeatable; overrides persona.channels)

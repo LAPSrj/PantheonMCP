@@ -5,7 +5,7 @@ import fs from "node:fs";
 /** Bumped when the schema changes. Each `vN` migration runs once and is
  * recorded in `schema_version`. Migrations are idempotent: re-opening an
  * up-to-date DB applies nothing. */
-export const CURRENT_SCHEMA_VERSION = 7;
+export const CURRENT_SCHEMA_VERSION = 8;
 
 /** Migrations indexed by the version they bring the schema to. So
  * `MIGRATIONS[1]` brings a fresh DB from version 0 to version 1. */
@@ -151,6 +151,50 @@ const MIGRATIONS: Record<number, (db: Database) => void> = {
         PRIMARY KEY (project, schema_id)
       );
       CREATE INDEX idx_schemas_project ON schemas(project);
+    `);
+  },
+  8: (db) => {
+    // Summon boot-verification (§14 watchdog companion). Each summon is
+    // a first-class lifecycle record — the SQLite-native analogue of the
+    // PANTHEON_EXIT_SENTINEL nonce, mirroring the rest_requests pattern
+    // (writer / sweep / TTL-prune).
+    //
+    // `id` is the per-summon nonce, injected into the child as
+    // PANTHEON_SUMMON_ID. The child's first `login` stamps confirmed_at
+    // + confirmed_agent_id by THAT id, so attribution is instance-level:
+    // it survives auto-suffixing (vellumpike -> vellumpike2 -> renamed
+    // back), already-online siblings, and concurrent remanifests — none
+    // of which carry the nonce. A username/glob match cannot do this.
+    //
+    // The summoner's 30s daemon-tick verifies its OWN pending rows
+    // (summoner_agent_id) past the boot window: re-spawns once (reusing
+    // the same nonce, bumping retries), then marks `failed` and DMs the
+    // summoner. Hand-started / manually-manifested sessions never go
+    // through spawnPersona, so they get no row and are never checked.
+    //
+    // `spawn_args_json` is the verbatim summon args, replayed on retry
+    // so the re-spawn is faithful (same prompt/target/model/etc).
+    //
+    // Rows outlive the agent's presence (subscribers rows are deleted on
+    // logout) — retry state + the summoner<->agent link need a longer
+    // life than presence. TTL-pruned once terminal + aged.
+    db.exec(`
+      CREATE TABLE summons (
+        id TEXT PRIMARY KEY,
+        summoner_agent_id TEXT,
+        target_username TEXT NOT NULL,
+        target_project TEXT NOT NULL,
+        spawn_args_json TEXT,
+        spawned_at INTEGER NOT NULL,
+        confirmed_at INTEGER,
+        confirmed_agent_id TEXT,
+        retries INTEGER NOT NULL DEFAULT 0,
+        state TEXT NOT NULL DEFAULT 'pending'
+          CHECK (state IN ('pending','confirmed','failed')),
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX idx_summons_summoner ON summons(summoner_agent_id);
+      CREATE INDEX idx_summons_state ON summons(state);
     `);
   },
 };

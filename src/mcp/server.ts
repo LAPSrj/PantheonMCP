@@ -8,11 +8,12 @@ import {
 import { DEFAULT_REST_TIMEOUT_SECONDS } from "../watchdog/index.ts";
 import { transitionClaim } from "../identity/index.ts";
 import { ChatRouter, pruneStale } from "../chat/index.ts";
-import { pruneStaleRestRequests } from "../lifecycle/index.ts";
+import { pruneStaleRestRequests, pruneStaleSummons } from "../lifecycle/index.ts";
 import {
   applyAutoRest,
   consumeForceLifecycleRequests,
 } from "./handlers/lifecycle.ts";
+import { sweepSummonVerifications } from "./handlers/spawn.ts";
 import { expireEntries } from "../memory/index.ts";
 import { openChatDb, resolvePaths } from "../storage/index.ts";
 import { importLegacySchemas } from "../schemas/index.ts";
@@ -143,7 +144,8 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
 
   // Arm the watchdog with the per-summon rest_timeout if our spawner
   // set PANTHEON_REST_TIMEOUT (the env contract from §14 / spawn handler);
-  // otherwise the 60-min default per §14.
+  // otherwise "never" (auto-rest off by default — the summoner opts into
+  // a finite timeout).
   //
   // applyAutoRest handles the full teardown for SUMMONED sessions:
   // state flip, stampRested (with claude_session_id for `summon
@@ -285,7 +287,23 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
       } catch {
         // best-effort
       }
+      // Summon-verification TTL: drop terminal + abandoned summons rows
+      // (confirmed/failed past retention, or pending rows whose summoner
+      // died before the boot window). Active-verification rows keep a
+      // fresh spawned_at, so they survive.
+      try {
+        pruneStaleSummons(chatDb);
+      } catch {
+        // best-effort
+      }
     }
+    // Summon boot-verification sweep: re-spawn (or fail + notify) THIS
+    // summoner's summons that never logged into chat within the window.
+    // Async (a retry re-runs the launcher); fire-and-forget so the tick
+    // stays synchronous, errors swallowed so one bad row can't crash it.
+    sweepSummonVerifications(ctx).catch(() => {
+      // best-effort
+    });
     // Force-rest / force-exit consumer: claim any pending requests
     // addressed to this session's chat agent_id. When kind=rest the
     // session transitions to resting + persona is stamped; when
@@ -493,7 +511,13 @@ function teardownChannelSubscription(agent_id: string | null): void {
 
 function readRestTimeoutFromEnv(): number | "never" {
   const raw = process.env.PANTHEON_REST_TIMEOUT;
-  if (!raw) return DEFAULT_REST_TIMEOUT_SECONDS;
+  // Env absent → no spawner set a timeout. Default "never" (auto-rest
+  // off). Summons always set PANTHEON_REST_TIMEOUT explicitly (the spawn
+  // handler resolves the per-summon default, including the block_self_exit
+  // safety valve), so this branch is the hand-started / manually-manifested
+  // case — which applyAutoRest short-circuits anyway. "never" just avoids
+  // arming a no-op timer.
+  if (!raw) return "never";
   if (raw === "never") return "never";
   const n = Number(raw);
   if (!Number.isFinite(n) || n < DEFAULT_REST_TIMEOUT_SECONDS) {

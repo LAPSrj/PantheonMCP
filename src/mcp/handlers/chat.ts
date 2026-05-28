@@ -6,7 +6,7 @@ import {
   type ChatErrorCode,
   type PromoteFields,
 } from "../../chat/index.ts";
-import { writeRestRequest } from "../../lifecycle/index.ts";
+import { writeRestRequest, confirmSummon } from "../../lifecycle/index.ts";
 import {
   getSchema as getRegisteredSchema,
   validatePayload,
@@ -606,6 +606,23 @@ export const login: Handler = async (args, ctx) => {
   // chat handlers (send_message, ask, set_mode, …) can resolve it
   // without re-authenticating.
   ctx.setChatAgentId(subscriber.agent_id);
+
+  // Summon boot-verification (§14 companion): if this process was
+  // spawned by a summon, confirm the matching summons row by its nonce
+  // so the summoner's verify-sweep sees the agent came up. Keyed on the
+  // PANTHEON_SUMMON_ID env (not the username), so it's correct even
+  // when this login auto-suffixed to a sibling handle. Idempotent — a
+  // presence-lapse re-login won't churn an already-confirmed row.
+  // Best-effort: a confirm failure must never break login.
+  const summonId = ctx.spawn_env.PANTHEON_SUMMON_ID;
+  if (summonId) {
+    try {
+      const db = router.chatDb();
+      if (db) confirmSummon(db, summonId, subscriber.agent_id);
+    } catch {
+      // best-effort
+    }
+  }
 
   // Tombstone reclaim broadcast (§10 / §11c).
   router.consumeTombstoneAndBroadcast(username, subscriber.agent_id);

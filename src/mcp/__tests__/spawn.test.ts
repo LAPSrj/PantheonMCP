@@ -119,7 +119,8 @@ test("summon: composes registry → plan → spawn → recordSpawn → stamps", 
   expect(finalArg).toContain("do the thing");
   expect(call0.env?.PANTHEON_SUMMONED).toBe("1");
   expect(call0.env?.PANTHEON_USERNAME).toBe("moth-whistle");
-  expect(call0.env?.PANTHEON_REST_TIMEOUT).toBe("3600");
+  // Default rest_timeout is "never" (auto-rest off) when omitted.
+  expect(call0.env?.PANTHEON_REST_TIMEOUT).toBe("never");
   // Per-spawn graceful-exit sentinel: path under tmpdir, unique per
   // spawn, consumed by makeRealExitScheduler + the wt bash wrapper.
   expect(call0.env?.PANTHEON_EXIT_SENTINEL).toMatch(/pantheon-exit-\d+-/);
@@ -228,6 +229,36 @@ test("summon: explicit resume:false beats persona.mode === 'resume'", async () =
 test("summon: rest_timeout 'never' propagates via PANTHEON_REST_TIMEOUT env", async () => {
   fixturePersona();
   await call("summon", { username: "moth-whistle", rest_timeout: "never" });
+  expect(recorder[0]!.env?.PANTHEON_REST_TIMEOUT).toBe("never");
+});
+
+test("summon: omitted rest_timeout defaults to 'never'", async () => {
+  fixturePersona();
+  await call("summon", { username: "moth-whistle" });
+  expect(recorder[0]!.env?.PANTHEON_REST_TIMEOUT).toBe("never");
+});
+
+test("summon: explicit numeric rest_timeout still propagates verbatim", async () => {
+  fixturePersona();
+  await call("summon", { username: "moth-whistle", rest_timeout: 7200 });
+  expect(recorder[0]!.env?.PANTHEON_REST_TIMEOUT).toBe("7200");
+});
+
+test("summon: block_self_exit keeps the 60-min safety-valve default when rest_timeout omitted", async () => {
+  fixturePersona();
+  await call("summon", { username: "moth-whistle", block_self_exit: true });
+  // A blocked agent has no self-exit path, so it retains a finite timer
+  // instead of inheriting the general "never" default.
+  expect(recorder[0]!.env?.PANTHEON_REST_TIMEOUT).toBe("3600");
+});
+
+test("summon: block_self_exit with explicit rest_timeout 'never' opts out of the valve", async () => {
+  fixturePersona();
+  await call("summon", {
+    username: "moth-whistle",
+    block_self_exit: true,
+    rest_timeout: "never",
+  });
   expect(recorder[0]!.env?.PANTHEON_REST_TIMEOUT).toBe("never");
 });
 
