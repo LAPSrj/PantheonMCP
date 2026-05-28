@@ -49,7 +49,7 @@ src/mcp/
 | `get_memory_details` | yes | Returns ONLY `details` field. |
 | `allow_rest` | yes | Authorizes rest in non-summoned sessions. |
 | `rest` | yes | Calls `transitionRestEnter` + `stampRested("auto_rest_timeout"…)`. |
-| `extend_rest` | yes | Rearms watchdog with `minutes * 60`s (≥3600). |
+| `extend_rest` | yes | Rearms watchdog with `minutes * 60`s (≥3600). Pass `minutes: "never"` to disarm the timer entirely. |
 | `exit` | yes | Schedules SIGTERM via context's `scheduleExit`. |
 | `allow_idle` | deprecated | Alias → `allow_rest`. Surfaces `deprecation` field. |
 | `idle` | deprecated | Alias → `rest`. |

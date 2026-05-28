@@ -591,6 +591,46 @@ test("extend_rest reasons about minimum 60min and rearms watchdog", async () => 
   expect(ok.payload.rest_timeout_seconds).toBe(5400);
 });
 
+test("extend_rest with minutes:'never' disarms the watchdog", async () => {
+  await call("register", {
+    username: "vellumpike",
+    project: "pantheon",
+    cwd: "/work",
+    claim_after: true,
+  });
+  ctx.watchdog.register({
+    session: ctx.session,
+    rest_timeout: 3600,
+    onDeadline: () => {},
+  });
+
+  const r = await call("extend_rest", { minutes: "never" });
+  expect(r.ok).toBe(true);
+  expect(r.payload.rest_timeout).toBe("never");
+  expect(r.payload.rest_timeout_seconds).toBeUndefined();
+  const state = ctx.watchdog.inspect(ctx.session.id);
+  expect(state?.rest_timeout).toBe("never");
+  expect(state?.scheduled_for).toBeNull();
+});
+
+test("extend_rest rejects other string values", async () => {
+  await call("register", {
+    username: "vellumpike",
+    project: "pantheon",
+    cwd: "/work",
+    claim_after: true,
+  });
+  ctx.watchdog.register({
+    session: ctx.session,
+    rest_timeout: 3600,
+    onDeadline: () => {},
+  });
+
+  const r = await call("extend_rest", { minutes: "forever" });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("invalid_argument");
+});
+
 test("legacy idle aliases delegate and surface a deprecation note", async () => {
   await call("register", {
     username: "vellumpike",

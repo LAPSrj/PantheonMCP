@@ -839,12 +839,21 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "extend_rest",
     description:
-      "Push the auto-rest deadline further out. Replaces summon-mcp's `extend_idle`. `minutes` minimum is 60 (per §14 minimum rest_timeout).",
+      "Push the auto-rest deadline further out, OR disarm auto-rest entirely. Replaces summon-mcp's `extend_idle`. Pass `minutes: <number>` to rearm the watchdog (minimum 60 per §14 minimum rest_timeout). Pass `minutes: \"never\"` to disable the auto-rest timer on this session — use sparingly, only when the agent legitimately needs to stand by indefinitely (e.g. a liaison waiting on cross-project DMs). The session can still be ended via `rest`, `exit`, force_rest, or force_exit; only the idle-deadline auto-fire goes away.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
       required: ["minutes"],
-      properties: { minutes: { type: "number" } },
+      properties: {
+        minutes: {
+          oneOf: [
+            { type: "number", minimum: 60 },
+            { type: "string", enum: ["never"] },
+          ],
+          description:
+            "Minutes to push the deadline (≥60), or the literal string \"never\" to disable the auto-rest timer entirely.",
+        },
+      },
     },
   },
   {

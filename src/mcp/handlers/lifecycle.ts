@@ -224,9 +224,33 @@ export const rest: Handler = async (args, ctx) => {
 };
 
 export const extend_rest: Handler = async (args, ctx) => {
-  const minutes = asNumber(args.minutes);
+  // Accept either `minutes` (positive number, ≥60 floor) or the literal
+  // `"never"` sentinel — the watchdog supports both natively, so an
+  // agent who needs to stand by indefinitely (e.g. a liaison) can flip
+  // their own auto-rest off rather than depending on the summoner
+  // having passed `rest_timeout: "never"` at spawn time.
+  const raw = args.minutes;
+  if (raw === "never") {
+    try {
+      ctx.watchdog.setTimeout(ctx.session.id, "never");
+    } catch (err) {
+      if (err instanceof WatchdogError) {
+        throw new ToolError(err.code, err.message);
+      }
+      throw err;
+    }
+    return {
+      ok: true,
+      rest_timeout: "never",
+      note: "Auto-rest disabled for this session. Watchdog is unarmed until the next `extend_rest({ minutes })` call or until the process exits.",
+    };
+  }
+  const minutes = asNumber(raw);
   if (minutes === undefined || minutes <= 0) {
-    throw new ToolError("invalid_argument", "`minutes` must be a positive number.");
+    throw new ToolError(
+      "invalid_argument",
+      "`minutes` must be a positive number or the literal string \"never\".",
+    );
   }
   const seconds = Math.max(MIN_REST_TIMEOUT_SECONDS, Math.floor(minutes * 60));
   try {
