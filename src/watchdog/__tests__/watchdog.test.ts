@@ -15,9 +15,20 @@ class FakeScheduler implements Scheduler {
   private nowMs = 0;
   private nextId = 1;
   private pending = new Map<number, { fireAt: number; fn: () => void }>();
+  /** Sequence of values returned by `random()`. Cycles when exhausted;
+   * defaults to a single 0.5 so untested call sites get a stable mid-
+   * range value. */
+  randomValues: number[] = [0.5];
+  private randomCursor = 0;
 
   now(): number {
     return this.nowMs;
+  }
+
+  random(): number {
+    const v = this.randomValues[this.randomCursor % this.randomValues.length]!;
+    this.randomCursor++;
+    return v;
   }
 
   setTimeout(fn: () => void, ms: number): TimerHandle {
@@ -52,6 +63,15 @@ class FakeScheduler implements Scheduler {
       fired++;
     }
     return fired;
+  }
+
+  /** Simulate the OS sleeping for `ms` milliseconds: the wallclock
+   * advances but no pending timers fire during the sleep itself.
+   * `advance()` after this will fire every timer whose original
+   * deadline fell within the sleep window — modeling how a real
+   * setTimeout behaves on wake. */
+  sleep(ms: number): void {
+    this.nowMs += ms;
   }
 
   pendingCount(): number {
@@ -275,6 +295,86 @@ test("watchdog swallows onDeadline handler errors", () => {
     },
   });
   expect(() => fake.advance(3600 * 1000)).not.toThrow();
+});
+
+// --- sleep-wake detection ---
+
+test("timer fired far past deadline rearms with jitter instead of firing onDeadline", () => {
+  const fake = new FakeScheduler();
+  // r=0 → multiplier = 0.9 → ms = 0.9 * 3600s = 3240s. Above the
+  // 3600s MIN_REST_TIMEOUT floor, so the Math.max clamps to 3600s.
+  // Use r=0.5 to land squarely inside the jitter window.
+  fake.randomValues = [0.5];
+  const wd = new Watchdog(fake);
+  let fired = 0;
+  wd.register({
+    session: claimedSession(),
+    rest_timeout: 3600,
+    onDeadline: () => fired++,
+  });
+
+  // Simulate 8 hours of OS sleep, then deliver pending timers.
+  fake.sleep(8 * 3600 * 1000);
+  fake.advance(0);
+
+  expect(fired).toBe(0);
+  expect(fake.pendingCount()).toBe(1);
+  const state = wd.inspect("s-1");
+  expect(state).not.toBeNull();
+  // last_activity_at was reset to the wake instant.
+  expect(state!.last_activity_at).toBe(8 * 3600 * 1000);
+  // r=0.5 → multiplier = 1 - 0.1 + 0.5 * (0.1 + 2.0) = 1.95 → ms = 7020s.
+  // Deadline = wake + 7020s.
+  expect(state!.scheduled_for).toBe(8 * 3600 * 1000 + 7020 * 1000);
+});
+
+test("timer fired just slightly late still fires onDeadline normally", () => {
+  const fake = new FakeScheduler();
+  const wd = new Watchdog(fake);
+  let fired = 0;
+  wd.register({
+    session: claimedSession(),
+    rest_timeout: 3600,
+    onDeadline: () => fired++,
+  });
+
+  // 30s late — well under the 60s/5% threshold (5% of 3600s = 180s,
+  // floor 60s → effective threshold 180s for this rest_timeout).
+  fake.advance(3600 * 1000 + 30_000);
+  expect(fired).toBe(1);
+  expect(fake.pendingCount()).toBe(0);
+});
+
+test("jitter spreads N agents waking together across the rest_timeout window", () => {
+  // Five agents, all armed at t=0 with the default 60-min rest_timeout.
+  // Host sleeps 8h, every timer fires immediately on wake. Each agent
+  // gets a different random draw, so the rearmed deadlines spread.
+  const fake = new FakeScheduler();
+  fake.randomValues = [0.0, 0.25, 0.5, 0.75, 1.0]; // one per agent
+  const wd = new Watchdog(fake);
+  let fired = 0;
+  for (let i = 1; i <= 5; i++) {
+    wd.register({
+      session: claimedSession(`s-${i}`),
+      rest_timeout: 3600,
+      onDeadline: () => fired++,
+    });
+  }
+
+  fake.sleep(8 * 3600 * 1000);
+  fake.advance(0);
+
+  expect(fired).toBe(0);
+  expect(fake.pendingCount()).toBe(5);
+  const deadlines = [1, 2, 3, 4, 5]
+    .map((i) => wd.inspect(`s-${i}`)!.scheduled_for!)
+    .sort((a, b) => a - b);
+  // Earliest agent (r=0): multiplier=0.9 → 3240s; clamped UP to the
+  // 3600s MIN_REST_TIMEOUT floor. Latest agent (r=1): multiplier=2.9
+  // → 10440s. Spread between min and max: at least 1 hour — proves
+  // the cohort no longer fires at the same instant.
+  const spreadMs = deadlines[deadlines.length - 1]! - deadlines[0]!;
+  expect(spreadMs).toBeGreaterThanOrEqual(60 * 60 * 1000);
 });
 
 // --- triggers ---

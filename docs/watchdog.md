@@ -95,6 +95,36 @@ wd.register({
 });
 ```
 
+## Sleep-wake handling
+
+`setTimeout` on every host platform fires the moment wallclock catches
+up to the deadline, so if the laptop suspends with the deadline in
+the future and wakes after the deadline has passed, the timer fires
+immediately at the wake instant. With N MCP server processes (one
+per summoned agent), that means **every armed timer fires within
+milliseconds of each other**, and the cohort thunder-rests at once.
+Re-summoning the cohort then thunder-hits Anthropic rate limits.
+
+The watchdog defends against this in `arm()`'s timer callback:
+
+- If the timer fired with `now - scheduled_for >= max(60s, 5% *
+  rest_timeout)`, treat as a sleep-wake event. Reset
+  `last_activity_at` to the wake instant and re-arm with jitter —
+  do NOT call `onDeadline` this cycle.
+- The jittered rearm uses a uniform multiplier in `[0.9, 3.0]` over
+  the configured `rest_timeout`, clamped to the 3600s floor. With
+  the default 60-min timeout this spreads a cohort across roughly
+  54-min-to-180-min, so even five agents waking at the same instant
+  have their next auto-rest deadlines >= ~1h apart.
+
+Both thresholds (`SLEEP_DETECT_MIN_LATENESS_MS`,
+`SLEEP_DETECT_LATENESS_FRACTION`, `SLEEP_WAKE_JITTER_DOWN`,
+`SLEEP_WAKE_JITTER_UP`) live as module-level constants at the top
+of `src/watchdog/watchdog.ts`. The randomness is sourced via the
+optional `Scheduler.random()` hook so tests can drive it
+deterministically — see `FakeScheduler.randomValues` in the
+watchdog test file.
+
 ## Adding a new tool
 
 When you add a new MCP tool, you must consciously decide which class
