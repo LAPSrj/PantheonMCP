@@ -101,6 +101,13 @@ export interface HandlerContext {
   loaded_topics: string[];
   /** Record a `load_memory` call: lift the gate and union the topics. */
   loadMemory(topics: string[]): void;
+  /** v2 (§16) per-persona session ordinal for THIS conversation, set on
+   * the first `load_memory` (via `beginSession`). Stamped on entries
+   * written this session; drives handoff fade + next-session reminders.
+   * `null` until load_memory runs. */
+  session_seq: number | null;
+  /** Set the session ordinal — called once by `load_memory`. */
+  setSessionSeq(seq: number): void;
 }
 
 export interface SpawnMetadata {

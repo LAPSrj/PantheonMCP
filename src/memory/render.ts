@@ -40,6 +40,10 @@ export interface RenderOptions {
   loaded_topics?: string[];
   /** Override "now" for deterministic due-reminder tests. */
   now?: number;
+  /** §10/§16 — this conversation's session ordinal, so a
+   * `due: "next-session"` reminder fires only in a session LATER than
+   * the one that created it. Undefined → treat next-session as due. */
+  session_seq?: number;
 }
 
 export interface RenderResult {
@@ -68,6 +72,7 @@ export function renderStore(
   const includeForgotten = options.include_forgotten ?? false;
   const onlyCore = options.only_core ?? false;
   const now = options.now ?? Date.now();
+  const sessionSeq = options.session_seq;
   const loaded = new Set([...(options.loaded_topics ?? []), UNTOPICED]);
 
   const visible = store.entries.filter((e) =>
@@ -93,7 +98,12 @@ export function renderStore(
   // --- DUE REMINDERS (top, full, regardless of topic) ---
   if (!onlyCore) {
     const due = unpinned
-      .filter((e) => mapLegacyKind(e.kind) === "reminder" && isReminderDue(e, now))
+      .filter(
+        (e) =>
+          e.status === "active" &&
+          mapLegacyKind(e.kind) === "reminder" &&
+          isReminderDue(e, now, sessionSeq),
+      )
       .sort((a, b) => (a.date < b.date ? -1 : 1));
     if (due.length > 0) {
       sections.push("═══ DUE REMINDERS ═══");
@@ -160,7 +170,9 @@ export function renderStore(
   }
 
   // --- DELIVERED HANDOFFS (A ∩ H ≠ ∅) ---
-  const handoffs = unpinned.filter((e) => mapLegacyKind(e.kind) === "handoff");
+  const handoffs = unpinned.filter(
+    (e) => e.status === "active" && mapLegacyKind(e.kind) === "handoff",
+  );
   const delivered = handoffs.filter((e) => {
     const t = entryTopic(e);
     return t !== null && loaded.has(t);
@@ -315,9 +327,17 @@ function budgetSummaryNewestFirst(
   return { titleIds };
 }
 
-function isReminderDue(e: MemoryEntry, now: number): boolean {
+function isReminderDue(
+  e: MemoryEntry,
+  now: number,
+  sessionSeq: number | undefined,
+): boolean {
   if (e.due === undefined) return true; // open reminder — always surfaces
-  if (e.due === "next-session") return true; // P6 consumes after delivery
+  if (e.due === "next-session") {
+    // Fires only in a session LATER than the one that created it.
+    if (sessionSeq === undefined || e.session_seq === undefined) return true;
+    return sessionSeq > e.session_seq;
+  }
   return e.due <= now;
 }
 

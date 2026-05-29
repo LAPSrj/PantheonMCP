@@ -54,6 +54,7 @@ export function createContext(options: CreateContextOptions = {}): HandlerContex
   let chatAgentId: string | null = null;
   let memoryLoaded = false;
   const loadedTopics: string[] = [];
+  let sessionSeq: number | null = null;
   // §6 HIGH context-pressure surrogate: tool-call counter + last-save
   // timestamp. Dispatcher updates these; memory-save tools reset.
   const pressure = {
@@ -122,6 +123,12 @@ export function createContext(options: CreateContextOptions = {}): HandlerContex
       for (const t of topics) {
         if (t.length > 0 && !loadedTopics.includes(t)) loadedTopics.push(t);
       }
+    },
+    get session_seq(): number | null {
+      return sessionSeq;
+    },
+    setSessionSeq(seq: number): void {
+      sessionSeq = seq;
     },
   } as HandlerContext;
 }

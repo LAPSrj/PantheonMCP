@@ -77,6 +77,9 @@ export interface MemoryEntry {
   /** v2 handoff: the session_seq of the last matching delivery, so the
    * `matched` counter advances at most once per session. */
   last_matched_seq?: number;
+  /** v2 reminder: set once the daemon-tick has pushed a notification for
+   * a due date-reminder, so it isn't re-pushed every tick. */
+  notified?: boolean;
 }
 
 /** The machine-usable slice of a context handoff (see the canonical
@@ -100,6 +103,11 @@ export interface HandoffMeta {
 export interface MemoryStore {
   version: 1;
   entries: MemoryEntry[];
+  /** v2 — the last per-persona session ordinal issued by `beginSession`.
+   * Stamped on entries written that session (`session_seq`); drives the
+   * handoff matching-session fade (§8) + next-session reminders.
+   * Schema-additive: a store without it starts at 0. */
+  session_seq?: number;
 }
 
 /** Index-shape returned by `list_memory`. Cheap; no body content. */

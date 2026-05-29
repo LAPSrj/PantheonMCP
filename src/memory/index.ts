@@ -9,6 +9,7 @@ export {
 
 export {
   appendEntry,
+  beginSession,
   getEntry,
   updateEntry,
   fadeEntry,
@@ -71,6 +72,13 @@ export {
 } from "./budgets.ts";
 
 export { slugify } from "./derive.ts";
+
+export {
+  decayOnLoad,
+  sweepDueReminders,
+  HANDOFF_MATCH_THRESHOLD,
+  type DecaySummary,
+} from "./decay.ts";
 
 export {
   snapshotMemory,

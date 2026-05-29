@@ -1,5 +1,7 @@
 import {
   appendEntry,
+  beginSession,
+  decayOnLoad,
   deleteSnapshot,
   defaultHandoffExpiresAt,
   fadeEntry,
@@ -56,6 +58,7 @@ export const get_memory: Handler = async (args, ctx) => {
     include_forgotten: includeForgotten,
     only_core: onlyCore,
     ...(isSelf ? { loaded_topics: ctx.loaded_topics } : {}),
+    ...(isSelf && ctx.session_seq !== null ? { session_seq: ctx.session_seq } : {}),
   });
   return {
     username,
@@ -100,14 +103,31 @@ export const load_memory: Handler = async (args, ctx) => {
   // Recording with zero topics is allowed (a fresh persona declaring
   // "nothing to load") — it still lifts the gate.
   ctx.loadMemory(topics);
+  // §16 — start this conversation's session ordinal exactly once (the
+  // first load_memory). Subsequent load_memory calls reuse it.
+  const isSelf = username === ctx.session.claimedUsername;
+  if (isSelf && ctx.session_seq === null) {
+    ctx.setSessionSeq(beginSession(ctx.paths, username));
+  }
+  const sessionSeq = ctx.session_seq ?? undefined;
+  // Render BEFORE the load-time decay pass, so entries consumed THIS
+  // session (handoff autofade, delivered next-session reminders) still
+  // appear in the response that consumes them.
   const rendered = renderForPrompt(ctx.paths, username, {
     loaded_topics: ctx.loaded_topics,
+    ...(sessionSeq !== undefined ? { session_seq: sessionSeq } : {}),
   });
+  // §8/§10 session-boundary decay (self only; never mutate a peer).
+  let decay;
+  if (isSelf && sessionSeq !== undefined) {
+    decay = decayOnLoad(ctx.paths, username, ctx.loaded_topics, sessionSeq);
+  }
   return {
     username,
     loaded_topics: ctx.loaded_topics,
     text: rendered.text,
     ...(rendered.warning ? { warning: rendered.warning } : {}),
+    ...(decay ? { decay } : {}),
   };
 };
 
@@ -216,9 +236,23 @@ export const append_memory: Handler = async (args, ctx) => {
     ...(pinReason !== undefined ? { pin_reason: pinReason } : {}),
     ...(due !== undefined ? { due } : {}),
     ...(supersedes !== undefined ? { supersedes } : {}),
+    ...(ctx.session_seq !== null ? { session_seq: ctx.session_seq } : {}),
   });
-  const warningFields =
-    warnings.length > 0 ? { warnings } : {};
+  // §7 — superseding an entry tombstones the one it replaces (recoverable
+  // via include_forgotten). Tolerant: a missing/absent target is ignored.
+  let supersededInfo: { superseded: string } | Record<string, never> = {};
+  if (supersedes !== undefined) {
+    try {
+      forgetEntryWithLifecycleCoercion(ctx.paths, claimed, supersedes);
+      supersededInfo = { superseded: supersedes };
+    } catch {
+      // target id didn't exist — supersede is advisory, don't fail the write.
+    }
+  }
+  const warningFields = {
+    ...(warnings.length > 0 ? { warnings } : {}),
+    ...supersededInfo,
+  };
 
   // A handoff written through `append_memory` bypasses the dedicated
   // `rest({ handoff })` slot (which sets a TTL, can DM the recipient,

@@ -14,7 +14,7 @@ import {
   consumeForceLifecycleRequests,
 } from "./handlers/lifecycle.ts";
 import { sweepSummonVerifications } from "./handlers/spawn.ts";
-import { expireEntries } from "../memory/index.ts";
+import { expireEntries, sweepDueReminders } from "../memory/index.ts";
 import { openChatDb, resolvePaths } from "../storage/index.ts";
 import { importLegacySchemas } from "../schemas/index.ts";
 import {
@@ -346,6 +346,20 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
       expireEntries(ctx.paths);
     } catch {
       // best-effort — memory sweep failures shouldn't crash the daemon
+    }
+    // v2 (§10/§14) timed reminder delivery: push a notification for this
+    // persona's date-reminders whose due instant has passed, exactly
+    // once (guarded by the `notified` flag).
+    try {
+      const username = ctx.session.claimedUsername;
+      if (username) {
+        const due = sweepDueReminders(ctx.paths, username, Date.now());
+        for (const r of due) {
+          void ctx.pushNotification(`Reminder due: ${r.summary}`);
+        }
+      }
+    } catch {
+      // best-effort — never let reminder delivery crash the daemon
     }
     // Status-digest sweep: gated by time-since-last so the 30s tick
     // doesn't over-fire. Per Yapsmith's chat-mcp revamp: replaces

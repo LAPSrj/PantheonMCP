@@ -117,3 +117,40 @@ test("get_instructions returns a section by topic + the menu without one", async
   const bad = parse(await dispatch("get_instructions", { topic: "nope" }, ctx));
   expect(bad.error).toBe("unknown_topic");
 });
+
+// --- P6 decay via the handler surface ---
+
+test("load_memory starts the session ordinal; appends stamp session_seq", async () => {
+  await dispatch("load_memory", { topics: ["chat"] }, ctx);
+  expect(ctx.session_seq).toBe(1);
+  const created = parse(await dispatch("append_memory", { text: "x", kind: "rule", topic: "chat" }, ctx));
+  expect(created.session_seq).toBe(1);
+});
+
+test("append with supersedes forgets the superseded target", async () => {
+  await dispatch("load_memory", { topics: ["git"] }, ctx);
+  const old = parse(await dispatch("append_memory", { text: "old rule", kind: "rule", topic: "git" }, ctx));
+  const res = parse(
+    await dispatch(
+      "append_memory",
+      { text: "new rule", kind: "rule", topic: "git", supersedes: old.id as string },
+      ctx,
+    ),
+  );
+  expect(res.superseded).toBe(old.id as string);
+  // The superseded entry is now forgotten (hidden unless include_forgotten).
+  const visible = parse(await dispatch("get_memory", {}, ctx));
+  expect(visible.text as string).not.toContain("old rule");
+});
+
+test("load_memory delivers a matching handoff then fades it after exact-focus session", async () => {
+  // Seed a handoff under 'memory' directly on disk.
+  appendEntry(ctx.paths, "vellumpike", { text: "resume here", kind: "handoff", topic: "memory" });
+  const load = parse(await dispatch("load_memory", { topic: "memory" }, ctx));
+  // Delivered in THIS session's render.
+  expect(load.text as string).toContain("DELIVERED HANDOFFS");
+  expect(load.text as string).toContain("resume here");
+  // ...and consumed for the future (A == {H} → autofade).
+  const after = parse(await dispatch("get_memory", {}, ctx));
+  expect(after.text as string).not.toContain("DELIVERED HANDOFFS");
+});

@@ -184,6 +184,19 @@ function validateReference(
   }
 }
 
+/** §16 — bump the per-persona session ordinal and return the new value.
+ * Called once per conversation at the first `load_memory`. Atomic via
+ * the mtime-guarded store mutator so sibling incarnations don't reuse a
+ * seq. A legacy store with no `session_seq` starts at 1. */
+export function beginSession(paths: Paths, username: string): number {
+  let next = 1;
+  mutateStore(paths, username, (store) => {
+    next = (store.session_seq ?? 0) + 1;
+    return { ...store, session_seq: next };
+  });
+  return next;
+}
+
 export function getEntry(
   paths: Paths,
   username: string,
