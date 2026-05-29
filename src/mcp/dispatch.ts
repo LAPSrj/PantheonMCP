@@ -195,9 +195,37 @@ function okResult(data: unknown): MCPCallResult {
   };
 }
 
+/** §11/§13 JIT — auto-surface `get_instructions` from error codes so the
+ * tool doesn't strand like the notebook did. Maps the error code to the
+ * instruction topic that explains it; the agent can pull the section
+ * without knowing it exists. */
+const ERROR_INSTRUCTION_TOPIC: Record<string, string> = {
+  memory_not_loaded: "boot",
+  topic_required: "topics",
+  new_topic: "topics",
+  invalid_kind: "memory",
+  summary_is_header: "memory",
+  pin_budget_exceeded: "memory",
+  always_budget_exceeded: "memory",
+  chat_unavailable: "chat",
+  recipient_offline: "chat",
+  self_exit_blocked: "lifecycle",
+};
+
 function errorResult(payload: ErrorPayload): MCPCallResult {
+  const topic = ERROR_INSTRUCTION_TOPIC[payload.error];
+  const enriched: ErrorPayload =
+    topic && payload.see_instructions === undefined
+      ? {
+          ...payload,
+          see_instructions: {
+            topic,
+            hint: `Run \`get_instructions({ topic: "${topic}" })\` for guidance.`,
+          },
+        }
+      : payload;
   return {
     isError: true,
-    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify(enriched, null, 2) }],
   };
 }

@@ -103,7 +103,7 @@ export function validateWrite(
     const existing = clusterTopics(opts.existing).map((t) => t.topic);
     issues.push({
       code: "topic_required",
-      message: `kind '${effectiveKind}' requires a topic (slug = <topic>/<name>). Reuse an existing topic if one fits, or confirm a new one.`,
+      message: `kind '${effectiveKind}' requires a topic (slug = <topic>/<name>). Reuse an existing topic if one fits, or confirm a new one. See get_instructions({ topic: "topics" }).`,
       extra: {
         kind: effectiveKind,
         existing_topics: existing,

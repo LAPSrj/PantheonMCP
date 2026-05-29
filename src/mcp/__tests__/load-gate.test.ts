@@ -56,6 +56,14 @@ test("with topics on file, a non-exempt tool is rejected memory_not_loaded", asy
   expect(parse(r).error).toBe("memory_not_loaded");
 });
 
+test("a gate rejection carries a JIT see_instructions pointer (boot)", async () => {
+  appendEntry(ctx.paths, "vellumpike", { text: "x", kind: "rule", topic: "chat" });
+  const r = await dispatch("get_memory", {}, ctx);
+  const payload = parse(r) as { error: string; see_instructions?: { topic: string } };
+  expect(payload.error).toBe("memory_not_loaded");
+  expect(payload.see_instructions!.topic).toBe("boot");
+});
+
 test("list_topics + load_memory + get_instructions are gate-exempt", async () => {
   appendEntry(ctx.paths, "vellumpike", { text: "x", kind: "rule", topic: "chat" });
   for (const tool of ["list_topics", "get_instructions"]) {
