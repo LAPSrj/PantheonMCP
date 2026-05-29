@@ -87,6 +87,20 @@ export interface HandlerContext {
   markActivity(toolName: string): void;
   markMemorySave(): void;
   getPressureState(): { toolCallsSinceLastSave: number; lastSaveAt: number };
+  /** Redesign-v2 load gate (§9). When `true`, the dispatcher rejects
+   * non-exempt pantheon tools with `memory_not_loaded` until
+   * `load_memory` runs. Enabled only by the real MCP server boot;
+   * defaults `false` so programmatic / test / e2e-harness contexts
+   * (which drive handlers directly) are unaffected. */
+  memory_gate_enabled: boolean;
+  /** True once `load_memory` has run this conversation. Per-conversation
+   * (per-process), survives re-login. */
+  memory_loaded: boolean;
+  /** Topics declared via `load_memory` this conversation — passed to the
+   * render so declared topics show full detail. */
+  loaded_topics: string[];
+  /** Record a `load_memory` call: lift the gate and union the topics. */
+  loadMemory(topics: string[]): void;
 }
 
 export interface SpawnMetadata {

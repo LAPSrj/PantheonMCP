@@ -809,8 +809,8 @@ test("summon: bare summon (no --prompt) STILL embeds the bootstrap so the agent 
   // Watcher instruction (the bug semaphoremole reported was that
   // spawned agents had no instruction to start the watcher).
   expect(finalArg).toContain("Monitor(...)");
-  // Memory read instruction.
-  expect(finalArg).toContain("mcp__pantheon__get_memory");
+  // Memory load instruction (v2 boot: list_topics → load_memory).
+  expect(finalArg).toContain("mcp__pantheon__load_memory");
   // No runtime prompt — placeholder appears so the section stays.
   expect(finalArg).toContain("(no runtime prompt");
 });

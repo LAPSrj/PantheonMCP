@@ -37,6 +37,10 @@ export interface CreateContextOptions {
    * can inject a fixed value to drive the rest-stamping path
    * deterministically. */
   claude_session_id?: string | null;
+  /** v2 load gate (§9). Enabled by the real MCP server boot; defaults
+   * false so test / e2e contexts that drive handlers directly aren't
+   * gated. */
+  memory_gate_enabled?: boolean;
 }
 
 /** Build a runtime context around the four foundation layers. The MCP
@@ -48,6 +52,8 @@ export function createContext(options: CreateContextOptions = {}): HandlerContex
   const watchdog = options.watchdog ?? new Watchdog(realScheduler);
   let allowRestAuthorized = false;
   let chatAgentId: string | null = null;
+  let memoryLoaded = false;
+  const loadedTopics: string[] = [];
   // §6 HIGH context-pressure surrogate: tool-call counter + last-save
   // timestamp. Dispatcher updates these; memory-save tools reset.
   const pressure = {
@@ -103,6 +109,19 @@ export function createContext(options: CreateContextOptions = {}): HandlerContex
         toolCallsSinceLastSave: pressure.toolCallsSinceLastSave,
         lastSaveAt: pressure.lastSaveAt,
       };
+    },
+    memory_gate_enabled: options.memory_gate_enabled ?? false,
+    get memory_loaded(): boolean {
+      return memoryLoaded;
+    },
+    get loaded_topics(): string[] {
+      return [...loadedTopics];
+    },
+    loadMemory(topics: string[]): void {
+      memoryLoaded = true;
+      for (const t of topics) {
+        if (t.length > 0 && !loadedTopics.includes(t)) loadedTopics.push(t);
+      }
     },
   } as HandlerContext;
 }

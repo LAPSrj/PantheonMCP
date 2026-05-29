@@ -42,6 +42,37 @@ export {
 export { loadStore, mutateStore } from "./store.ts";
 
 export {
+  MEMORY_KINDS,
+  DURABLE_KINDS,
+  TOPIC_REQUIRED_KINDS,
+  ALWAYS_TOPIC,
+  isV2Kind,
+  isLegacyKind,
+  mapLegacyKind,
+  entryTopic,
+  clusterTopics,
+  knownTopics,
+  type MemoryKind,
+  type TopicSummary,
+} from "./taxonomy.ts";
+
+export {
+  validateWrite,
+  type ValidationIssue,
+  type ValidateWriteInput,
+  type ValidateWriteOptions,
+} from "./validation.ts";
+
+export {
+  PIN_FULL_BUDGET_BYTES,
+  ALWAYS_SUMMARY_BUDGET_BYTES,
+  TOPIC_FULL_BUDGET_BYTES,
+  NOTES_PER_TOPIC,
+} from "./budgets.ts";
+
+export { slugify } from "./derive.ts";
+
+export {
   snapshotMemory,
   restoreMemory,
   listSnapshots,

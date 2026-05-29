@@ -117,6 +117,9 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
       spawn_metadata: spawnMetadata,
       chat: router,
       claude_session_id: claudeSessionAtBoot,
+      // §9 load gate: real boot requires `load_memory` before chat. A
+      // fresh / empty persona is auto-skipped inside the dispatcher.
+      memory_gate_enabled: true,
     });
 
   // Summoned agents arrive with `PANTHEON_USERNAME` set by the spawn

@@ -1,5 +1,6 @@
 import type { Paths } from "../storage/index.ts";
 import { loadStore, mutateStore } from "./store.ts";
+import { deriveSummary, slugify, SUMMARY_MAX_CHARS } from "./derive.ts";
 import {
   MemoryError,
   type HandoffMeta,
@@ -12,8 +13,10 @@ import {
 /** §4 / §12-H — `details` field hard cap. Enforced at the API boundary
  * AND inside the store mutator (defense in depth). */
 export const DETAILS_MAX_BYTES = 5 * 1024 * 1024;
-/** §4 — summary upper bound; rejected at API. */
-export const SUMMARY_MAX_CHARS = 240;
+// SUMMARY_MAX_CHARS + deriveSummary + slugify now live in `derive.ts`
+// (imported above) so `validation.ts` can reuse them without an import
+// cycle. Re-export the two that index.ts surfaces.
+export { SUMMARY_MAX_CHARS, deriveSummary };
 
 /** Kind tag for handoff entries. Mirrors `HANDOFF_KIND` in
  * `handoffs.ts` — kept as a local literal here to avoid an import
@@ -143,7 +146,7 @@ export function appendEntry(
       }
     }
     created = {
-      id: slugify(summary || input.text, existingIds),
+      id: slugify(summary || input.text, existingIds, input.topic),
       date: new Date().toISOString(),
       summary,
       text: input.text,
@@ -368,7 +371,7 @@ export function setMemory(
   validateSummaryLength(summary);
 
   const entry: MemoryEntry = {
-    id: slugify(summary || input.text, new Set()),
+    id: slugify(summary || input.text, new Set(), input.topic),
     date: new Date().toISOString(),
     summary,
     text: input.text,
@@ -512,47 +515,6 @@ function validateDetailsSize(details: string): void {
       `details payload is ${bytes} bytes; cap is ${DETAILS_MAX_BYTES} (5 MB).`,
       { bytes, cap: DETAILS_MAX_BYTES },
     );
-  }
-}
-
-export function deriveSummary(text: string): string {
-  const firstLine = text.split("\n").find((l) => l.trim().length > 0) ?? "";
-  const clean = firstLine.replace(/^#+\s*/, "").trim();
-  if (clean.length <= SUMMARY_MAX_CHARS) return clean;
-  // Sentence-aware fallback: cut at the last sentence boundary that
-  // fits, else hard-trim with ellipsis.
-  const trimmed = clean.slice(0, SUMMARY_MAX_CHARS);
-  const lastBoundary = Math.max(
-    trimmed.lastIndexOf(". "),
-    trimmed.lastIndexOf("! "),
-    trimmed.lastIndexOf("? "),
-  );
-  if (lastBoundary >= SUMMARY_MAX_CHARS / 2) {
-    return trimmed.slice(0, lastBoundary + 1);
-  }
-  return trimmed.slice(0, SUMMARY_MAX_CHARS - 1) + "…";
-}
-
-function slugify(source: string, existingIds: Set<string>): string {
-  const clean = source
-    .replace(/^#+\s*/, "")
-    .replace(/\d{4}-\d{2}-\d{2}[T ]?\d{0,2}:?\d{0,2}:?\d{0,2}[Z ]?/g, "")
-    .replace(/^[\s—–-]+/, "")
-    .trim();
-
-  let slug = clean
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 40)
-    .replace(/-$/, "");
-
-  if (!slug) slug = `entry-${Date.now()}`;
-  if (!existingIds.has(slug)) return slug;
-  for (let i = 2; ; i++) {
-    const candidate = `${slug}-${i}`;
-    if (!existingIds.has(candidate)) return candidate;
   }
 }
 

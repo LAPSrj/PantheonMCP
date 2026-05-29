@@ -43,7 +43,9 @@ test("standard bootstrap names the persona, project, and cwd; instructs login + 
   expect(out).toContain("typescript, react");
   // Bootstrap steps reference the unified pantheon namespace.
   expect(out).toContain("mcp__pantheon__login");
-  expect(out).toContain("mcp__pantheon__get_memory");
+  // v2 boot: list_topics → load_memory replaces the get_memory step.
+  expect(out).toContain("mcp__pantheon__list_topics");
+  expect(out).toContain("mcp__pantheon__load_memory");
   expect(out).toContain("mcp__pantheon__update_status");
   // Login uses the EXACT username + project the spawn handler resolved.
   expect(out).toContain(
@@ -177,11 +179,13 @@ test("step 0 instructs the agent to wait for MCP servers before acting (standard
   expect(out).toContain(
     `"pantheon MCP isn't connected after 15s — I can't bootstrap without it"`,
   );
-  // Step 0 precedes step 1 in the rendered output.
+  // Step 0 (wait) → step 1 (load memory) → step 2 (login), in order.
   const step0Idx = out.indexOf("0. **Wait for your MCP servers");
-  const step1Idx = out.indexOf("1. **Log into chat**");
+  const step1Idx = out.indexOf("1. **Load your memory");
+  const step2Idx = out.indexOf("2. **Log into chat**");
   expect(step0Idx).toBeGreaterThanOrEqual(0);
   expect(step1Idx).toBeGreaterThan(step0Idx);
+  expect(step2Idx).toBeGreaterThan(step1Idx);
 });
 
 test("step 0 also appears in the provisional bootstrap (parity with summon path)", () => {

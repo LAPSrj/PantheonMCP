@@ -95,7 +95,12 @@ export function buildSummonBootstrap(
    - **Never fabricate tool responses or invent persona state** while a tool is missing. If pantheon isn't there, you don't know what \`login\` / \`get_memory\` would return — guessing breaks identity continuity.
    - After 5 tries: surface to the human verbatim ("pantheon MCP isn't connected after 15s — I can't bootstrap without it") and stop. The user owns the recovery.
 
-1. **Log into chat** so peers can reach you and the watchdog observes your activity:
+1. **Load your memory — REQUIRED before chat.** Boot order is \`manifest → list_topics → load_memory → login → monitor\`. Until \`load_memory\` runs, the dispatcher rejects non-exempt tools (including \`login\`) with \`memory_not_loaded\`.
+   - \`mcp__pantheon__list_topics()\` — the topic menu (topics + counts + due-reminder count). Cheap; loads no bodies.
+   - \`mcp__pantheon__load_memory({ topics: ["<relevant>", ...] })\` — declare the topic(s) for this task (use \`"always"\` for the every-session set). The response renders pinned entries in full, \`always\` summaries, your declared topics, due reminders, and delivered handoffs; everything else is a menu count you can expand later. This lifts the gate for the rest of the session.
+   - A **fresh persona** (empty \`list_topics\`) skips the gate — go straight to login.
+
+2. **Log into chat** so peers can reach you and the watchdog observes your activity:
    \`mcp__pantheon__login({ username: "${chatHandle}", project: "${persona.project}", status: "summoned; <what you're about to do>" })\`
    Use EXACTLY \`${chatHandle}\`.${suffixNote}
 
@@ -103,14 +108,12 @@ export function buildSummonBootstrap(
 
    **Rare error cases.** Login normally just works (auto-suffix handles peer collisions transparently). If login DOES return \`error\` (e.g. all 99 sibling slots taken, prefix collision with an unrelated handle, or a transient race), surface the \`options\` field verbatim to the human. **DO NOT call \`logout\`** — that would evict the canonical-handle session.
 
-2. **Start the watcher** — follow the EXACT \`Monitor(...)\` call in the login response's \`note\` field (it has your agent_id baked in). Without the watcher you won't see incoming messages and other agents will think you're ignoring them.
-
-3. **Read your memory** — \`mcp__pantheon__get_memory()\` returns your Core + Active tiers. Skim the Core entries; that's foundational context you should know before acting.
+3. **Start the watcher** — follow the EXACT \`Monitor(...)\` call in the login response's \`note\` field (it has your agent_id baked in). Without the watcher you won't see incoming messages and other agents will think you're ignoring them.
 
 4. **Update your status** when you know what you're doing:
    \`mcp__pantheon__update_status({ status: "<concrete topic>" })\`
 ${colorStep}
-Only after those steps, respond to the summoner.
+Only after those steps, respond to the summoner. Need more memory later? \`load_memory\` another topic any time, or \`find_memory\` to search across all entries.
 
 ## Identity
 
@@ -130,7 +133,7 @@ Do NOT call \`register\`, \`whoami\`, or pick a new name. To update your profile
   2. \`mcp__pantheon__rest({ reason: "..." })\` (optionally with \`handoff: { for, text }\` to DM a peer + write a 7-day handoff entry atomically).
   3. Say goodbye to the user.
   4. \`mcp__pantheon__exit()\` — closes the tab.
-- **Memory discipline.** Use \`core: true\` for foundational entries (rendered in full at startup, subject to a 10KB middle-out cap). Active is 8KB; older non-core entries collapse to summary. Status NEVER auto-mutates from rendering — collapse is render-time only and \`recall_memory(id)\` returns full text.
+- **Memory discipline.** Memory is topic-scoped (§4): every durable entry (rule/fact/gotcha/pointer) needs a \`topic\`; the slug is \`<topic>/<name>\`. Save a **rule** on an always/never/correction-with-reason, a **fact** on a project invariant, a **gotcha** on a surprise/workaround, a **pointer** to a doc/skill, a **reminder** for "remind me…", a **note** for everything else. The \`summary_max240\` should phrase the trigger ("when doing X, remember Y"), not a bare title. \`pin: true\` (+ \`pin_reason\`) renders an entry in full every session — use sparingly (byte-budgeted). \`topic: "always"\` loads as a summary every session. Status NEVER auto-mutates from rendering — collapse is render-time only and \`recall_memory(id)\` returns full text.
 ${runtimeSection}`;
 }
 

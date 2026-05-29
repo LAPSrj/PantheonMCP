@@ -1,5 +1,5 @@
 import { IdentityError } from "../identity/index.ts";
-import { MemoryError } from "../memory/index.ts";
+import { MemoryError, clusterTopics, loadStore } from "../memory/index.ts";
 import { WatchdogError, isResetTrigger } from "../watchdog/index.ts";
 import { ChatError } from "../chat/index.ts";
 import { validatePayload, type JsonSchema } from "../schemas/index.ts";
@@ -11,6 +11,47 @@ import { ToolError, type HandlerContext, type MCPCallResult } from "./types.ts";
 const TOOL_SCHEMAS: Record<string, JsonSchema> = Object.fromEntries(
   TOOLS.map((t) => [t.name, t.inputSchema as JsonSchema]),
 );
+
+/** §9 load gate — tools callable BEFORE `load_memory`. Everything else
+ * (including `login`, `send_message`, `answer`, `rest`) is gated when
+ * the gate is enabled. The Monitor watcher is harness-side, not a
+ * pantheon tool, so it's unaffected. */
+const GATE_EXEMPT = new Set([
+  "manifest",
+  "list_topics",
+  "load_memory",
+  "get_instructions",
+  "session_info",
+  "whoami",
+]);
+
+/** Decide whether to reject `toolName` with `memory_not_loaded`. Returns
+ * null to allow. Side-effect: a fresh/empty persona (no topics) lifts
+ * the gate in place so it never blocks — §9 "fresh persona skips". */
+function checkLoadGate(toolName: string, ctx: HandlerContext): ErrorPayload | null {
+  if (!ctx.memory_gate_enabled || ctx.memory_loaded) return null;
+  if (GATE_EXEMPT.has(toolName)) return null;
+  // No claimed persona → no memory to load; don't gate (identity
+  // bootstrap / guest flows handle their own errors).
+  const username = ctx.session.claimedUsername;
+  if (!username) return null;
+  // Fresh / empty persona → skip the gate permanently for this session.
+  try {
+    if (clusterTopics(loadStore(ctx.paths, username).entries).length === 0) {
+      ctx.loadMemory([]);
+      return null;
+    }
+  } catch {
+    // If we can't read the store, fail open rather than wedge the agent.
+    return null;
+  }
+  return {
+    error: "memory_not_loaded",
+    message:
+      "Load your memory first. Boot order: manifest → list_topics → load_memory(topic) → login → monitor. " +
+      "Call `list_topics` to see the menu, then `load_memory({ topics: [...] })` (or load_memory({ topic: \"always\" })).",
+  };
+}
 
 /** Central tool dispatcher. Resolves the handler, runs it, maps domain
  * errors into MCP error payloads, and (per §14) touches the watchdog
@@ -55,6 +96,9 @@ export async function dispatch(
       });
     }
   }
+  // §9 load gate — reject non-exempt tools until `load_memory` runs.
+  const gateError = checkLoadGate(toolName, ctx);
+  if (gateError) return errorResult(gateError);
   try {
     const data = await handler(args, ctx);
     if (isResetTrigger(toolName)) {

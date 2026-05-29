@@ -676,14 +676,16 @@ test("get_memory: only_core: true renders ONLY the Core tier (no Active/Index/Hi
     owns: ["/work"],
   });
   await call("claim", { username: "vellumpike" });
+  // `core: true` legacy entries still render as PINNED (pre-migration);
+  // an untyped note lands in the implicit (untopiced) bucket.
   await call("append_memory", { text: "core fact", core: true });
   await call("append_memory", { text: "active note" });
   const all = await call("get_memory", {});
-  expect(all.payload.text).toContain("CORE");
-  expect(all.payload.text).toContain("ACTIVE");
+  expect(all.payload.text).toContain("PINNED");
+  expect(all.payload.text).toContain("(untopiced)");
   const coreOnly = await call("get_memory", { only_core: true });
-  expect(coreOnly.payload.text).toContain("CORE");
-  expect(coreOnly.payload.text).not.toContain("ACTIVE");
+  expect(coreOnly.payload.text).toContain("PINNED");
+  expect(coreOnly.payload.text).not.toContain("(untopiced)");
   expect(coreOnly.payload.text).toContain("core fact");
   expect(coreOnly.payload.text).not.toContain("active note");
 });

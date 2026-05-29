@@ -29,6 +29,9 @@ export const HANDLERS: Record<string, Handler> = {
 
   // Memory
   get_memory: memory.get_memory,
+  list_topics: memory.list_topics,
+  load_memory: memory.load_memory,
+  get_instructions: memory.get_instructions,
   append_memory: memory.append_memory,
   update_memory: memory.update_memory,
   set_memory: memory.set_memory,

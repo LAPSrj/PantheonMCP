@@ -331,6 +331,40 @@ export const TOOLS: readonly ToolDef[] = [
     },
   },
   {
+    name: "list_topics",
+    description:
+      "v2 boot step (§9): the topic menu. Returns clustered topics + per-topic counts + the due-reminder count, without loading any entry bodies. Gate-exempt — call it after manifest, before `load_memory`. A fresh persona returns an empty topic list (the load gate is then skipped).",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: { username: { type: "string" } },
+    },
+  },
+  {
+    name: "load_memory",
+    description:
+      "v2 boot step (§9), REQUIRED before chat. Declares the topic(s) relevant to this session and returns your memory rendered for them (pinned FULL + `always` summaries + each declared topic's entries + due reminders + delivered handoffs; other topics show as a menu count). Lifts the dispatcher load gate for the rest of the conversation. Pass `topics: [\"chat\", \"memory\"]` or a single `topic`; use \"always\" for the every-session set.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        username: { type: "string" },
+        topics: { type: "array", items: { type: "string" } },
+        topic: { type: "string", description: "Convenience for a single topic." },
+      },
+    },
+  },
+  {
+    name: "get_instructions",
+    description:
+      "Read-only topic-keyed pull for canonical pantheon guidance your CLAUDE.md doesn't inline (memory, chat, lifecycle, summon, topics, boot). Pass `topic` for one section; omit for the menu. System-authored manual — distinct from persona memory.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: { topic: { type: "string" } },
+    },
+  },
+  {
     name: "append_memory",
     description:
       "Create a new active memory entry. `text` is required. `summary` (≤240 ch) is auto-derived from text when omitted; provide explicitly when the first line isn't a good headline. `details` (≤5 MB) is the unbounded-payload field — never inlined at startup; only via `get_memory_details(id)`. " +
@@ -364,6 +398,30 @@ export const TOOLS: readonly ToolDef[] = [
           description:
             "Entry ids cited inline at the end of the synopsis. Each must exist; otherwise rejects `invalid_reference`.",
         },
+        topic: {
+          type: "string",
+          description:
+            "v2: topic for topic-scoped load — unified with the slug domain (slug = <topic>/<name>). REQUIRED for durable kinds (rule/fact/gotcha/pointer) + handoff; notes inherit the session topic; `always` loads every session. `list_topics` shows existing topics.",
+        },
+        pin: {
+          type: "boolean",
+          description:
+            "v2: render this entry in FULL every session regardless of topic (byte-budgeted; reject→consolidate). Requires pin_reason.",
+        },
+        pin_reason: {
+          type: "string",
+          description: "v2: one-line justification, required alongside pin.",
+        },
+        due: {
+          oneOf: [{ type: "number" }, { type: "string", enum: ["next-session"] }],
+          description:
+            "v2 reminder: ms-epoch instant (UTC) or the literal \"next-session\". Omit for an open reminder that resurfaces until acted on.",
+        },
+        supersedes: {
+          type: "string",
+          description:
+            "v2: id of an entry this one replaces. The superseded entry is coerced to forgotten (recoverable).",
+        },
       },
     },
   },
@@ -396,6 +454,21 @@ export const TOOLS: readonly ToolDef[] = [
           ],
           description: "Set to a new array to replace; null to clear.",
         },
+        topic: { type: "string", description: "v2: re-file under a topic." },
+        pin: {
+          type: "boolean",
+          description: "v2: pin (full every session) or unpin (false clears pin + pin_reason).",
+        },
+        pin_reason: { type: "string", description: "v2: justification for pin." },
+        due: {
+          oneOf: [
+            { type: "number" },
+            { type: "string", enum: ["next-session"] },
+            { type: "null" },
+          ],
+          description: "v2 reminder due; null clears.",
+        },
+        supersedes: { type: "string", description: "v2: id this entry supersedes." },
       },
     },
   },

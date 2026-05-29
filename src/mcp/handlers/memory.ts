@@ -17,10 +17,15 @@ import {
   setMemory,
   snapshotMemory,
   updateEntry,
+  validateWrite,
+  clusterTopics,
+  mapLegacyKind,
   type FindMemoryFilter,
   type ListIndexFilter,
+  type MemoryEntry,
 } from "../../memory/index.ts";
 import { listPersonas } from "../../identity/index.ts";
+import { getInstructions, INSTRUCTION_TOPICS } from "../../responses/instructions.ts";
 import {
   asBoolean,
   asNumber,
@@ -43,9 +48,14 @@ export const get_memory: Handler = async (args, ctx) => {
   const username = targetUsername(args, ctx.session.claimedUsername);
   const includeForgotten = asBoolean(args.include_forgotten) ?? false;
   const onlyCore = asBoolean(args.only_core) ?? false;
+  // Render scoped to the topics declared this session (via load_memory).
+  // Peer-inspection (`username` of another persona) renders their
+  // always-loaded surface only unless topics are passed explicitly.
+  const isSelf = username === ctx.session.claimedUsername;
   const rendered = renderForPrompt(ctx.paths, username, {
     include_forgotten: includeForgotten,
     only_core: onlyCore,
+    ...(isSelf ? { loaded_topics: ctx.loaded_topics } : {}),
   });
   return {
     username,
@@ -53,6 +63,84 @@ export const get_memory: Handler = async (args, ctx) => {
     ...(rendered.warning ? { warning: rendered.warning } : {}),
   };
 };
+
+/** §9 / §13 — the topic menu: clustered topics + counts + due-reminder
+ * count. Gate-exempt: this is the first call after manifest, before
+ * `load_memory`. A fresh persona returns an empty topic list (the
+ * dispatcher then skips the load gate). */
+export const list_topics: Handler = async (args, ctx) => {
+  const username = targetUsername(args, ctx.session.claimedUsername);
+  const entries = loadStore(ctx.paths, username).entries;
+  const topics = clusterTopics(entries);
+  const dueReminders = countDueReminders(entries, Date.now());
+  return {
+    username,
+    topics,
+    topic_count: topics.length,
+    due_reminders: dueReminders,
+    note:
+      topics.length === 0
+        ? "No topics yet — load gate is skipped; go straight to login + monitor."
+        : "Pass the relevant topic(s) to `load_memory` (use \"always\" for the every-session set) before login.",
+  };
+};
+
+/** §9 — REQUIRED before chat. Records the declared topics on the
+ * session (lifting the dispatcher load gate) and returns the memory
+ * rendered for those topics — its return shape IS the boot render. */
+export const load_memory: Handler = async (args, ctx) => {
+  const username = targetUsername(args, ctx.session.claimedUsername);
+  // Accept `topics: string[]` or a single `topic: string`.
+  let topics: string[] = [];
+  if (Array.isArray(args.topics)) {
+    topics = args.topics.filter((t): t is string => typeof t === "string");
+  } else if (typeof args.topic === "string") {
+    topics = [args.topic];
+  }
+  // Recording with zero topics is allowed (a fresh persona declaring
+  // "nothing to load") — it still lifts the gate.
+  ctx.loadMemory(topics);
+  const rendered = renderForPrompt(ctx.paths, username, {
+    loaded_topics: ctx.loaded_topics,
+  });
+  return {
+    username,
+    loaded_topics: ctx.loaded_topics,
+    text: rendered.text,
+    ...(rendered.warning ? { warning: rendered.warning } : {}),
+  };
+};
+
+/** §11 — read-only topic-keyed pull for canonical pantheon guidance the
+ * agent's CLAUDE.md doesn't inline. No topic → the topic menu. */
+export const get_instructions: Handler = async (args) => {
+  const topic = asString(args.topic);
+  if (topic === undefined) {
+    return {
+      topics: INSTRUCTION_TOPICS,
+      note: "Pass `topic` to pull one section, e.g. get_instructions({ topic: \"memory\" }).",
+    };
+  }
+  const content = getInstructions(topic);
+  if (content === null) {
+    return {
+      error: "unknown_topic",
+      topic,
+      available: INSTRUCTION_TOPICS,
+    };
+  }
+  return { topic, content };
+};
+
+function countDueReminders(entries: MemoryEntry[], now: number): number {
+  let n = 0;
+  for (const e of entries) {
+    if (e.status === "forgotten") continue;
+    if (mapLegacyKind(e.kind) !== "reminder") continue;
+    if (e.due === undefined || e.due === "next-session" || e.due <= now) n++;
+  }
+  return n;
+}
 
 export const append_memory: Handler = async (args, ctx) => {
   const claimed = ctx.session.claimedUsername;
@@ -86,6 +174,33 @@ export const append_memory: Handler = async (args, ctx) => {
   const seeAlso = Array.isArray(args.see_also)
     ? (args.see_also.filter((v) => typeof v === "string") as string[])
     : undefined;
+  // ── Redesign-v2 write fields.
+  const topic = asString(args.topic);
+  const pin = asBoolean(args.pin);
+  const pinReason = asString(args.pin_reason);
+  const supersedes = asString(args.supersedes);
+  // `due`: a number (ms-epoch instant) or the literal "next-session".
+  let due: number | "next-session" | undefined;
+  if (typeof args.due === "number" && Number.isFinite(args.due)) {
+    due = args.due;
+  } else if (args.due === "next-session") {
+    due = "next-session";
+  }
+
+  // §12/§17 write-time validation. Warn-only by default; enforcement
+  // flips on via PANTHEON_MEMORY_ENFORCE=1 (the P3 "then enforce" step).
+  const enforce = process.env.PANTHEON_MEMORY_ENFORCE === "1";
+  const warnings = validateWrite(
+    {
+      text,
+      ...(summary !== undefined ? { summary } : {}),
+      ...(kind !== undefined ? { kind } : {}),
+      ...(topic !== undefined ? { topic } : {}),
+      ...(pin !== undefined ? { pin } : {}),
+    },
+    { existing: loadStore(ctx.paths, claimed).entries, enforce },
+  );
+
   const created = appendEntry(ctx.paths, claimed, {
     text,
     ...(summary !== undefined ? { summary } : {}),
@@ -96,7 +211,14 @@ export const append_memory: Handler = async (args, ctx) => {
     ...(summoner !== undefined ? { summoner_username: summoner } : {}),
     ...(repliesTo !== undefined ? { replies_to: repliesTo } : {}),
     ...(seeAlso !== undefined ? { see_also: seeAlso } : {}),
+    ...(topic !== undefined ? { topic } : {}),
+    ...(pin !== undefined ? { pin } : {}),
+    ...(pinReason !== undefined ? { pin_reason: pinReason } : {}),
+    ...(due !== undefined ? { due } : {}),
+    ...(supersedes !== undefined ? { supersedes } : {}),
   });
+  const warningFields =
+    warnings.length > 0 ? { warnings } : {};
 
   // A handoff written through `append_memory` bypasses the dedicated
   // `rest({ handoff })` slot (which sets a TTL, can DM the recipient,
@@ -112,6 +234,7 @@ export const append_memory: Handler = async (args, ctx) => {
     if (others.length > 0) {
       return {
         ...created,
+        ...warningFields,
         hint:
           `${others.length} other active handoff${others.length === 1 ? "" : "s"} on file. ` +
           `Handoffs are continuity notes, not durable memory — fade stale ones with ` +
@@ -120,7 +243,7 @@ export const append_memory: Handler = async (args, ctx) => {
       };
     }
   }
-  return created;
+  return { ...created, ...warningFields };
 };
 
 export const update_memory: Handler = async (args, ctx) => {
@@ -145,6 +268,16 @@ export const update_memory: Handler = async (args, ctx) => {
     } else if (Array.isArray(args.see_also)) {
       patch.see_also = args.see_also.filter((v) => typeof v === "string");
     }
+  }
+  // ── Redesign-v2 patch fields.
+  if (asString(args.topic) !== undefined) patch.topic = asString(args.topic);
+  if (asBoolean(args.pin) !== undefined) patch.pin = asBoolean(args.pin);
+  if (asString(args.pin_reason) !== undefined) patch.pin_reason = asString(args.pin_reason);
+  if (asString(args.supersedes) !== undefined) patch.supersedes = asString(args.supersedes);
+  if ("due" in args) {
+    if (args.due === null) patch.due = null;
+    else if (typeof args.due === "number" && Number.isFinite(args.due)) patch.due = args.due;
+    else if (args.due === "next-session") patch.due = "next-session";
   }
   return updateEntry(ctx.paths, claimed, id, patch);
 };
