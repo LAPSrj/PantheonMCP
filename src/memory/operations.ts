@@ -36,6 +36,34 @@ function coreAllowedForKind(kind: string | undefined): boolean {
   return kind !== HANDOFF_KIND;
 }
 
+/** Redesign-v2 schema-additive fields, picked from an input only when
+ * present. Centralised so `appendEntry` and `setMemory` stay in sync as
+ * the field set grows across phases. Behavior (validation, decay,
+ * render) lands in later phases; P1 only persists. */
+function v2Fields(input: {
+  topic?: string;
+  pin?: boolean;
+  pin_reason?: string;
+  due?: number | "next-session";
+  supersedes?: string;
+  session_seq?: number;
+  matched?: number;
+  last_matched_seq?: number;
+}): Partial<MemoryEntry> {
+  const out: Partial<MemoryEntry> = {};
+  if (input.topic !== undefined) out.topic = input.topic;
+  if (input.pin !== undefined) out.pin = input.pin;
+  if (input.pin_reason !== undefined) out.pin_reason = input.pin_reason;
+  if (input.due !== undefined) out.due = input.due;
+  if (input.supersedes !== undefined) out.supersedes = input.supersedes;
+  if (input.session_seq !== undefined) out.session_seq = input.session_seq;
+  if (input.matched !== undefined) out.matched = input.matched;
+  if (input.last_matched_seq !== undefined) {
+    out.last_matched_seq = input.last_matched_seq;
+  }
+  return out;
+}
+
 export interface AppendInput {
   /** Optional ≤240 char headline. When omitted, derived from `text`'s
    * first non-empty line. */
@@ -60,6 +88,15 @@ export interface AppendInput {
   /** Structured handoff metadata — set only for `kind: "handoff"`
    * entries written via `rest({ handoff })`. */
   handoff?: HandoffMeta;
+  // ── Redesign v2 (schema-additive; behavior lands in later phases).
+  topic?: string;
+  pin?: boolean;
+  pin_reason?: string;
+  due?: number | "next-session";
+  supersedes?: string;
+  session_seq?: number;
+  matched?: number;
+  last_matched_seq?: number;
 }
 
 export interface UpdateInput {
@@ -71,6 +108,14 @@ export interface UpdateInput {
   status?: MemoryStatus;
   replies_to?: string | null;
   see_also?: string[] | null;
+  // ── Redesign v2 patch fields (null clears where sensible).
+  topic?: string;
+  pin?: boolean;
+  pin_reason?: string;
+  due?: number | "next-session" | null;
+  supersedes?: string;
+  matched?: number;
+  last_matched_seq?: number;
 }
 
 export function appendEntry(
@@ -115,6 +160,7 @@ export function appendEntry(
       ...(input.see_also !== undefined && input.see_also.length > 0
         ? { see_also: [...input.see_also] }
         : {}),
+      ...v2Fields(input),
     };
     return { ...store, entries: [...store.entries, created] };
   });
@@ -221,6 +267,27 @@ export function updateEntry(
     } else if (patch.see_also !== undefined) {
       next.see_also = [...patch.see_also];
     }
+    // v2 patch fields. `...current` already preserved any existing
+    // values; apply explicit patches here.
+    if (patch.topic !== undefined) next.topic = patch.topic;
+    if (patch.pin !== undefined) {
+      if (patch.pin) next.pin = true;
+      else {
+        delete next.pin;
+        delete next.pin_reason;
+      }
+    }
+    if (patch.pin_reason !== undefined) next.pin_reason = patch.pin_reason;
+    if (patch.due === null) {
+      delete next.due;
+    } else if (patch.due !== undefined) {
+      next.due = patch.due;
+    }
+    if (patch.supersedes !== undefined) next.supersedes = patch.supersedes;
+    if (patch.matched !== undefined) next.matched = patch.matched;
+    if (patch.last_matched_seq !== undefined) {
+      next.last_matched_seq = patch.last_matched_seq;
+    }
     const entries = store.entries.slice();
     entries[idx] = next;
     updated = next;
@@ -312,6 +379,7 @@ export function setMemory(
     ...(input.summoner_username !== undefined
       ? { summoner_username: input.summoner_username }
       : {}),
+    ...v2Fields(input),
   };
   mutateStore(paths, username, (store) => ({
     ...store,
@@ -365,6 +433,7 @@ function toIndexEntry(e: MemoryEntry): MemoryIndexEntry {
     size_kb: byteSizeKb(e.text),
     has_details: e.details !== undefined,
     ...(e.kind !== undefined ? { kind: e.kind } : {}),
+    ...(e.topic !== undefined ? { topic: e.topic } : {}),
   };
 }
 

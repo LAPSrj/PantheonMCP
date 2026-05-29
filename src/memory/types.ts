@@ -47,6 +47,36 @@ export interface MemoryEntry {
    * carries the parts a reconnecting session can consume directly.
    * Surfaces structured in the next session's boot payload. */
   handoff?: HandoffMeta;
+
+  // ── Redesign v2 (5-proposal-v2.md) — all schema-additive + optional.
+  // Existing entries lack them; readers default. See the proposal for
+  // the model. P1 adds storage; later phases add behavior.
+
+  /** v2: topic for topic-scoped load. Unified with the slug domain
+   * (`slug = <topic>/<name>`). The reserved value `"always"` is loaded
+   * every session. */
+  topic?: string;
+  /** v2: pin → render this entry in FULL every session, regardless of
+   * topic (a detail+load flag, byte-budgeted). */
+  pin?: boolean;
+  /** v2: single-sentence justification required alongside `pin`. */
+  pin_reason?: string;
+  /** v2 reminder: due as an epoch-ms instant (stored UTC) or the
+   * literal `"next-session"`. Absent on a `kind:"reminder"` entry means
+   * an open (no-date) reminder that resurfaces until acted on. */
+  due?: number | "next-session";
+  /** v2: id of the entry this one supersedes. The superseded entry is
+   * coerced to `forgotten`. */
+  supersedes?: string;
+  /** v2: per-persona session ordinal stamped at write time. Drives
+   * handoff matching-session fade + next-session reminders. */
+  session_seq?: number;
+  /** v2 handoff: count of distinct matching sessions that have
+   * delivered this handoff (see §8 fade rule). */
+  matched?: number;
+  /** v2 handoff: the session_seq of the last matching delivery, so the
+   * `matched` counter advances at most once per session. */
+  last_matched_seq?: number;
 }
 
 /** The machine-usable slice of a context handoff (see the canonical
@@ -82,6 +112,8 @@ export interface MemoryIndexEntry {
   size_kb: number;
   has_details: boolean;
   kind?: string;
+  /** v2: topic, when present. */
+  topic?: string;
 }
 
 export class MemoryError extends Error {
