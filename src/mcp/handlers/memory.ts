@@ -171,7 +171,10 @@ export const append_memory: Handler = async (args, ctx) => {
     );
   }
   const text = asStringRequired(args.text, "text");
-  const summary = asString(args.summary);
+  // §7/§16: the summary field is renamed `summary_max240` to carry its
+  // limit as a generation-time nudge. The API accepts either name; the
+  // storage field stays `summary` (tolerant-read live-safety).
+  const summary = asString(args.summary) ?? asString(args.summary_max240);
   const details = asString(args.details);
   const kind = asString(args.kind);
   const core = asBoolean(args.core);
@@ -304,6 +307,7 @@ export const update_memory: Handler = async (args, ctx) => {
   const id = asStringRequired(args.id, "id");
   const patch: Record<string, unknown> = {};
   if (asString(args.summary) !== undefined) patch.summary = asString(args.summary);
+  else if (asString(args.summary_max240) !== undefined) patch.summary = asString(args.summary_max240);
   if (asString(args.text) !== undefined) patch.text = asString(args.text);
   if ("details" in args) patch.details = args.details === null ? null : asString(args.details);
   if (asString(args.kind) !== undefined) patch.kind = asString(args.kind);

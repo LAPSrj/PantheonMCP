@@ -382,7 +382,8 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
       required: ["text"],
       properties: {
         text: { type: "string" },
-        summary: { type: "string", description: "≤240 chars; auto-derived from text when omitted. Phrase the TRIGGER (\"when doing X, remember Y\"), not a bare title." },
+        summary: { type: "string", description: "≤240 chars; auto-derived from text when omitted. Phrase the TRIGGER (\"when doing X, remember Y\"), not a bare title. Alias: `summary_max240`." },
+        summary_max240: { type: "string", description: "v2 name for `summary` — the ≤240 limit is in the name as a nudge. Same field; pass one or the other." },
         details: { type: "string", description: "DEPRECATED (v2 §2/§16) — put the payload in `text` or a separate entry. Still stored for now; ≤5 MB, never inlined at startup." },
         kind: { type: "string", description: "One of: rule, fact, gotcha, pointer, note, handoff, reminder. Legacy kinds (decision/log/…) are mapped + warned." },
         core: { type: "boolean", description: "DEPRECATED (v2 §2/§16) — mapped to `pin`. Use `pin` + `pin_reason`." },
@@ -441,6 +442,7 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
       properties: {
         id: { type: "string" },
         summary: { type: "string" },
+        summary_max240: { type: "string", description: "v2 alias for `summary`." },
         text: { type: "string" },
         details: {
           oneOf: [{ type: "string" }, { type: "null" }],

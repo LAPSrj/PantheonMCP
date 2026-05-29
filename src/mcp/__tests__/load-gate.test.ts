@@ -135,6 +135,18 @@ test("load_memory starts the session ordinal; appends stamp session_seq", async 
   expect(created.session_seq).toBe(1);
 });
 
+test("summary_max240 is accepted as an alias for summary (stored as summary)", async () => {
+  await dispatch("load_memory", { topics: ["git"] }, ctx);
+  const created = parse(
+    await dispatch(
+      "append_memory",
+      { text: "body", summary_max240: "when X, do Y", kind: "rule", topic: "git" },
+      ctx,
+    ),
+  );
+  expect(created.summary).toBe("when X, do Y");
+});
+
 test("core:true is deprecated → mapped to pin, no core stored, warns", async () => {
   await dispatch("load_memory", { topics: ["git"] }, ctx);
   const created = parse(
