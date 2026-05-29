@@ -6,6 +6,7 @@
 
 import type { MessageRow } from "../chat/persistence.ts";
 import type { PresenceRow } from "../chat/presence.ts";
+import { formatLocalTime } from "../chat/format.ts";
 import { renderMarkdownBlock } from "./console-markdown.ts";
 
 const ANSI = {
@@ -133,7 +134,7 @@ export function createFormatter(color: boolean): Formatter {
   };
 
   const format = (m: ConsoleMessage): string => {
-    const when = new Date(m.ts).toLocaleTimeString("en-GB");
+    const when = formatLocalTime(m.ts);
     const time = paint("grey", when);
 
     if (m.system) {

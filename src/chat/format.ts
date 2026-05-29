@@ -38,6 +38,22 @@ export function priorityTag(msg: Message, receiver: Subscriber): PriorityTag {
   return "[no reply]";
 }
 
+/** Format an epoch-ms timestamp as local wall-clock time with a short
+ * timezone label (e.g. `21:50:56 PDT`). Pantheon stores epoch/UTC; ALL
+ * human/agent-facing time DISPLAY goes through here so the rendered zone
+ * is the system's local zone and is always labelled — agents were
+ * misreading the watcher's unlabelled `toISOString()` UTC times as local
+ * (e.g. `04:35` for what was 21:35 PDT). */
+export function formatLocalTime(ts: number): string {
+  return new Date(ts).toLocaleTimeString("en-US", {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    timeZoneName: "short",
+  });
+}
+
 /** §7 fix — wrap ambient events in `<silent-event>` instead of
  * `[no reply]`. Models trained against echoing XML control tokens
  * are far less likely to mirror the wrapper than the bracketed tag. */

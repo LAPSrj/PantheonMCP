@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import {
   guestMarker,
+  formatLocalTime,
   modeMarker,
   SILENT_KINDS,
   wrapSilentEvent,
@@ -370,7 +371,7 @@ function formatDirected(row: MessageRow, receiver: ReceiverState): WatcherEvent 
   // when the body is about to be source-truncated for emit.
   const mentioned = row.text.toLowerCase().includes(`@${receiver.username.toLowerCase()}`);
   const tag = priorityTagForRow(row, receiver, mentioned);
-  const dateStr = new Date(row.ts).toISOString().slice(11, 19); // HH:MM:SS UTC
+  const dateStr = formatLocalTime(row.ts); // local HH:MM:SS + tz label
   const body = watcherBody(row);
   // status_digest gets a `· status_digest` label and the body on the
   // next line, mirroring chat-mcp's keepalive-style header. No
@@ -410,7 +411,7 @@ function senderHandle(row: MessageRow): string {
 
 function coalesceSilent(rows: MessageRow[]): WatcherEvent {
   const summary = summariseSilent(rows);
-  const ts = new Date(rows[rows.length - 1]!.ts).toISOString().slice(11, 19);
+  const ts = formatLocalTime(rows[rows.length - 1]!.ts);
   const line = wrapSilentEvent(summary, { time: ts, count: rows.length });
   const lastSeq = rows.reduce((acc, r) => Math.max(acc, r.seq), 0);
   return { line, message_ids: rows.map((r) => r.id), last_seq: lastSeq };
