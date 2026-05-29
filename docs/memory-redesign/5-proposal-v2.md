@@ -257,5 +257,16 @@ sets stay within budget; the topic-menu load is used, not bypassed.
 
 ---
 
-*Final v2. Awaiting Leandro's review + go-ahead. Design only — nothing
-implemented yet.*
+*Final v2. **Implemented** (2026-05-29) — Leandro greenlit the end-to-end
+build. Schema (P1), topic-scoped render + write validation + new tools +
+load gate (P3/P4/P11), decay engine (P6), and the legacy-surface
+deprecation (P2) are landed on local main with full test coverage. See
+`docs/memory.md` (v2 model section) for the as-built reference.*
+
+*Two follow-ups are intentionally deferred pending Leandro's call:*
+- *Flipping write validation from warn-only to enforce
+  (`PANTHEON_MEMORY_ENFORCE=1`) — §17 P3's "then enforce" step.*
+- *The HARD schema removal of `core` / `details` from the tool inputs.
+  They're deprecated-with-mapping today (safe + reversible); a hard cut
+  would reject a live agent's in-flight write, so it waits for explicit
+  go-ahead.*

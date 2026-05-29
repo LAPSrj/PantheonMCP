@@ -60,17 +60,41 @@ and points `PANTHEON_HOME` at it.
 4. Add tests under `src/mcp/__tests__/` — mirror the pattern in an
    adjacent test file.
 
-### Memory writes
+### Memory writes (v2 — topic-scoped)
 
-- `append_memory` is the always-safe entry point. `update_memory` /
+Memory is topic-scoped + lazy (`docs/memory-redesign/5-proposal-v2.md`;
+`docs/memory.md` has the reference). The shape:
+
+- **Kinds (7):** `rule`, `fact`, `gotcha`, `pointer`, `note`, `handoff`,
+  `reminder`. Legacy kinds (decision/log/audit/…) are auto-mapped on read
+  + warned on write (`src/memory/taxonomy.ts`).
+- **Topics:** every durable kind (rule/fact/gotcha/pointer) + handoff
+  needs a `topic`; the slug is `<topic>/<name>`. Notes inherit the
+  session topic; reminders are due-gated. The reserved topic `always`
+  loads (as summaries) every session.
+- **Boot + load gate:** `manifest → list_topics → load_memory(topic) →
+  login → monitor`. The dispatcher rejects non-exempt tools with
+  `memory_not_loaded` until `load_memory` runs (enabled only in the real
+  server boot via `memory_gate_enabled`; a fresh/empty persona skips it).
+- **Render (`src/memory/render.ts`):** load × detail ladder — due
+  reminders (top), pinned FULL (byte-budgeted; legacy `core` still
+  honored as a pin), `always` SUMMARY, declared topics FULL (oldest →
+  summary under budget), notes last-5/topic, delivered handoffs (A∩H≠∅),
+  unloaded topics as menu counts. **Status never auto-mutates from
+  rendering** — collapse is render-time only; `recall_memory(id)` returns
+  full text.
+- **Decay (`src/memory/decay.ts`)** runs at the `load_memory` session
+  boundary: handoff matching-session fade (§8), next-session reminder
+  consumption, superseded → forgotten. Date-reminder delivery is on the
+  daemon-tick (`sweepDueReminders`).
+- **Validation (`src/memory/validation.ts`)** is warn-only by default
+  (`PANTHEON_MEMORY_ENFORCE=1` to throw): kind enum, summary_is_header,
+  topic_required, pin/always budget guards.
+- **Deprecated:** `core` (→ mapped to `pin`), `details` (still stored,
+  use `text`), and the notebook tools (dropped from the advertised list,
+  handlers kept).
+- `append_memory` is the always-safe entry point; `update_memory` /
   `fade_memory` mutate; `forget_memory` (alias `delete`) tombstones.
-- The renderer (`src/memory/render.ts`) collapses oldest-first when
-  Active exceeds 8 KB and middle-out when Core exceeds 10 KB. **Status
-  never auto-mutates from rendering** — collapse is render-time only;
-  `recall_memory(id)` always returns full text.
-- Three-tier body: `summary` (≤240 ch, always rendered) + `text`
-  (counts toward budget) + `details` (≤5 MB, never inlined; only via
-  `get_memory_details(id)`).
 
 ### Chat scopes
 

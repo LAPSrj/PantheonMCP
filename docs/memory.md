@@ -1,9 +1,93 @@
 # Memory
 
-`src/memory/` owns each persona's memory store and the §4 three-tier
-render. The on-disk shape is documented in `docs/storage.md`; this
-file documents the *behavior* — entry shape, append rules, render
-budgets, and the contract that **status is never auto-mutated**.
+`src/memory/` owns each persona's memory store and its render. The
+on-disk shape is documented in `docs/storage.md`; this file documents the
+*behavior*.
+
+> **v2 redesign (current).** Memory is now **topic-scoped + lazy** per
+> `docs/memory-redesign/5-proposal-v2.md`. The v2 model is summarised
+> immediately below; the legacy three-tier (Core/Active/Index) sections
+> further down are **superseded** and kept only for historical context —
+> they describe the render that existed before the v2 rewrite.
+
+## v2 model (current)
+
+**Modules.** `taxonomy.ts` (7 kinds + legacy map + topic clustering),
+`validation.ts` (write-time checks), `budgets.ts` (byte budgets),
+`derive.ts` (summary + topic-aware slug), `render.ts` (topic-scoped
+render), `decay.ts` (session-boundary + timed decay), plus the
+unchanged `operations.ts` / `store.ts` / `handoffs.ts` / `snapshots.ts` /
+`lifecycle.ts`.
+
+**Kinds (7).** `rule`, `fact`, `gotcha`, `pointer`, `note`, `handoff`,
+`reminder`. Legacy kinds map: decision/feedback→rule, audit→gotcha,
+log/phase-*/untyped→note (mapped on read/render, warned on write).
+
+**Topics.** `slug = <topic>/<name>`. Durable kinds (rule/fact/gotcha/
+pointer) + handoff REQUIRE a topic (`topic_required`, warn-only until
+`PANTHEON_MEMORY_ENFORCE=1`). Notes inherit the session topic; reminders
+are due-gated. `always` is the reserved every-session (summary) topic.
+Un-topiced legacy entries fall into an implicit `(untopiced)` bucket
+that always loads, so un-migrated personas stay whole.
+
+**Boot + load gate (§9).** `manifest → list_topics → load_memory(topic)
+→ login → monitor`. The dispatcher rejects non-exempt tools with
+`memory_not_loaded` until `load_memory` runs (exempt: manifest,
+list_topics, load_memory, get_instructions, session_info, whoami). The
+gate is enabled only by the real server boot (`memory_gate_enabled`); a
+fresh/empty persona auto-skips it. `load_memory`'s return shape IS the
+boot render.
+
+**Render — load × detail ladder (§6/§7).** Detail ladder is
+`FULL → SUMMARY → TITLE → TALLY → HIDDEN`. Sections, in order:
+due reminders (full, top); PINNED (full, byte-budgeted — legacy `core`
+honored as a pin); ALWAYS (summary, byte-budgeted); each declared topic
+(durable FULL with oldest→summary under `TOPIC_FULL_BUDGET_BYTES`, notes
+last-5 as title+summary, faded as title+summary); DELIVERED HANDOFFS
+(A∩H≠∅); NOT LOADED (menu counts); HIDDEN (forgotten, on request).
+Status is NEVER mutated by render — collapse is render-time only and
+`recall_memory(id)` returns full text.
+
+**Decay (§8/§10/§14) — `decay.ts`.** Session/topic decay runs at
+`load_memory` (the session boundary), not on a clock:
+- Handoff matching-session fade: A = loaded topics, H = handoff topic.
+  A∩H=∅ → frozen (never expires unseen); A=={H} → autofade after one
+  session; A∩H≠∅ & A≠{H} → matched++ once/session (deduped by
+  `session_seq`), fade at `HANDOFF_MATCH_THRESHOLD` (3); a faded handoff
+  → forgotten on the next matching session.
+- Next-session reminders fade once delivered in a later session.
+- `supersedes` (set on append) tombstones the replaced entry.
+- Date-reminder delivery is on the daemon-tick (`sweepDueReminders`
+  pushes once via the `notified` flag).
+
+**session_seq.** `MemoryStore.session_seq` is the per-persona session
+ordinal, bumped by `beginSession()` on the first `load_memory` of a
+conversation, cached on the context, and stamped on entries written that
+session. Drives the handoff fade dedup + next-session reminders.
+
+**Validation — `validation.ts`.** Reject codes: `invalid_kind`,
+`summary_is_header`, `topic_required` (with existing-topic list +
+suggestion), `new_topic` (advisory), `pin_budget_exceeded`,
+`always_budget_exceeded`. Warn-only by default; `PANTHEON_MEMORY_ENFORCE=1`
+throws. Surfaced as `warnings` on the append response.
+
+**get_instructions (§11).** Read-only topic-keyed manual
+(`src/responses/instructions.ts`) — system-authored guidance distinct
+from persona memory. Auto-surfaced JIT: error payloads carry a
+`see_instructions` pointer mapping the error code to the topic that
+explains it.
+
+**Deprecations (§2/§16).** `core` → mapped to `pin`; `details` still
+accepted + stored but deprecated (use `text`); the notebook tool surface
+is dropped from the advertised list (handlers retained). Surfaced in a
+`deprecations` array on the append response.
+
+---
+
+## Legacy (v1 three-tier — superseded)
+
+The sections below describe the pre-v2 Core/Active/Index render. They no
+longer reflect `render.ts`; retained for history only.
 
 ## Entry shape
 
