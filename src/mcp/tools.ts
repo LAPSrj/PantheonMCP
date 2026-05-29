@@ -105,7 +105,12 @@ const REST_TIMEOUT_SCHEMA = {
   ],
 };
 
-export const TOOLS: readonly ToolDef[] = [
+/** Full tool-definition list. The notebook surface (F7 — zero adoption)
+ * is DEPRECATED in v2 (§2): its definitions live here but are filtered
+ * out of the advertised `TOOLS` below, so the tools no longer appear in
+ * `tools/list`. The handlers stay registered (see handlers/index.ts) so
+ * any in-flight caller still resolves rather than getting unknown_tool. */
+const ALL_TOOL_DEFS: readonly ToolDef[] = [
   // -------- Identity --------
   {
     name: "whoami",
@@ -377,10 +382,10 @@ export const TOOLS: readonly ToolDef[] = [
       required: ["text"],
       properties: {
         text: { type: "string" },
-        summary: { type: "string", description: "≤240 chars; auto-derived from text when omitted." },
-        details: { type: "string", description: "Unbounded payload, ≤5 MB. Never inlined at startup." },
-        kind: { type: "string" },
-        core: { type: "boolean" },
+        summary: { type: "string", description: "≤240 chars; auto-derived from text when omitted. Phrase the TRIGGER (\"when doing X, remember Y\"), not a bare title." },
+        details: { type: "string", description: "DEPRECATED (v2 §2/§16) — put the payload in `text` or a separate entry. Still stored for now; ≤5 MB, never inlined at startup." },
+        kind: { type: "string", description: "One of: rule, fact, gotcha, pointer, note, handoff, reminder. Legacy kinds (decision/log/…) are mapped + warned." },
+        core: { type: "boolean", description: "DEPRECATED (v2 §2/§16) — mapped to `pin`. Use `pin` + `pin_reason`." },
         expires_at: {
           oneOf: [{ type: "number" }, { type: "null" }],
           description:
@@ -439,10 +444,11 @@ export const TOOLS: readonly ToolDef[] = [
         text: { type: "string" },
         details: {
           oneOf: [{ type: "string" }, { type: "null" }],
+          description: "DEPRECATED (v2 §2/§16). null clears.",
         },
         kind: { type: "string" },
         status: { type: "string", enum: ["active", "faded", "forgotten"] },
-        core: { type: "boolean" },
+        core: { type: "boolean", description: "DEPRECATED — mapped to `pin` (true pins, false unpins)." },
         replies_to: {
           oneOf: [{ type: "string" }, { type: "null" }],
           description: "Set to a new id to replace; null to clear.",
@@ -2296,3 +2302,16 @@ export const TOOLS: readonly ToolDef[] = [
     },
   },
 ];
+
+/** v2 §2 — the deprecated notebook surface, filtered out of the
+ * advertised tool list. Handlers remain registered for tolerance. */
+const DEPRECATED_TOOL_PREFIXES = ["notebook_", "project_notebook_"];
+
+export const TOOLS: readonly ToolDef[] = ALL_TOOL_DEFS.filter(
+  (t) => !DEPRECATED_TOOL_PREFIXES.some((p) => t.name.startsWith(p)),
+);
+
+/** The deprecated tool names, exposed for tests / introspection. */
+export const DEPRECATED_TOOLS: readonly string[] = ALL_TOOL_DEFS.filter((t) =>
+  DEPRECATED_TOOL_PREFIXES.some((p) => t.name.startsWith(p)),
+).map((t) => t.name);

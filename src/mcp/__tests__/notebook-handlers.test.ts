@@ -254,15 +254,16 @@ test("write without claimed persona returns no_persona", async () => {
   expect(r.payload.error).toBe("no_persona");
 });
 
-test("dispatcher rejects unknown fields", async () => {
-  const r = await call("notebook_write_page", {
-    topic: "x",
-    title: "y",
-    body: "z",
-    bogus: 1,
-  });
-  expect(r.ok).toBe(false);
-  expect(r.payload.error).toBe("invalid_args");
+test("notebook tools are DEPRECATED — dropped from the advertised list but still dispatch-callable", async () => {
+  // v2 §2: the notebook surface is filtered out of TOOLS (no schema, no
+  // tools/list entry), but its handlers stay registered for tolerance.
+  const { TOOLS, DEPRECATED_TOOLS } = await import("../tools.ts");
+  expect(TOOLS.some((t) => t.name === "notebook_write_page")).toBe(false);
+  expect(DEPRECATED_TOOLS).toContain("notebook_write_page");
+  // The handler still resolves (not unknown_tool) — unknown fields are
+  // no longer schema-rejected since the tool has no advertised schema.
+  const r = await call("notebook_write_page", { topic: "x", title: "y", body: "z" });
+  expect(r.payload.error).not.toBe("unknown_tool");
 });
 
 test("dispatcher rejects bad topic slug", async () => {

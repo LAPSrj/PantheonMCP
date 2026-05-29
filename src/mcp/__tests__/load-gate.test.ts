@@ -127,6 +127,16 @@ test("load_memory starts the session ordinal; appends stamp session_seq", async 
   expect(created.session_seq).toBe(1);
 });
 
+test("core:true is deprecated → mapped to pin, no core stored, warns", async () => {
+  await dispatch("load_memory", { topics: ["git"] }, ctx);
+  const created = parse(
+    await dispatch("append_memory", { text: "x", kind: "rule", topic: "git", core: true }, ctx),
+  );
+  expect(created.pin).toBe(true);
+  expect(created.core).toBeUndefined();
+  expect(Array.isArray(created.deprecations)).toBe(true);
+});
+
 test("append with supersedes forgets the superseded target", async () => {
   await dispatch("load_memory", { topics: ["git"] }, ctx);
   const old = parse(await dispatch("append_memory", { text: "old rule", kind: "rule", topic: "git" }, ctx));
