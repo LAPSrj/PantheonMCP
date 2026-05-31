@@ -170,6 +170,79 @@ export function appendEntry(
   return created;
 }
 
+/** Bulk-import existing entries from one persona's store into
+ * `username`'s store — the memory half of `mergePersona`. Unlike
+ * `appendEntry`, this PRESERVES each entry's original `date`, `status`,
+ * and full field set: a consolidation must keep faded entries faded and
+ * chronology intact. Only the `id` is regenerated to avoid collision
+ * with the target's existing slugs (and with the other ids minted in
+ * the same import). Internal references (`replies_to` / `see_also` /
+ * `supersedes`) that pointed at another imported entry are remapped to
+ * the new ids; references to entries that weren't imported are left
+ * untouched (best-effort).
+ *
+ * Forgotten (tombstoned) source entries are SKIPPED — there's no value
+ * in carrying dead rows into the merged persona.
+ *
+ * Returns the imported entries (post-remap), the old→new id map, and a
+ * count of references that were rewritten. */
+export function importEntries(
+  paths: Paths,
+  username: string,
+  sourceEntries: MemoryEntry[],
+): { imported: MemoryEntry[]; remap: Map<string, string>; remapped_refs: number } {
+  const incoming = sourceEntries.filter((e) => e.status !== "forgotten");
+  const remap = new Map<string, string>();
+  let imported: MemoryEntry[] = [];
+  let remappedRefs = 0;
+
+  mutateStore(paths, username, (store) => {
+    // Reset accumulators so an mtime-guard retry doesn't double-count.
+    remap.clear();
+    remappedRefs = 0;
+    const existingIds = new Set(store.entries.map((e) => e.id));
+
+    // Pass 1: regenerate ids collision-free (against the target store
+    // AND the ids minted here), preserving everything else verbatim.
+    const cloned: MemoryEntry[] = [];
+    for (const src of incoming) {
+      const newId = slugify(src.summary || src.text, existingIds, src.topic);
+      existingIds.add(newId);
+      remap.set(src.id, newId);
+      const next: MemoryEntry = { ...src, id: newId };
+      // Structural invariant (mirror appendEntry): handoffs are never Core.
+      if (next.core && !coreAllowedForKind(next.kind)) delete next.core;
+      cloned.push(next);
+    }
+
+    // Pass 2: remap internal references now that every new id exists.
+    for (const e of cloned) {
+      if (e.replies_to !== undefined && remap.has(e.replies_to)) {
+        e.replies_to = remap.get(e.replies_to)!;
+        remappedRefs++;
+      }
+      if (e.see_also !== undefined) {
+        e.see_also = e.see_also.map((ref) => {
+          if (remap.has(ref)) {
+            remappedRefs++;
+            return remap.get(ref)!;
+          }
+          return ref;
+        });
+      }
+      if (e.supersedes !== undefined && remap.has(e.supersedes)) {
+        e.supersedes = remap.get(e.supersedes)!;
+        remappedRefs++;
+      }
+    }
+
+    imported = cloned;
+    return { ...store, entries: [...store.entries, ...cloned] };
+  });
+
+  return { imported, remap, remapped_refs: remappedRefs };
+}
+
 function validateReference(
   ref: string,
   existingIds: Set<string>,

@@ -9,6 +9,7 @@ export {
 
 export {
   appendEntry,
+  importEntries,
   beginSession,
   getEntry,
   updateEntry,

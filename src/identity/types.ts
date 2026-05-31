@@ -178,4 +178,5 @@ export type IdentityErrorCode =
   | "username_prefix_collision"
   | "not_registered"
   | "already_registered"
+  | "merge_into_self"
   | "no_persona";

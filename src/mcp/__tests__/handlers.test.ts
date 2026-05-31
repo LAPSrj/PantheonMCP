@@ -711,7 +711,18 @@ test("find_memory: scope='self' filters the caller's own memory", async () => {
   expect(hits[0]!.summary).toContain("alpha-keyword");
 });
 
-test("find_memory: scope='all' walks every persona and attaches username", async () => {
+test("find_memory rejects a cross-persona `scope` arg (self-only)", async () => {
+  await call("register", {
+    username: "vellumpike", project: "pantheon", cwd: "/work",
+    description: "lead", expertise: ["x"], owns: ["/work"],
+  });
+  await call("claim", { username: "vellumpike" });
+  const r = await call("find_memory", { query: "x", scope: "all" });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("invalid_args");
+});
+
+test("find_memory_any walks every persona and attaches username", async () => {
   // Two registered personas, each with one matching entry.
   createPersona(ctx.paths, {
     username: "alpha",
@@ -733,18 +744,95 @@ test("find_memory: scope='all' walks every persona and attaches username", async
   await call("claim", { username: "beta" });
   await call("append_memory", { text: "shared-keyword from beta" });
   await call("append_memory", { text: "noise" });
-  const r = await call("find_memory", { query: "shared-keyword", scope: "all" });
+  const r = await call("find_memory_any", { query: "shared-keyword" });
   expect(r.payload.count).toBe(2);
   const usernames = (r.payload.hits as Array<{ username: string }>)
     .map((h) => h.username).sort();
   expect(usernames).toEqual(["alpha", "beta"]);
 });
 
-test("find_memory: scope='self' without a claim → no_persona", async () => {
-  // No claim; should error.
+test("find_memory: without a claim → no_persona", async () => {
+  // No claim; should error (self-only, needs a claimed persona).
   const r = await call("find_memory", { query: "anything" });
   expect(r.ok).toBe(false);
   expect(r.payload.error).toBe("no_persona");
+});
+
+// --- personal memory is self-only; cross-persona reads are `_any` ---
+
+test("get_memory rejects a cross-persona `username` arg", async () => {
+  createPersona(ctx.paths, {
+    username: "peerpersona", project: "p", cwd: "/peer", platform: "linux",
+    description: "x", expertise: ["x"], owns: ["/peer"],
+  });
+  await call("register", {
+    username: "vellumpike", project: "pantheon", cwd: "/work",
+    description: "lead", expertise: ["x"], owns: ["/work"],
+  });
+  await call("claim", { username: "vellumpike" });
+  const r = await call("get_memory", { username: "peerpersona" });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("invalid_args");
+});
+
+test("get_memory_any renders another persona's memory", async () => {
+  createPersona(ctx.paths, {
+    username: "peerpersona", project: "p", cwd: "/peer", platform: "linux",
+    description: "x", expertise: ["x"], owns: ["/peer"],
+  });
+  await call("claim", { username: "peerpersona" });
+  await call("append_memory", {
+    text: "Peer pinned rule body.",
+    summary: "peer-pin-rule",
+    kind: "rule",
+    topic: "conventions",
+    pin: true,
+    pin_reason: "always visible",
+  });
+  // A different caller reads the peer via the elevated _any tool.
+  await call("register", {
+    username: "vellumpike", project: "pantheon", cwd: "/work",
+    description: "lead", expertise: ["x"], owns: ["/work"],
+  });
+  await call("claim", { username: "vellumpike" });
+  const r = await call("get_memory_any", { username: "peerpersona" });
+  expect(r.ok).toBe(true);
+  expect(r.payload.username).toBe("peerpersona");
+  expect(r.payload.text).toContain("Peer pinned rule body.");
+});
+
+test("recall_memory_any reads a peer entry WITHOUT mutating its status", async () => {
+  // Seed a peer with a faded entry.
+  await call("register", {
+    username: "peerpersona", project: "p", cwd: "/peer",
+    description: "x", expertise: ["x"], owns: ["/peer"],
+  });
+  await call("claim", { username: "peerpersona" });
+  const appended = await call("append_memory", {
+    text: "Peer faded body text.",
+    summary: "peer-faded-entry",
+  });
+  const entryId = (appended.payload as { id: string }).id;
+  await call("fade_memory", { id: entryId }); // self-fade on the peer
+
+  // Switch to a different caller and recall the peer's faded entry.
+  await call("register", {
+    username: "vellumpike", project: "pantheon", cwd: "/work",
+    description: "lead", expertise: ["x"], owns: ["/work"],
+  });
+  await call("claim", { username: "vellumpike" });
+  const recalled = await call("recall_memory_any", {
+    username: "peerpersona",
+    id: entryId,
+  });
+  expect(recalled.ok).toBe(true);
+  expect(recalled.payload.text).toBe("Peer faded body text.");
+  // Read-only: the peer's entry must STILL be faded (not flipped active).
+  expect(recalled.payload.status).toBe("faded");
+  const listed = await call("list_memory_any", { username: "peerpersona", status: "all" });
+  const entry = (listed.payload.entries as Array<{ id: string; status: string }>)
+    .find((e) => e.id === entryId)!;
+  expect(entry.status).toBe("faded");
 });
 
 // --- §6 HIGH context-pressure nudge surfaces in tool responses ---

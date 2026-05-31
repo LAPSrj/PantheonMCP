@@ -32,7 +32,7 @@ export interface RenderOptions {
   include_forgotten?: boolean;
   /** Render ONLY the always-loaded surface (pinned FULL + `always`
    * SUMMARY) — the v2 analog of the old `only_core`. Used for cheap
-   * peer-inspection (`get_memory({ username: other, only_core: true })`). */
+   * peer-inspection (`get_memory_any({ username: other, only_core: true })`). */
   only_core?: boolean;
   /** §6 — the topics declared this session via `load_memory`. Entries
    * under these topics render at full detail; everything else is a menu

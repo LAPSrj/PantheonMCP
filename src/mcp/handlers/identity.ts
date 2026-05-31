@@ -2,6 +2,7 @@ import {
   IdentityError,
   PERMISSION_MODES,
   forkPersona,
+  mergePersona,
   listPersonas,
   patchPersona,
   personasForCwd,
@@ -368,6 +369,49 @@ export const fork: Handler = async (args, ctx) => {
     cwd,
     copy_memory: copyMemory,
   });
+};
+
+export const merge: Handler = async (args, ctx) => {
+  const from = asStringRequired(args.from, "from");
+  const into = asStringRequired(args.into, "into");
+  if (from === into) {
+    throw new ToolError(
+      "merge_into_self",
+      "`from` and `into` must be different personas.",
+    );
+  }
+
+  // Don't consolidate a persona that's live in chat: dropping its
+  // registry entry + memory out from under an active session would
+  // orphan it. The caller should rest/exit the source first. (Mirrors
+  // fork's chat-side collision check — ctx.chat owns subscriber state.)
+  if (ctx.chat) {
+    const liveFrom = ctx.chat.getByUsername(from);
+    if (liveFrom) {
+      throw new ToolError(
+        "merge_source_online",
+        `Source '${from}' is currently online in chat — have it rest/exit before merging, or it'll be orphaned.`,
+      );
+    }
+  }
+
+  const result = mergePersona({
+    paths: ctx.paths,
+    from,
+    into,
+    ...(asBoolean(args.union_profile) !== undefined
+      ? { union_profile: asBoolean(args.union_profile)! }
+      : {}),
+    ...(asBoolean(args.drop_source) !== undefined
+      ? { drop_source: asBoolean(args.drop_source)! }
+      : {}),
+  });
+
+  return {
+    ...result,
+    note:
+      "Chat history is keyed by agent_id and was NOT moved — past messages stay attributed to the source handle. Memory snapshots were not copied.",
+  };
 };
 
 export const session_info: Handler = async (_args, ctx) => {

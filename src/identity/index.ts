@@ -50,3 +50,9 @@ export {
   type ForkOptions,
   type ForkResult,
 } from "./fork.ts";
+
+export {
+  mergePersona,
+  type MergeOptions,
+  type MergeResult,
+} from "./merge.ts";

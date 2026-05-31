@@ -34,25 +34,36 @@ import {
   asString,
   asStringRequired,
   type Handler,
+  type HandlerContext,
   ToolError,
 } from "../types.ts";
 
-function targetUsername(args: Record<string, unknown>, claimed: string | null): string {
-  const explicit = asString(args.username);
-  if (explicit) return explicit;
+/** Persona memory is SELF-ONLY: an agent reads/writes its OWN claimed
+ * persona, never a peer's. Cross-persona reads live behind the
+ * `_any`-suffixed variants (`get_memory_any`, `recall_memory_any`, …),
+ * which an operator can deny to regular agents by tool name. Shared
+ * memory goes through PROJECT memory, not a peer's personal store. */
+function selfUsername(claimed: string | null): string {
   if (!claimed) {
-    throw new ToolError("no_persona", "No claimed persona; pass `username` or call `claim` first.");
+    throw new ToolError(
+      "no_persona",
+      "No claimed persona — call `claim` or `manifest` first.",
+    );
   }
   return claimed;
 }
 
-export const get_memory: Handler = async (args, ctx) => {
-  const username = targetUsername(args, ctx.session.claimedUsername);
-  const includeForgotten = asBoolean(args.include_forgotten) ?? false;
-  const onlyCore = asBoolean(args.only_core) ?? false;
-  // Render scoped to the topics declared this session (via load_memory).
-  // Peer-inspection (`username` of another persona) renders their
-  // always-loaded surface only unless topics are passed explicitly.
+/** Shared render path for `get_memory` (self) and `get_memory_any`
+ * (peer). A peer render omits `loaded_topics` / `session_seq`, so only
+ * the peer's pinned-FULL + `always`-summary surface (+ topic menu
+ * counts) shows — topic bodies stay collapsed (use `recall_memory_any`
+ * for a specific peer entry's full text). */
+function renderMemoryFor(
+  ctx: HandlerContext,
+  username: string,
+  includeForgotten: boolean,
+  onlyCore: boolean,
+): Record<string, unknown> {
   const isSelf = username === ctx.session.claimedUsername;
   const rendered = renderForPrompt(ctx.paths, username, {
     include_forgotten: includeForgotten,
@@ -67,12 +78,32 @@ export const get_memory: Handler = async (args, ctx) => {
   };
 };
 
+export const get_memory: Handler = async (args, ctx) => {
+  return renderMemoryFor(
+    ctx,
+    selfUsername(ctx.session.claimedUsername),
+    asBoolean(args.include_forgotten) ?? false,
+    asBoolean(args.only_core) ?? false,
+  );
+};
+
+/** Cross-persona read (deniable by tool name). Renders another
+ * persona's always-loaded surface (+ `only_core` for a cheap peek). */
+export const get_memory_any: Handler = async (args, ctx) => {
+  return renderMemoryFor(
+    ctx,
+    asStringRequired(args.username, "username"),
+    asBoolean(args.include_forgotten) ?? false,
+    asBoolean(args.only_core) ?? false,
+  );
+};
+
 /** §9 / §13 — the topic menu: clustered topics + counts + due-reminder
  * count. Gate-exempt: this is the first call after manifest, before
  * `load_memory`. A fresh persona returns an empty topic list (the
  * dispatcher then skips the load gate). */
-export const list_topics: Handler = async (args, ctx) => {
-  const username = targetUsername(args, ctx.session.claimedUsername);
+export const list_topics: Handler = async (_args, ctx) => {
+  const username = selfUsername(ctx.session.claimedUsername);
   const entries = loadStore(ctx.paths, username).entries;
   const topics = clusterTopics(entries);
   const dueReminders = countDueReminders(entries, Date.now());
@@ -92,7 +123,9 @@ export const list_topics: Handler = async (args, ctx) => {
  * session (lifting the dispatcher load gate) and returns the memory
  * rendered for those topics — its return shape IS the boot render. */
 export const load_memory: Handler = async (args, ctx) => {
-  const username = targetUsername(args, ctx.session.claimedUsername);
+  // Loading is a self-only session operation — you load YOUR memory for
+  // this conversation; there's no "load a peer into my session".
+  const username = selfUsername(ctx.session.claimedUsername);
   // Accept `topics: string[]` or a single `topic: string`.
   let topics: string[] = [];
   if (Array.isArray(args.topics)) {
@@ -351,9 +384,23 @@ export const set_memory: Handler = async (args, ctx) => {
 };
 
 export const recall_memory: Handler = async (args, ctx) => {
-  const username = targetUsername(args, ctx.session.claimedUsername);
+  const username = selfUsername(ctx.session.claimedUsername);
   const id = asStringRequired(args.id, "id");
   return recallEntry(ctx.paths, username, id);
+};
+
+/** Cross-persona full-text read (deniable by tool name). Unlike
+ * self-`recall_memory`, this is strictly READ-ONLY: it must NOT flip a
+ * peer's faded entry to active (recallEntry mutates — getEntry does
+ * not). Returns the entry's full body as-stored, any tier/status. */
+export const recall_memory_any: Handler = async (args, ctx) => {
+  const username = asStringRequired(args.username, "username");
+  const id = asStringRequired(args.id, "id");
+  const entry = getEntry(ctx.paths, username, id);
+  if (!entry) {
+    throw new ToolError("entry_not_found", `No memory entry '${id}' for '${username}'.`);
+  }
+  return entry;
 };
 
 export const fade_memory: Handler = async (args, ctx) => {
@@ -380,8 +427,11 @@ export const forget_memory: Handler = async (args, ctx) => {
   return forgetEntryWithLifecycleCoercion(ctx.paths, claimed, id);
 };
 
-export const list_memory: Handler = async (args, ctx) => {
-  const username = targetUsername(args, ctx.session.claimedUsername);
+function listMemoryFor(
+  ctx: HandlerContext,
+  username: string,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
   const filter: ListIndexFilter = {};
   if (asString(args.status) !== undefined) filter.status = asString(args.status) as never;
   if (asBoolean(args.core) !== undefined) filter.core = asBoolean(args.core)!;
@@ -390,53 +440,71 @@ export const list_memory: Handler = async (args, ctx) => {
   if (asString(args.filter) !== undefined) filter.filter = asString(args.filter)!;
   const entries = listIndex(ctx.paths, username, filter);
   return { username, count: entries.length, entries };
+}
+
+export const list_memory: Handler = async (args, ctx) => {
+  return listMemoryFor(ctx, selfUsername(ctx.session.claimedUsername), args);
 };
 
-/** §6 LOW — `find_memory({ query, scope: "self"|"all" })`. Wraps
- * `findMemory` with scope resolution: self uses the caller's
- * claimed persona; all walks every registered persona. Returns
- * union sorted newest-first, capped at `limit` (default 50). */
-export const find_memory: Handler = async (args, ctx) => {
-  const query = asStringRequired(args.query, "query");
-  const scope = (asString(args.scope) ?? "self") as "self" | "all";
-  if (scope !== "self" && scope !== "all") {
-    throw new ToolError(
-      "invalid_argument",
-      `find_memory: scope must be 'self' or 'all'; got '${scope}'.`,
-    );
-  }
-  let usernames: string[];
-  if (scope === "all") {
-    usernames = listPersonas(ctx.paths).map((p) => p.username);
-  } else {
-    const claimed = ctx.session.claimedUsername;
-    if (!claimed) {
-      throw new ToolError(
-        "no_persona",
-        "find_memory({ scope: 'self' }) requires a claimed persona — call `claim` or `manifest` first, or pass scope: 'all'.",
-      );
-    }
-    usernames = [claimed];
-  }
-  const filter: FindMemoryFilter = { query };
+/** Cross-persona index listing (deniable by tool name). */
+export const list_memory_any: Handler = async (args, ctx) => {
+  return listMemoryFor(ctx, asStringRequired(args.username, "username"), args);
+};
+
+/** §6 LOW — build a `findMemory` filter from the common query args. */
+function findFilterFrom(args: Record<string, unknown>): FindMemoryFilter {
+  const filter: FindMemoryFilter = { query: asStringRequired(args.query, "query") };
   if (asString(args.kind) !== undefined) filter.kind = asString(args.kind)!;
   if (asString(args.since) !== undefined) filter.since = asString(args.since)!;
   if (asString(args.status) !== undefined) filter.status = asString(args.status) as never;
   if (asBoolean(args.core) !== undefined) filter.core = asBoolean(args.core)!;
   if (asNumber(args.limit) !== undefined) filter.limit = asNumber(args.limit)!;
-  const hits = findMemory(ctx.paths, usernames, filter);
-  return { scope, query, count: hits.length, hits };
+  return filter;
+}
+
+/** Search the CALLER's own memory for entries matching `query`. Cross-
+ * persona search lives in `find_memory_any` (deniable by tool name). */
+export const find_memory: Handler = async (args, ctx) => {
+  const username = selfUsername(ctx.session.claimedUsername);
+  const filter = findFilterFrom(args);
+  const hits = findMemory(ctx.paths, [username], filter);
+  return { scope: "self", query: filter.query, count: hits.length, hits };
 };
 
-export const get_memory_details: Handler = async (args, ctx) => {
-  const username = targetUsername(args, ctx.session.claimedUsername);
-  const id = asStringRequired(args.id, "id");
+/** Search across EVERY registered persona's memory (deniable by tool
+ * name). Hits carry `username` so follow-ups route via the `_any`
+ * read tools. */
+export const find_memory_any: Handler = async (args, ctx) => {
+  const filter = findFilterFrom(args);
+  const usernames = listPersonas(ctx.paths).map((p) => p.username);
+  const hits = findMemory(ctx.paths, usernames, filter);
+  return { scope: "all", query: filter.query, count: hits.length, hits };
+};
+
+function detailsFor(
+  ctx: HandlerContext,
+  username: string,
+  id: string,
+): Record<string, unknown> {
   // Verify the entry exists so we surface a friendlier error than "null".
   const entry = getEntry(ctx.paths, username, id);
   if (!entry) {
     throw new ToolError("entry_not_found", `No memory entry '${id}' for '${username}'.`);
   }
   return { id, username, details: getDetails(ctx.paths, username, id) };
+}
+
+export const get_memory_details: Handler = async (args, ctx) => {
+  return detailsFor(ctx, selfUsername(ctx.session.claimedUsername), asStringRequired(args.id, "id"));
+};
+
+/** Cross-persona details read (deniable by tool name). */
+export const get_memory_details_any: Handler = async (args, ctx) => {
+  return detailsFor(
+    ctx,
+    asStringRequired(args.username, "username"),
+    asStringRequired(args.id, "id"),
+  );
 };
 
 // --- §6 LOW memory snapshots ---
@@ -459,8 +527,8 @@ export const restore_memory: Handler = async (args, ctx) => {
   return restoreMemory(ctx.paths, claimed, label);
 };
 
-export const list_snapshots: Handler = async (args, ctx) => {
-  const username = targetUsername(args, ctx.session.claimedUsername);
+export const list_snapshots: Handler = async (_args, ctx) => {
+  const username = selfUsername(ctx.session.claimedUsername);
   const snapshots = listSnapshots(ctx.paths, username);
   return { username, count: snapshots.length, snapshots };
 };
