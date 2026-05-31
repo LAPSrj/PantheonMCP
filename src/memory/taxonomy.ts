@@ -4,8 +4,9 @@
  * topic. Centralised so validation, render, and the topic tools share
  * one source of truth.
  *
- * Nothing here is enforced destructively: legacy kinds are *mapped*,
- * not rejected, and topic requirements default to warn-only (§17 P3).
+ * Legacy kinds are *mapped*, not rejected (the `kind_legacy` warning is
+ * advisory even under enforcement). Topic requirements, by contrast, are
+ * now enforced on write — the §17 P3 warn-only window is over.
  */
 
 import type { MemoryEntry } from "./types.ts";

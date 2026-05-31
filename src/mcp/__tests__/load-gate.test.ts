@@ -147,14 +147,11 @@ test("summary_max240 is accepted as an alias for summary (stored as summary)", a
   expect(created.summary).toBe("when X, do Y");
 });
 
-test("core:true is deprecated → mapped to pin, no core stored, warns", async () => {
+test("core is no longer an accepted write input (v2 §16 hard-cut → invalid_args)", async () => {
   await dispatch("load_memory", { topics: ["git"] }, ctx);
-  const created = parse(
-    await dispatch("append_memory", { text: "x", kind: "rule", topic: "git", core: true }, ctx),
-  );
-  expect(created.pin).toBe(true);
-  expect(created.core).toBeUndefined();
-  expect(Array.isArray(created.deprecations)).toBe(true);
+  const r = await dispatch("append_memory", { text: "x", kind: "rule", topic: "git", core: true }, ctx);
+  expect(r.isError).toBe(true);
+  expect(parse(r).error).toBe("invalid_args");
 });
 
 test("append with supersedes forgets the superseded target", async () => {

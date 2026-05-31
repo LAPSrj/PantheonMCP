@@ -3,11 +3,13 @@
  * Specific reject codes: `invalid_kind`, `summary_is_header`,
  * `topic_required`, `pin_budget_exceeded`, `always_budget_exceeded`.
  *
- * Per §17 P3 the migration runs **warn-only** for one release, then
- * enforces. So `validateWrite` defaults to collecting issues as
- * warnings (returned to the caller, surfaced in the handler response)
- * and only throws when `enforce: true`. The reject logic is identical
- * either way — flipping enforcement on is a one-flag change.
+ * v2 is the only model now: `append_memory` always calls this with
+ * `enforce: true`, so hard issues throw a `MemoryError`. (The warn-only
+ * PANTHEON_MEMORY_ENFORCE env flag from the §17 P3 migration window was
+ * removed once the whole fleet had migrated.) The `enforce` option
+ * stays on the function so callers/tests can collect issues without
+ * throwing; advisory codes (`kind_legacy` / `new_topic`) are returned
+ * as warnings even under enforcement.
  *
  * Legacy kinds are mapped (not rejected) and warned about, so old
  * callers keep working through the migration window.

@@ -87,12 +87,17 @@ Memory is topic-scoped + lazy (`docs/memory-redesign/5-proposal-v2.md`;
   boundary: handoff matching-session fade (§8), next-session reminder
   consumption, superseded → forgotten. Date-reminder delivery is on the
   daemon-tick (`sweepDueReminders`).
-- **Validation (`src/memory/validation.ts`)** is warn-only by default
-  (`PANTHEON_MEMORY_ENFORCE=1` to throw): kind enum, summary_is_header,
-  topic_required, pin/always budget guards.
-- **Deprecated:** `core` (→ mapped to `pin`), `details` (still stored,
-  use `text`), and the notebook tools (dropped from the advertised list,
-  handlers kept).
+- **Validation (`src/memory/validation.ts`)** is enforced on write —
+  hard issues throw a `MemoryError` (`kind_legacy`/`new_topic` stay
+  advisory): kind enum, summary_is_header, topic_required, pin/always
+  budget guards. (The warn-only `PANTHEON_MEMORY_ENFORCE` flag was
+  removed once the whole fleet migrated.)
+- **Removed inputs (§16 hard-cut):** `core` and `details` are no longer
+  accepted by `append_memory` / `update_memory` — passing either returns
+  `invalid_args`. Use `pin` + `pin_reason` instead of `core`; put payload
+  in `text`. The stored `details` field + the `get_memory_details` read
+  path remain for legacy entries. The notebook tools stay dropped from the
+  advertised list (handlers kept).
 - `append_memory` is the always-safe entry point; `update_memory` /
   `fade_memory` mutate; `forget_memory` (alias `delete`) tombstones.
 

@@ -238,7 +238,9 @@ test("append_memory + get_memory + recall_memory round-trip", async () => {
   const append = await call("append_memory", {
     text: "Decision: use bun:sqlite for chat history.",
     kind: "decision",
-    core: true,
+    topic: "architecture",
+    pin: true,
+    pin_reason: "foundational architecture decision",
   });
   expect(append.ok).toBe(true);
   const id = append.payload.id as string;
@@ -284,7 +286,7 @@ test("append_memory: kind:handoff auto-gets a 7-day TTL when expires_at omitted"
     claim_after: true,
   });
   const before = Date.now();
-  const r = await call("append_memory", { text: "handoff body", kind: "handoff" });
+  const r = await call("append_memory", { text: "handoff body", kind: "handoff", topic: "work" });
   expect(r.ok).toBe(true);
   expect(r.payload.expires_at as number).toBeGreaterThan(before);
 });
@@ -299,6 +301,7 @@ test("append_memory: expires_at:null opts a handoff out of auto-TTL", async () =
   const r = await call("append_memory", {
     text: "permanent handoff",
     kind: "handoff",
+    topic: "work",
     expires_at: null,
   });
   expect(r.ok).toBe(true);
@@ -312,7 +315,7 @@ test("append_memory: non-handoff without expires_at gets no TTL", async () => {
     cwd: "/work",
     claim_after: true,
   });
-  const r = await call("append_memory", { text: "a fact", kind: "fact" });
+  const r = await call("append_memory", { text: "a fact", kind: "fact", topic: "work" });
   expect(r.ok).toBe(true);
   expect(r.payload.expires_at).toBeUndefined();
 });
@@ -324,23 +327,22 @@ test("append_memory: handoff hints about fading when other handoffs exist", asyn
     cwd: "/work",
     claim_after: true,
   });
-  const first = await call("append_memory", { text: "h1", kind: "handoff" });
+  const first = await call("append_memory", { text: "h1", kind: "handoff", topic: "work" });
   expect(first.payload.hint).toBeUndefined(); // no prior handoffs
-  const second = await call("append_memory", { text: "h2", kind: "handoff" });
+  const second = await call("append_memory", { text: "h2", kind: "handoff", topic: "work" });
   expect(second.payload.hint as string).toContain("1 other active handoff");
 });
 
-test("append_memory respects 5MB details cap", async () => {
+test("append_memory rejects the removed `details` input (v2 §16 hard-cut)", async () => {
   await call("register", {
     username: "vellumpike",
     project: "pantheon",
     cwd: "/work",
     claim_after: true,
   });
-  const tooBig = "a".repeat(5 * 1024 * 1024 + 1);
-  const r = await call("append_memory", { text: "x", details: tooBig });
+  const r = await call("append_memory", { text: "x", details: "anything" });
   expect(r.ok).toBe(false);
-  expect(r.payload.error).toBe("entry_too_large");
+  expect(r.payload.error).toBe("invalid_args");
 });
 
 test("get_memory_details returns ONLY the details field", async () => {
@@ -350,11 +352,13 @@ test("get_memory_details returns ONLY the details field", async () => {
     cwd: "/work",
     claim_after: true,
   });
-  const append = await call("append_memory", {
+  // `details` is no longer a write-tool input (v2 §16 hard-cut); legacy
+  // entries can still carry it, so seed one via the data layer.
+  const append = appendEntry(ctx.paths, "vellumpike", {
     text: "body",
     details: "verbatim quote",
   });
-  const r = await call("get_memory_details", { id: append.payload.id });
+  const r = await call("get_memory_details", { id: append.id });
   expect(r.ok).toBe(true);
   expect(r.payload.details).toBe("verbatim quote");
   expect(r.payload).not.toHaveProperty("text");
@@ -676,9 +680,9 @@ test("get_memory: only_core: true renders ONLY the Core tier (no Active/Index/Hi
     owns: ["/work"],
   });
   await call("claim", { username: "vellumpike" });
-  // `core: true` legacy entries still render as PINNED (pre-migration);
-  // an untyped note lands in the implicit (untopiced) bucket.
-  await call("append_memory", { text: "core fact", core: true });
+  // A pinned entry renders as PINNED; an untyped note lands in the
+  // implicit (untopiced) bucket.
+  await call("append_memory", { text: "core fact", pin: true, pin_reason: "always visible" });
   await call("append_memory", { text: "active note" });
   const all = await call("get_memory", {});
   expect(all.payload.text).toContain("PINNED");

@@ -428,9 +428,8 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
   {
     name: "append_memory",
     description:
-      "Create a new active memory entry. `text` is required. `summary` (≤240 ch) is auto-derived from text when omitted; provide explicitly when the first line isn't a good headline. `details` (≤5 MB) is the unbounded-payload field — never inlined at startup; only via `get_memory_details(id)`. " +
-      "Common `kind` values: 'decision', 'gotcha', 'handoff', 'fact', 'log'. " +
-      "Pass `core: true` for foundational entries (rendered in full at startup, subject to 10 KB middle-out cap). `core` is ignored for `kind: \"handoff\"` entries — handoffs are ephemeral continuity notes, never Core, and surface via `resume_summary.handoffs`. " +
+      "Create a new active memory entry. `text` is required. `summary` (≤240 ch) is auto-derived from text when omitted; provide explicitly when the first line isn't a good headline. " +
+      "`kind` is one of: rule, fact, gotcha, pointer, note, handoff, reminder. Durable kinds (rule/fact/gotcha/pointer) + handoff REQUIRE a `topic`. To render an entry in full every session use `pin: true` + `pin_reason` (byte-budgeted). " +
       "`summoner_username` is auto-populated when this session was spawned by another agent's `summon`; you can override.",
     inputSchema: {
       type: "object",
@@ -440,9 +439,7 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
         text: { type: "string" },
         summary: { type: "string", description: "≤240 chars; auto-derived from text when omitted. Phrase the TRIGGER (\"when doing X, remember Y\"), not a bare title. Alias: `summary_max240`." },
         summary_max240: { type: "string", description: "v2 name for `summary` — the ≤240 limit is in the name as a nudge. Same field; pass one or the other." },
-        details: { type: "string", description: "DEPRECATED (v2 §2/§16) — put the payload in `text` or a separate entry. Still stored for now; ≤5 MB, never inlined at startup." },
         kind: { type: "string", description: "One of: rule, fact, gotcha, pointer, note, handoff, reminder. Legacy kinds (decision/log/…) are mapped + warned." },
-        core: { type: "boolean", description: "DEPRECATED (v2 §2/§16) — mapped to `pin`. Use `pin` + `pin_reason`." },
         expires_at: {
           oneOf: [{ type: "number" }, { type: "null" }],
           description:
@@ -490,7 +487,7 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
   {
     name: "update_memory",
     description:
-      "Patch an existing memory entry. Pass `details: null` to clear details. Pass `core: false` to demote a core entry.",
+      "Patch an existing memory entry. To unpin, pass `pin: false`.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -500,13 +497,8 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
         summary: { type: "string" },
         summary_max240: { type: "string", description: "v2 alias for `summary`." },
         text: { type: "string" },
-        details: {
-          oneOf: [{ type: "string" }, { type: "null" }],
-          description: "DEPRECATED (v2 §2/§16). null clears.",
-        },
         kind: { type: "string" },
         status: { type: "string", enum: ["active", "faded", "forgotten"] },
-        core: { type: "boolean", description: "DEPRECATED — mapped to `pin` (true pins, false unpins)." },
         replies_to: {
           oneOf: [{ type: "string" }, { type: "null" }],
           description: "Set to a new id to replace; null to clear.",

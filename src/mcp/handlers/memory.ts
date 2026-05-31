@@ -208,15 +208,7 @@ export const append_memory: Handler = async (args, ctx) => {
   // limit as a generation-time nudge. The API accepts either name; the
   // storage field stays `summary` (tolerant-read live-safety).
   const summary = asString(args.summary) ?? asString(args.summary_max240);
-  const details = asString(args.details);
   const kind = asString(args.kind);
-  const core = asBoolean(args.core);
-  const deprecations: string[] = [];
-  if (details !== undefined) {
-    deprecations.push(
-      "`details` is deprecated (v2 §2/§16) — put the payload in `text`, or split into a separate entry. Still stored for now.",
-    );
-  }
   // `expires_at`: a number sets an explicit TTL. When the field is
   // OMITTED entirely, a `kind: "handoff"` entry auto-gets the 7-day
   // handoff TTL — so a hand-written handoff still fades like one made
@@ -238,19 +230,9 @@ export const append_memory: Handler = async (args, ctx) => {
     : undefined;
   // ── Redesign-v2 write fields.
   const topic = asString(args.topic);
-  let pin = asBoolean(args.pin);
-  let pinReason = asString(args.pin_reason);
+  const pin = asBoolean(args.pin);
+  const pinReason = asString(args.pin_reason);
   const supersedes = asString(args.supersedes);
-  // `core` is deprecated (v2 §2/§16). Map `core: true` → `pin` so the
-  // intent (render in full every session) is preserved without storing
-  // the legacy flag. New writes carry `pin`, not `core`.
-  if (core === true && pin === undefined) {
-    pin = true;
-    pinReason = pinReason ?? "(migrated from deprecated core)";
-    deprecations.push(
-      "`core: true` is deprecated (v2 §2/§16) — mapped to `pin: true`. Use `pin` + `pin_reason` going forward.",
-    );
-  }
   // `due`: a number (ms-epoch instant) or the literal "next-session".
   let due: number | "next-session" | undefined;
   if (typeof args.due === "number" && Number.isFinite(args.due)) {
@@ -259,9 +241,11 @@ export const append_memory: Handler = async (args, ctx) => {
     due = "next-session";
   }
 
-  // §12/§17 write-time validation. Warn-only by default; enforcement
-  // flips on via PANTHEON_MEMORY_ENFORCE=1 (the P3 "then enforce" step).
-  const enforce = process.env.PANTHEON_MEMORY_ENFORCE === "1";
+  // §12/§17 write-time validation. v2 is the only model now, so this is
+  // always enforced — hard issues throw. The warn-only
+  // PANTHEON_MEMORY_ENFORCE flag was removed once the whole fleet
+  // migrated; advisory codes (kind_legacy / new_topic) are still returned
+  // as warnings, never blocking.
   const warnings = validateWrite(
     {
       text,
@@ -270,13 +254,12 @@ export const append_memory: Handler = async (args, ctx) => {
       ...(topic !== undefined ? { topic } : {}),
       ...(pin !== undefined ? { pin } : {}),
     },
-    { existing: loadStore(ctx.paths, claimed).entries, enforce },
+    { existing: loadStore(ctx.paths, claimed).entries, enforce: true },
   );
 
   const created = appendEntry(ctx.paths, claimed, {
     text,
     ...(summary !== undefined ? { summary } : {}),
-    ...(details !== undefined ? { details } : {}),
     ...(kind !== undefined ? { kind } : {}),
     ...(expiresAt !== undefined ? { expires_at: expiresAt } : {}),
     ...(summoner !== undefined ? { summoner_username: summoner } : {}),
@@ -302,7 +285,6 @@ export const append_memory: Handler = async (args, ctx) => {
   }
   const warningFields = {
     ...(warnings.length > 0 ? { warnings } : {}),
-    ...(deprecations.length > 0 ? { deprecations } : {}),
     ...supersededInfo,
   };
 
@@ -342,11 +324,8 @@ export const update_memory: Handler = async (args, ctx) => {
   if (asString(args.summary) !== undefined) patch.summary = asString(args.summary);
   else if (asString(args.summary_max240) !== undefined) patch.summary = asString(args.summary_max240);
   if (asString(args.text) !== undefined) patch.text = asString(args.text);
-  if ("details" in args) patch.details = args.details === null ? null : asString(args.details);
   if (asString(args.kind) !== undefined) patch.kind = asString(args.kind);
   if (asString(args.status) !== undefined) patch.status = asString(args.status);
-  // `core` deprecated → map onto `pin` (true pins, false unpins).
-  if (asBoolean(args.core) !== undefined) patch.pin = asBoolean(args.core);
   if ("replies_to" in args) {
     patch.replies_to = args.replies_to === null ? null : asString(args.replies_to);
   }
