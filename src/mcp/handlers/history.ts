@@ -8,6 +8,7 @@
 
 import { listPersonas, readPersona } from "../../identity/index.ts";
 import {
+  extractConversation,
   fetchHistoryMessage,
   searchHistory,
   searchHistoryMulti,
@@ -286,6 +287,125 @@ export const get_history_message_any: Handler = async (args, ctx) => {
   return {
     ok: true,
     ...fetched,
+    persona_username: persona.username,
+    warning: HISTORY_WARNING,
+  };
+};
+
+interface ConversationArgs {
+  session_id: string;
+  max_chars?: number;
+  cursor?: number;
+  around?: string;
+  context_turns?: number;
+}
+
+function parseConversationArgs(
+  args: Record<string, unknown>,
+): ConversationArgs {
+  const session_id = asStringRequired(args.session_id, "session_id");
+  const max_chars = asNumber(args.max_chars);
+  const cursor = asNumber(args.cursor);
+  const around = asString(args.around);
+  const context_turns = asNumber(args.context_turns);
+  return {
+    session_id,
+    ...(max_chars !== undefined ? { max_chars } : {}),
+    ...(cursor !== undefined ? { cursor } : {}),
+    ...(around !== undefined ? { around } : {}),
+    ...(context_turns !== undefined ? { context_turns } : {}),
+  };
+}
+
+function runExtractConversation(
+  cwd: string,
+  parsed: ConversationArgs,
+  ownerLabel: string,
+) {
+  const result = extractConversation({
+    cwd,
+    session_id: parsed.session_id,
+    ...(parsed.max_chars !== undefined ? { maxChars: parsed.max_chars } : {}),
+    ...(parsed.cursor !== undefined ? { cursor: parsed.cursor } : {}),
+    ...(parsed.around !== undefined ? { around: parsed.around } : {}),
+    ...(parsed.context_turns !== undefined
+      ? { contextTurns: parsed.context_turns }
+      : {}),
+  });
+  if (result === null) {
+    throw new ToolError(
+      "not_found",
+      `no session '${parsed.session_id}' for ${ownerLabel}.`,
+    );
+  }
+  // Windowed mode with an unmatched anchor timestamp is a clean miss.
+  if (parsed.around !== undefined && result.anchor_turn_index === null) {
+    throw new ToolError(
+      "not_found",
+      `no message at '${parsed.around}' in session '${parsed.session_id}' for ${ownerLabel}.`,
+    );
+  }
+  return result;
+}
+
+/** Reconstruct a whole CC conversation as clean grouped user/agent/
+ * subagent turns. Pair with `search_history` — pass the hit's
+ * `session_id`. Default returns the entire conversation; `max_chars`
+ * + `cursor` page through huge transcripts; `around` (a hit's
+ * `message_at`) + `context_turns` return a window around one message. */
+export const get_history_conversation: Handler = async (args, ctx) => {
+  const parsed = parseConversationArgs(args);
+
+  const username =
+    ctx.session.claimedUsername ?? ctx.session.guestUsername ?? null;
+  if (!username) {
+    throw new ToolError(
+      "no_persona",
+      "get_history_conversation needs a claimed persona — claim one (or wait for the bootstrap claim) before calling.",
+    );
+  }
+  const persona = readPersona(ctx.paths, username);
+  if (!persona) {
+    throw new ToolError(
+      "not_registered",
+      `Persona '${username}' is not in the registry; can't resolve its cwd.`,
+    );
+  }
+
+  const result = runExtractConversation(
+    persona.cwd,
+    parsed,
+    `persona '${username}'`,
+  );
+  return { ok: true, ...result, warning: HISTORY_WARNING };
+};
+
+/** Cross-persona variant. Requires `target_username` — pass the
+ * `persona_username` from a `search_history_any` hit. No `project` mode:
+ * a single `session_id` resolves to exactly one persona. */
+export const get_history_conversation_any: Handler = async (args, ctx) => {
+  const parsed = parseConversationArgs(args);
+  const target_username = asStringRequired(
+    args.target_username,
+    "target_username",
+  );
+
+  const persona = readPersona(ctx.paths, target_username);
+  if (!persona) {
+    throw new ToolError(
+      "not_registered",
+      `Persona '${target_username}' is not in the registry.`,
+    );
+  }
+
+  const result = runExtractConversation(
+    persona.cwd,
+    parsed,
+    `persona '${target_username}'`,
+  );
+  return {
+    ok: true,
+    ...result,
     persona_username: persona.username,
     warning: HISTORY_WARNING,
   };

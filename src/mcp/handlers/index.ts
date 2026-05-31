@@ -25,10 +25,12 @@ export const HANDLERS: Record<string, Handler> = {
   unregister: identity.unregister,
   list: identity.list,
   fork: identity.fork,
+  merge: identity.merge,
   session_info: identity.session_info,
 
-  // Memory
+  // Memory (personal — SELF-ONLY; cross-persona reads are the `_any` variants)
   get_memory: memory.get_memory,
+  get_memory_any: memory.get_memory_any,
   list_topics: memory.list_topics,
   load_memory: memory.load_memory,
   get_instructions: memory.get_instructions,
@@ -36,11 +38,15 @@ export const HANDLERS: Record<string, Handler> = {
   update_memory: memory.update_memory,
   set_memory: memory.set_memory,
   recall_memory: memory.recall_memory,
+  recall_memory_any: memory.recall_memory_any,
   fade_memory: memory.fade_memory,
   forget_memory: memory.forget_memory,
   list_memory: memory.list_memory,
+  list_memory_any: memory.list_memory_any,
   find_memory: memory.find_memory,
+  find_memory_any: memory.find_memory_any,
   get_memory_details: memory.get_memory_details,
+  get_memory_details_any: memory.get_memory_details_any,
   snapshot_memory: memory.snapshot_memory,
   restore_memory: memory.restore_memory,
   list_snapshots: memory.list_snapshots,
@@ -112,6 +118,8 @@ export const HANDLERS: Record<string, Handler> = {
   search_history_any: history.search_history_any,
   get_history_message: history.get_history_message,
   get_history_message_any: history.get_history_message_any,
+  get_history_conversation: history.get_history_conversation,
+  get_history_conversation_any: history.get_history_conversation_any,
   validate_user_quote: history.validate_user_quote,
 
   // Remanifest (spawn fresh incarnation of self; old exits when new logs in)

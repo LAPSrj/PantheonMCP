@@ -313,6 +313,350 @@ export function fetchHistoryMessage(
   return null;
 }
 
+// ---- get_history_conversation ---------------------------------------- //
+//
+// Reconstructs a clean human<->agent conversation from one CC session
+// JSONL — the same projection as the standalone `extract_conversation.js`
+// tool, ported here. Keeps ONLY real conversational turns:
+//
+//   - user     : text the human typed (incl. slash-command invocations),
+//                with <system-reminder> / <local-command-stdout> /
+//                <command-*> plumbing stripped.
+//   - agent    : the main assistant's spoken text (non-sidechain).
+//   - subagent : a Task/subagent's spoken text (sidechain assistant).
+//
+// Drops tool_use / tool_result / thinking blocks, system-reminders,
+// command stdout, meta records, the summary record, task-notification and
+// summon/remanifest bootstrap injections, and `.`-only filler turns.
+// Recovers mid-turn human messages CC logged as a `queue-operation`
+// enqueue but never re-logged as a real user turn (see flattenConversation
+// pre-pass 2). Consecutive same-party turns collapse into one grouped
+// entry whose `content` is the array of that party's successive messages.
+//
+// Pairs with `searchHistory`: a hit carries `session_id`; pass it here to
+// read the whole conversation that hit belongs to.
+
+export type ConversationRole = "user" | "agent" | "subagent";
+
+export interface ConversationTurn {
+  role: ConversationRole;
+  /** That party's successive messages, in order, before the role flips. */
+  content: string[];
+}
+
+export interface ExtractConversationOptions {
+  cwd: string;
+  session_id: string;
+  /** Char budget (UTF-16 code units). When set and the conversation
+   * exceeds it, whole grouped turns are returned until the next turn
+   * would overflow, and `next_cursor` points at the first omitted turn.
+   * Turns are atomic — never split. Default: no budget (whole thing). */
+  maxChars?: number;
+  /** Resume index into the grouped-turn array. Default 0. Used to page
+   * through a conversation that was budget-truncated. */
+  cursor?: number;
+  /** Windowed mode: anchor on the grouped turn containing this message
+   * timestamp (a `message_at` from a search hit) and return only
+   * `contextTurns` turns on either side. Takes precedence over
+   * cursor/maxChars. When no turn carries this timestamp,
+   * `anchor_turn_index` is null and `turns` is empty. */
+  around?: string;
+  /** Turns before AND after the anchor to include in windowed mode.
+   * Default 3. */
+  contextTurns?: number;
+  claudeProjectsRoot?: string;
+}
+
+export interface ExtractConversationResult {
+  session_id: string;
+  /** Grouped-turn count for the WHOLE conversation (not just the slice). */
+  total_turns: number;
+  /** Total content chars across the whole conversation. */
+  total_chars: number;
+  /** Grouped-turn counts by role across the whole conversation. */
+  role_counts: Record<ConversationRole, number>;
+  /** The slice of grouped turns this response carries. */
+  turns: ConversationTurn[];
+  returned_turns: number;
+  returned_chars: number;
+  /** True when this response does NOT contain the entire conversation —
+   * either earlier turns were skipped (cursor / window) or later turns
+   * remain (`next_cursor` set). */
+  truncated: boolean;
+  /** First omitted turn index when more follows, else null. Feed back as
+   * `cursor` to page forward. */
+  next_cursor: number | null;
+  /** Windowed mode only: index of the anchor turn in the full
+   * conversation. Null when `around` was given but matched no turn. */
+  anchor_turn_index: number | null;
+}
+
+export const DEFAULT_CONTEXT_TURNS = 3;
+
+interface FlatTurn {
+  role: ConversationRole;
+  text: string;
+  time: string | null;
+}
+
+interface InternalGroup {
+  role: ConversationRole;
+  content: string[];
+  times: (string | null)[];
+  chars: number;
+}
+
+/** Strip system/plumbing wrappers from a user string; surface command
+ * names as `/foo args`. */
+function cleanUserString(s: string): string {
+  let t = s;
+  t = t.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "");
+  t = t.replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/g, "");
+  t = t.replace(/<command-message>[\s\S]*?<\/command-message>/g, "");
+  const name = t.match(/<command-name>([\s\S]*?)<\/command-name>/);
+  const cargs = t.match(/<command-args>([\s\S]*?)<\/command-args>/);
+  if (name) {
+    let cmd = name[1]!.trim();
+    if (cargs && cargs[1]!.trim()) cmd += " " + cargs[1]!.trim();
+    t = t.replace(/<command-name>[\s\S]*?<\/command-name>/g, "");
+    t = t.replace(/<command-args>[\s\S]*?<\/command-args>/g, "");
+    t = (cmd + "\n" + t).trim();
+  }
+  return t.trim();
+}
+
+/** True for user-type rows that are harness/system injections, not a
+ * human turn: task-notifications and the summon/remanifest bootstrap
+ * manifest delivered as the first "user" turn. */
+function isSystemUserInjection(text: string): boolean {
+  const t = text.trimStart();
+  if (t.startsWith("<task-notification")) return true;
+  if (/summoned via pantheon|## Remanifest handoff/.test(t)) return true;
+  return false;
+}
+
+function isInterruptMarker(t: string): boolean {
+  return (
+    t === "[Request interrupted by user]" ||
+    t === "[Request interrupted by user for tool use]"
+  );
+}
+
+/** `<<autonomous-loop...>>` and friends arrive via the same queue as
+ * human messages — they are not human turns. */
+function isHarnessSentinel(t: string): boolean {
+  return /^<<.*>>$/.test(t.trim());
+}
+
+/** Joined `type: "text"` block content from a content array. Skips
+ * tool_use / tool_result / image / thinking blocks. */
+function textBlocksFromArray(arr: unknown): string {
+  if (!Array.isArray(arr)) return "";
+  const out: string[] = [];
+  for (const block of arr) {
+    if (!block || typeof block !== "object") continue;
+    const b = block as Record<string, unknown>;
+    if (b.type === "text" && typeof b.text === "string") out.push(b.text);
+  }
+  return out.join("\n").trim();
+}
+
+/** Walk parsed JSONL records → ordered flat conversational turns. */
+function flattenConversation(parsed: unknown[]): FlatTurn[] {
+  const norm = (t: string) => t.replace(/\s+/g, " ").trim();
+
+  // Pre-pass 1: count materialized human user turns (normalized) so
+  // recovery never double-emits one that already exists as a real turn.
+  const materializedUserCount: Record<string, number> = {};
+  for (const raw of parsed) {
+    const o = raw as Record<string, unknown> | null;
+    if (!o || o.isMeta || o.type !== "user" || o.isSidechain) continue;
+    const c = (o.message as Record<string, unknown> | undefined)?.content;
+    if (typeof c !== "string") continue;
+    const t = cleanUserString(c);
+    if (!t || isInterruptMarker(t) || isSystemUserInjection(t)) continue;
+    materializedUserCount[norm(t)] = (materializedUserCount[norm(t)] ?? 0) + 1;
+  }
+
+  // Pre-pass 2: recover mid-turn human messages delivered to the agent
+  // but never given their own type:"user" record. A message typed while
+  // the agent is busy is logged as a `queue-operation` enqueue; one
+  // consumed within the ongoing turn is silently dropped by the main
+  // loop. Keep it only if it's a genuine human message: has content, not
+  // a system injection / interrupt marker / harness sentinel, and not
+  // already materialized as a real turn. Disposition (dequeue vs remove)
+  // is intentionally ignored — it is not a retract-vs-deliver signal.
+  const recoverAt = new Map<number, string>();
+  const recoveredSeen = new Set<string>();
+  for (let i = 0; i < parsed.length; i++) {
+    const o = parsed[i] as Record<string, unknown> | null;
+    if (!o || o.type !== "queue-operation" || o.operation !== "enqueue") continue;
+    const content = String(o.content ?? "").trim();
+    if (!content || isSystemUserInjection(content) || isInterruptMarker(content)) {
+      continue;
+    }
+    if (isHarnessSentinel(content)) continue;
+    if ((materializedUserCount[norm(content)] ?? 0) > 0) continue;
+    if (recoveredSeen.has(norm(content))) continue;
+    recoveredSeen.add(norm(content));
+    recoverAt.set(i, content);
+  }
+
+  const out: FlatTurn[] = [];
+  for (let li = 0; li < parsed.length; li++) {
+    const o = parsed[li] as Record<string, unknown> | null;
+    if (!o || o.isMeta) continue;
+    const time = typeof o.timestamp === "string" ? o.timestamp : null;
+
+    // assistant: main agent OR subagent (sidechain).
+    if (o.type === "assistant") {
+      const content = (o.message as Record<string, unknown> | undefined)?.content;
+      const text = textBlocksFromArray(content);
+      if (!text || text === ".") continue;
+      out.push({ role: o.isSidechain ? "subagent" : "agent", text, time });
+      continue;
+    }
+
+    // user: only the real human, on the main chain.
+    if (o.type === "user") {
+      if (o.isSidechain) continue;
+      const content = (o.message as Record<string, unknown> | undefined)?.content;
+      let text = "";
+      if (typeof content === "string") text = cleanUserString(content);
+      else if (Array.isArray(content)) text = textBlocksFromArray(content);
+      if (!text || isInterruptMarker(text) || isSystemUserInjection(text)) continue;
+      out.push({ role: "user", text, time });
+      continue;
+    }
+
+    // queue-operation: recovered mid-turn message (pre-pass 2).
+    if (o.type === "queue-operation" && recoverAt.has(li)) {
+      out.push({ role: "user", text: recoverAt.get(li)!, time });
+    }
+  }
+  return out;
+}
+
+function groupTurns(flat: FlatTurn[]): InternalGroup[] {
+  const groups: InternalGroup[] = [];
+  for (const m of flat) {
+    const last = groups[groups.length - 1];
+    if (last && last.role === m.role) {
+      last.content.push(m.text);
+      last.times.push(m.time);
+      last.chars += m.text.length;
+    } else {
+      groups.push({
+        role: m.role,
+        content: [m.text],
+        times: [m.time],
+        chars: m.text.length,
+      });
+    }
+  }
+  return groups;
+}
+
+/** Reconstruct one CC session's clean grouped conversation. Returns null
+ * when the session JSONL doesn't exist (handler maps to `not_found`). */
+export function extractConversation(
+  options: ExtractConversationOptions,
+): ExtractConversationResult | null {
+  const projectsRoot =
+    options.claudeProjectsRoot ?? path.join(os.homedir(), ".claude", "projects");
+  const encodedCwd = encodeCwdForClaudeProject(options.cwd);
+  const filePath = path.join(
+    projectsRoot,
+    encodedCwd,
+    `${options.session_id}.jsonl`,
+  );
+  if (!fs.existsSync(filePath)) return null;
+
+  const groups = groupTurns(flattenConversation(readJsonlSafely(filePath)));
+
+  const total_turns = groups.length;
+  const total_chars = groups.reduce((s, g) => s + g.chars, 0);
+  const role_counts: Record<ConversationRole, number> = {
+    user: 0,
+    agent: 0,
+    subagent: 0,
+  };
+  for (const g of groups) role_counts[g.role] += 1;
+
+  const toTurn = (g: InternalGroup): ConversationTurn => ({
+    role: g.role,
+    content: g.content,
+  });
+  const sumChars = (gs: InternalGroup[]) => gs.reduce((s, g) => s + g.chars, 0);
+
+  // Windowed mode takes precedence over cursor/budget.
+  if (options.around !== undefined) {
+    const ctx = Math.max(0, Math.floor(options.contextTurns ?? DEFAULT_CONTEXT_TURNS));
+    let anchorIdx = -1;
+    for (let i = 0; i < groups.length; i++) {
+      if (groups[i]!.times.includes(options.around)) {
+        anchorIdx = i;
+        break;
+      }
+    }
+    if (anchorIdx < 0) {
+      return {
+        session_id: options.session_id,
+        total_turns,
+        total_chars,
+        role_counts,
+        turns: [],
+        returned_turns: 0,
+        returned_chars: 0,
+        truncated: false,
+        next_cursor: null,
+        anchor_turn_index: null,
+      };
+    }
+    const start = Math.max(0, anchorIdx - ctx);
+    const end = Math.min(groups.length, anchorIdx + ctx + 1);
+    const slice = groups.slice(start, end);
+    return {
+      session_id: options.session_id,
+      total_turns,
+      total_chars,
+      role_counts,
+      turns: slice.map(toTurn),
+      returned_turns: slice.length,
+      returned_chars: sumChars(slice),
+      truncated: start > 0 || end < groups.length,
+      next_cursor: end < groups.length ? end : null,
+      anchor_turn_index: anchorIdx,
+    };
+  }
+
+  // Cursor + budget mode (whole conversation when neither is set).
+  const cursor = Math.max(0, Math.floor(options.cursor ?? 0));
+  const budget = options.maxChars;
+  const slice: InternalGroup[] = [];
+  let i = cursor;
+  for (; i < groups.length; i++) {
+    const g = groups[i]!;
+    if (budget !== undefined && slice.length > 0 && sumChars(slice) + g.chars > budget) {
+      break;
+    }
+    slice.push(g);
+  }
+  const next_cursor = i < groups.length ? i : null;
+  return {
+    session_id: options.session_id,
+    total_turns,
+    total_chars,
+    role_counts,
+    turns: slice.map(toTurn),
+    returned_turns: slice.length,
+    returned_chars: sumChars(slice),
+    truncated: cursor > 0 || next_cursor !== null,
+    next_cursor,
+    anchor_turn_index: null,
+  };
+}
+
 export function searchHistory(
   options: HistorySearchOptions,
 ): HistorySearchHit[] {

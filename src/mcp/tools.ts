@@ -309,6 +309,49 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
     },
   },
   {
+    name: "merge",
+    description:
+      "Consolidate one persona INTO another, then drop the source — the " +
+      "inverse of `fork`. Folds `from`'s memory into `into` (entries " +
+      "deep-copied with regenerated ids, PRESERVING each entry's date / " +
+      "status / topic / pin / kind and remapping internal references; " +
+      "forgotten tombstones are skipped). Unions `from`'s `owns` + " +
+      "`expertise` into `into` (`union_profile`, default true; the target " +
+      "keeps its own description / launch / mode / color). Then " +
+      "unregisters + deletes `from` including its memory (`drop_source`, " +
+      "default true) so you end with a single persona. Chat history is " +
+      "keyed by agent_id and is NOT moved — past messages stay attributed " +
+      "to the source handle; memory snapshots are not copied. Errors " +
+      "`not_registered` if either handle is missing, `merge_into_self` if " +
+      "from===into, `merge_source_online` if `from` is currently connected " +
+      "to chat (rest/exit it first).",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["from", "into"],
+      properties: {
+        from: {
+          type: "string",
+          description: "Source persona to consolidate (deleted unless drop_source:false).",
+        },
+        into: {
+          type: "string",
+          description: "Target persona that absorbs the source's memory + (unioned) profile.",
+        },
+        union_profile: {
+          type: "boolean",
+          description:
+            "Default true. Union the source's owns + expertise into the target (dedup, order-stable). Set false to leave the target's profile untouched.",
+        },
+        drop_source: {
+          type: "boolean",
+          description:
+            "Default true. Unregister + delete the source (incl. its memory) after merge. Set false for a non-destructive copy-merge.",
+        },
+      },
+    },
+  },
+  {
     name: "session_info",
     description:
       "Inspect the current session: id, parent pid, platform, claim/guest state, resting flag, summoner, and whether `allow_rest` has been authorized.",
@@ -319,13 +362,12 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
   {
     name: "get_memory",
     description:
-      "Render your memory at startup-prompt shape (Core / Active / Index / Hidden tiers). Status NEVER mutates from rendering — collapse is render-time only; recall_memory(id) returns full text regardless. Defaults to your own. " +
-      "Pass `only_core: true` to render the Core tier in isolation (useful for cheap peer-inspection: `get_memory({ username: someone-else, only_core: true })`).",
+      "Render YOUR OWN memory at startup-prompt shape (pinned FULL / `always` / loaded topics / menu). Self-only — to inspect another persona use `get_memory_any`. Status NEVER mutates from rendering — collapse is render-time only; recall_memory(id) returns full text regardless. " +
+      "Pass `only_core: true` to render just the pinned + `always` surface.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
       properties: {
-        username: { type: "string" },
         include_forgotten: { type: "boolean" },
         only_core: {
           type: "boolean",
@@ -336,13 +378,28 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
     },
   },
   {
-    name: "list_topics",
+    name: "get_memory_any",
     description:
-      "v2 boot step (§9): the topic menu. Returns clustered topics + per-topic counts + the due-reminder count, without loading any entry bodies. Gate-exempt — call it after manifest, before `load_memory`. A fresh persona returns an empty topic list (the load gate is then skipped).",
+      "Cross-persona read: render ANOTHER persona's memory (pinned FULL + `always` summaries + topic menu counts — topic bodies stay collapsed; use `recall_memory_any` for a specific entry). The `_any` suffix marks this as the elevated, separately-deniable variant of self-only `get_memory`. `only_core: true` for a cheap pinned+always peek.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
-      properties: { username: { type: "string" } },
+      required: ["username"],
+      properties: {
+        username: { type: "string", description: "Persona to inspect." },
+        include_forgotten: { type: "boolean" },
+        only_core: { type: "boolean", description: "Render pinned + `always` only. Default false." },
+      },
+    },
+  },
+  {
+    name: "list_topics",
+    description:
+      "v2 boot step (§9): YOUR topic menu. Returns clustered topics + per-topic counts + the due-reminder count, without loading any entry bodies. Self-only. Gate-exempt — call it after manifest, before `load_memory`. A fresh persona returns an empty topic list (the load gate is then skipped).",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
     },
   },
   {
@@ -353,7 +410,6 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
       type: "object",
       additionalProperties: false,
       properties: {
-        username: { type: "string" },
         topics: { type: "array", items: { type: "string" } },
         topic: { type: "string", description: "Convenience for a single topic." },
       },
@@ -497,14 +553,27 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
   {
     name: "recall_memory",
     description:
-      "Retrieve the full text of any memory entry by id, regardless of render tier. Flips faded → active in the same call. Use when you see a collapsed entry's summary and want the body.",
+      "Retrieve the full text of one of YOUR OWN memory entries by id, regardless of render tier. Flips faded → active in the same call. Self-only — for another persona's entry use `recall_memory_any` (read-only). Use when you see a collapsed entry's summary and want the body.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
       required: ["id"],
       properties: {
         id: { type: "string" },
-        username: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "recall_memory_any",
+    description:
+      "Cross-persona full-text read: return another persona's memory entry by id (any tier/status). READ-ONLY — unlike self-`recall_memory` it does NOT flip the peer's faded entry to active. The `_any` suffix marks this as the elevated, separately-deniable variant. Errors `entry_not_found` if no such entry.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "id"],
+      properties: {
+        username: { type: "string", description: "Persona that owns the entry." },
+        id: { type: "string" },
       },
     },
   },
@@ -533,12 +602,29 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
   {
     name: "list_memory",
     description:
-      "Index-shape listing for memory: id, date, status, core, summary, size_kb, has_details, kind?. Cheaper than `get_memory` — no body content. Sorted date-descending. Filters compose: `status` (default 'active'; pass 'all'), `core`, `kind`, `since`, `filter` (substring).",
+      "Index-shape listing of YOUR OWN memory: id, date, status, core, summary, size_kb, has_details, kind?, topic?. Cheaper than `get_memory` — no body content. Self-only — for another persona use `list_memory_any`. Sorted date-descending. Filters compose: `status` (default 'active'; pass 'all'), `core`, `kind`, `since`, `filter` (substring).",
     inputSchema: {
       type: "object",
       additionalProperties: false,
       properties: {
-        username: { type: "string" },
+        status: { type: "string", enum: ["active", "faded", "forgotten", "all"] },
+        core: { type: "boolean" },
+        kind: { type: "string" },
+        since: { type: "string", description: "ISO date lower bound." },
+        filter: { type: "string", description: "Case-insensitive substring across summary + text." },
+      },
+    },
+  },
+  {
+    name: "list_memory_any",
+    description:
+      "Cross-persona index listing: another persona's entries (id, date, status, summary, kind, topic, size). The `_any` suffix marks this as the elevated, separately-deniable variant of self-only `list_memory`. Same filters.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username"],
+      properties: {
+        username: { type: "string", description: "Persona to list." },
         status: { type: "string", enum: ["active", "faded", "forgotten", "all"] },
         core: { type: "boolean" },
         kind: { type: "string" },
@@ -550,10 +636,8 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
   {
     name: "find_memory",
     description:
-      "Search across one or many personas' memory for entries matching `query`. " +
-      "`scope: \"self\"` (default) searches your own; `scope: \"all\"` walks every registered persona. " +
-      "Returns hits with `username` attached so you can route follow-ups (e.g. `recall_memory({ id, username })`). " +
-      "Sorted newest-first across the union; capped at `limit` (default 50). " +
+      "Search YOUR OWN memory for entries matching `query`. Self-only — to search across every registered persona use `find_memory_any`. " +
+      "Sorted newest-first; capped at `limit` (default 50). " +
       "Other filters (`kind`, `since`, `status`, `core`) compose with `query`.",
     inputSchema: {
       type: "object",
@@ -561,7 +645,24 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
       required: ["query"],
       properties: {
         query: { type: "string", description: "Case-insensitive substring across summary + text." },
-        scope: { type: "string", enum: ["self", "all"], description: "Default 'self'." },
+        kind: { type: "string" },
+        since: { type: "string", description: "ISO date lower bound." },
+        status: { type: "string", enum: ["active", "faded", "forgotten", "all"] },
+        core: { type: "boolean" },
+        limit: { type: "number", description: "Default 50." },
+      },
+    },
+  },
+  {
+    name: "find_memory_any",
+    description:
+      "Cross-persona search: walk EVERY registered persona's memory for entries matching `query`. Hits carry `username` so follow-ups route via `recall_memory_any` / `get_memory_details_any`. The `_any` suffix marks this as the elevated, separately-deniable variant of self-only `find_memory`. Sorted newest-first; capped at `limit` (default 50).",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["query"],
+      properties: {
+        query: { type: "string", description: "Case-insensitive substring across summary + text." },
         kind: { type: "string" },
         since: { type: "string", description: "ISO date lower bound." },
         status: { type: "string", enum: ["active", "faded", "forgotten", "all"] },
@@ -573,14 +674,27 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
   {
     name: "get_memory_details",
     description:
-      "Return ONLY the `details` field of an entry (not summary or text — caller already has those from get_memory). Errors `entry_not_found` if no entry. Returns `details: null` when the entry has no details.",
+      "Return ONLY the `details` field of one of YOUR OWN entries (not summary or text — caller already has those from get_memory). Self-only — for another persona use `get_memory_details_any`. Errors `entry_not_found` if no entry. Returns `details: null` when the entry has no details.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
       required: ["id"],
       properties: {
         id: { type: "string" },
-        username: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "get_memory_details_any",
+    description:
+      "Cross-persona details read: return ONLY the `details` field of another persona's entry. The `_any` suffix marks this as the elevated, separately-deniable variant of self-only `get_memory_details`. Errors `entry_not_found` if no entry.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "id"],
+      properties: {
+        username: { type: "string", description: "Persona that owns the entry." },
+        id: { type: "string" },
       },
     },
   },
@@ -621,12 +735,12 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
   {
     name: "list_snapshots",
     description:
-      "List every snapshot for a persona (default: your own). Returns " +
+      "List every snapshot of YOUR OWN memory (self-only). Returns " +
       "label + size_bytes + created_at, sorted newest-first.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
-      properties: { username: { type: "string" } },
+      properties: {},
     },
   },
   {
@@ -1748,6 +1862,64 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
             "Persona whose history to read. Use the `persona_username` from the search hit.",
         },
         max_chars: { type: "number" },
+      },
+    },
+  },
+  {
+    name: "get_history_conversation",
+    description:
+      "Reconstruct a WHOLE past conversation as clean grouped turns. Pairs with `search_history`: pass the hit's `session_id` to read the full conversation that message belongs to. Keeps only real turns (role: 'user' / 'agent' / 'subagent') with tool_use/tool_result/thinking, system-reminders, command stdout, task-notifications and the summon bootstrap stripped; consecutive same-party turns collapse into one entry whose `content` is an array of that party's successive messages. Mid-turn human messages CC dropped are recovered. By DEFAULT returns the entire conversation. For huge transcripts pass `max_chars` (char budget; whole turns are atomic) and page with `cursor`/`next_cursor`. To read just around one message, pass `around` (a hit's `message_at`) + `context_turns`. Response carries total_turns/total_chars and role_counts for the whole conversation. NOT durable storage — see `search_history` warning.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["session_id"],
+      properties: {
+        session_id: {
+          type: "string",
+          description: "JSONL filename stem from a search_history hit.",
+        },
+        max_chars: {
+          type: "number",
+          description:
+            "Char budget (UTF-16 code units) for the returned slice. Whole turns are atomic; when exceeded, `next_cursor` points at the first omitted turn. Default: no budget (whole conversation).",
+        },
+        cursor: {
+          type: "number",
+          description:
+            "Resume turn index to page forward. Feed back the `next_cursor` from a budget-truncated response. Default 0.",
+        },
+        around: {
+          type: "string",
+          description:
+            "Windowed mode: anchor on the turn containing this message timestamp (a hit's `message_at`) and return only `context_turns` turns each side. Takes precedence over cursor/max_chars. `not_found` if no turn carries this timestamp.",
+        },
+        context_turns: {
+          type: "number",
+          description:
+            "Turns before AND after the anchor in windowed mode. Default 3.",
+        },
+      },
+    },
+  },
+  {
+    name: "get_history_conversation_any",
+    description:
+      "Reconstruct a whole conversation from another persona's history. Requires `target_username` — pass the `persona_username` from a `search_history_any` hit. Same projection, modes, and NOT-durable-storage warning as `get_history_conversation`. No `project` mode: a single `session_id` resolves to exactly one persona.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["session_id", "target_username"],
+      properties: {
+        session_id: { type: "string" },
+        target_username: {
+          type: "string",
+          description:
+            "Persona whose history to read. Use the `persona_username` from the search hit.",
+        },
+        max_chars: { type: "number" },
+        cursor: { type: "number" },
+        around: { type: "string" },
+        context_turns: { type: "number" },
       },
     },
   },
