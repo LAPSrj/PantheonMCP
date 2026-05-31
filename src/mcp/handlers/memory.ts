@@ -207,7 +207,7 @@ export const append_memory: Handler = async (args, ctx) => {
   // §7/§16: the summary field is renamed `summary_max240` to carry its
   // limit as a generation-time nudge. The API accepts either name; the
   // storage field stays `summary` (tolerant-read live-safety).
-  const summary = asString(args.summary) ?? asString(args.summary_max240);
+  const summary = asString(args.summary_max240);
   const kind = asString(args.kind);
   // `expires_at`: a number sets an explicit TTL. When the field is
   // OMITTED entirely, a `kind: "handoff"` entry auto-gets the 7-day
@@ -215,12 +215,14 @@ export const append_memory: Handler = async (args, ctx) => {
   // via `rest({ handoff })`. Passing `expires_at: null` explicitly
   // opts out (no TTL even for a handoff).
   let expiresAt = asNumber(args.expires_at);
+  let expiresAtAutoSet = false;
   if (
     expiresAt === undefined &&
     !("expires_at" in args) &&
     kind === HANDOFF_KIND
   ) {
     expiresAt = defaultHandoffExpiresAt();
+    expiresAtAutoSet = true;
   }
   const summonerOverride = asString(args.summoner_username);
   const summoner = summonerOverride ?? ctx.summoner_username ?? undefined;
@@ -292,6 +294,7 @@ export const append_memory: Handler = async (args, ctx) => {
   // `rest({ handoff })` slot (which sets a TTL, can DM the recipient,
   // and supersedes prior handoffs). When other active handoffs
   // already exist, nudge the agent to prune the pile.
+  let hint: string | undefined;
   if (kind === HANDOFF_KIND) {
     const others = loadStore(ctx.paths, claimed).entries.filter(
       (e) =>
@@ -300,18 +303,37 @@ export const append_memory: Handler = async (args, ctx) => {
         e.id !== created.id,
     );
     if (others.length > 0) {
-      return {
-        ...created,
-        ...warningFields,
-        hint:
-          `${others.length} other active handoff${others.length === 1 ? "" : "s"} on file. ` +
-          `Handoffs are continuity notes, not durable memory — fade stale ones with ` +
-          `\`fade_memory\`, or write handoffs via \`rest({ handoff })\` and pass ` +
-          `\`supersedes\` / \`supersede_prior\` to fade superseded ones automatically.`,
-      };
+      hint =
+        `${others.length} other active handoff${others.length === 1 ? "" : "s"} on file. ` +
+        `Handoffs are continuity notes, not durable memory — fade stale ones with ` +
+        `\`fade_memory\`, or write handoffs via \`rest({ handoff })\` and pass ` +
+        `\`supersedes\` / \`supersede_prior\` to fade superseded ones automatically.`;
     }
   }
-  return { ...created, ...warningFields };
+
+  // §16: compact response — don't echo back the text/fields the agent just
+  // sent (token waste). Return the server-assigned id + status, a
+  // `text_chars` integrity count, and only SERVER-DERIVED values (an
+  // auto-derived summary, an auto-set handoff TTL). `verbose: true` returns
+  // the full stored entry for debugging / back-compat.
+  if (asBoolean(args.verbose) === true) {
+    return { ...created, ...warningFields, ...(hint !== undefined ? { hint } : {}) };
+  }
+  const derived: Record<string, unknown> = {};
+  if (summary === undefined && created.summary !== undefined) {
+    derived.summary = created.summary;
+  }
+  if (expiresAtAutoSet && created.expires_at !== undefined) {
+    derived.expires_at = created.expires_at;
+  }
+  return {
+    id: created.id,
+    status: created.status,
+    text_chars: text.length,
+    ...(Object.keys(derived).length > 0 ? { derived } : {}),
+    ...warningFields,
+    ...(hint !== undefined ? { hint } : {}),
+  };
 };
 
 export const update_memory: Handler = async (args, ctx) => {
@@ -321,8 +343,7 @@ export const update_memory: Handler = async (args, ctx) => {
   }
   const id = asStringRequired(args.id, "id");
   const patch: Record<string, unknown> = {};
-  if (asString(args.summary) !== undefined) patch.summary = asString(args.summary);
-  else if (asString(args.summary_max240) !== undefined) patch.summary = asString(args.summary_max240);
+  if (asString(args.summary_max240) !== undefined) patch.summary = asString(args.summary_max240);
   if (asString(args.text) !== undefined) patch.text = asString(args.text);
   if (asString(args.kind) !== undefined) patch.kind = asString(args.kind);
   if (asString(args.status) !== undefined) patch.status = asString(args.status);
@@ -346,7 +367,41 @@ export const update_memory: Handler = async (args, ctx) => {
     else if (typeof args.due === "number" && Number.isFinite(args.due)) patch.due = args.due;
     else if (args.due === "next-session") patch.due = "next-session";
   }
-  return updateEntry(ctx.paths, claimed, id, patch);
+  const before = getEntry(ctx.paths, claimed, id);
+  const updated = updateEntry(ctx.paths, claimed, id, patch);
+
+  // §16: compact response — report which patch fields actually changed,
+  // which were no-ops, and any value the store coerced away from what was
+  // requested (e.g. forget→fade, a core-strip), WITHOUT echoing bodies.
+  // `verbose: true` returns the full updated entry.
+  if (asBoolean(args.verbose) === true) return updated;
+
+  const eq = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  const u = updated as unknown as Record<string, unknown>;
+  const prev = (before ?? {}) as unknown as Record<string, unknown>;
+  const changed: string[] = [];
+  const unchanged: string[] = [];
+  const coerced: Record<string, unknown> = {};
+  for (const key of Object.keys(patch)) {
+    if (eq(prev[key], u[key])) unchanged.push(key);
+    else changed.push(key);
+    // Surface a coercion only when the store landed on a concrete value
+    // that differs from what was asked (skip undefined — e.g. `supersedes`
+    // is an action, not a stored field). Bodies (text) never go here.
+    if (u[key] !== undefined && key !== "text" && !eq(patch[key], u[key])) {
+      coerced[key] = u[key];
+    }
+  }
+  return {
+    id: updated.id,
+    status: updated.status,
+    changed,
+    unchanged,
+    ...(Object.keys(coerced).length > 0 ? { coerced } : {}),
+    ...(changed.includes("text") && typeof u.text === "string"
+      ? { text_chars: (u.text as string).length }
+      : {}),
+  };
 };
 
 export const set_memory: Handler = async (args, ctx) => {
@@ -355,7 +410,7 @@ export const set_memory: Handler = async (args, ctx) => {
     throw new ToolError("no_persona", "set_memory requires a claimed persona.");
   }
   const text = asStringRequired(args.text, "text");
-  const summary = asString(args.summary);
+  const summary = asString(args.summary_max240);
   return setMemory(ctx.paths, claimed, {
     text,
     ...(summary !== undefined ? { summary } : {}),

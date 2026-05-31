@@ -428,7 +428,7 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
   {
     name: "append_memory",
     description:
-      "Create a new active memory entry. `text` is required. `summary` (≤240 ch) is auto-derived from text when omitted; provide explicitly when the first line isn't a good headline. " +
+      "Create a new active memory entry. `text` is required. `summary_max240` (≤240 ch) is auto-derived from text when omitted; provide explicitly when the first line isn't a good headline. " +
       "`kind` is one of: rule, fact, gotcha, pointer, note, handoff, reminder. Durable kinds (rule/fact/gotcha/pointer) + handoff REQUIRE a `topic`. To render an entry in full every session use `pin: true` + `pin_reason` (byte-budgeted). " +
       "`summoner_username` is auto-populated when this session was spawned by another agent's `summon`; you can override.",
     inputSchema: {
@@ -437,8 +437,7 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
       required: ["text"],
       properties: {
         text: { type: "string" },
-        summary: { type: "string", description: "≤240 chars; auto-derived from text when omitted. Phrase the TRIGGER (\"when doing X, remember Y\"), not a bare title. Alias: `summary_max240`." },
-        summary_max240: { type: "string", description: "v2 name for `summary` — the ≤240 limit is in the name as a nudge. Same field; pass one or the other." },
+        summary_max240: { type: "string", description: "≤240-char headline (the cap is in the name). Auto-derived from text when omitted; provide explicitly when the first line isn't a good headline. Phrase the TRIGGER (\"when doing X, remember Y\"), not a bare title. Stored as `summary`." },
         kind: { type: "string", description: "One of: rule, fact, gotcha, pointer, note, handoff, reminder. Legacy kinds (decision/log/…) are mapped + warned." },
         expires_at: {
           oneOf: [{ type: "number" }, { type: "null" }],
@@ -481,6 +480,11 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
           description:
             "v2: id of an entry this one replaces. The superseded entry is coerced to forgotten (recoverable).",
         },
+        verbose: {
+          type: "boolean",
+          description:
+            "Return the full stored entry instead of the compact ack ({ id, status, text_chars, derived?, warnings? }). Default false — the compact ack avoids echoing back the text you just sent.",
+        },
       },
     },
   },
@@ -494,8 +498,7 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
       required: ["id"],
       properties: {
         id: { type: "string" },
-        summary: { type: "string" },
-        summary_max240: { type: "string", description: "v2 alias for `summary`." },
+        summary_max240: { type: "string", description: "≤240-char headline (the cap is in the name); phrase the trigger. Stored as `summary`." },
         text: { type: "string" },
         kind: { type: "string" },
         status: { type: "string", enum: ["active", "faded", "forgotten"] },
@@ -525,6 +528,11 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
           description: "v2 reminder due; null clears.",
         },
         supersedes: { type: "string", description: "v2: id this entry supersedes." },
+        verbose: {
+          type: "boolean",
+          description:
+            "Return the full updated entry instead of the compact diff ({ id, status, changed, unchanged, coerced? }). Default false.",
+        },
       },
     },
   },
@@ -538,7 +546,7 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
       required: ["text"],
       properties: {
         text: { type: "string" },
-        summary: { type: "string" },
+        summary_max240: { type: "string", description: "≤240-char headline; stored as `summary`." },
       },
     },
   },
@@ -1499,12 +1507,13 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
       additionalProperties: false,
       required: ["text"],
       properties: {
-        summary: { type: "string", description: "≤240ch headline; derived from text if omitted." },
+        summary_max240: { type: "string", description: "≤240-char headline (the cap is in the name); derived from text if omitted. Stored as `summary`." },
         text: { type: "string", description: "Load-bearing body. Counts toward project-Active budget." },
         details: { type: "string", description: "Optional ≤5MB unbounded payload. Never inlined at startup." },
         kind: { type: "string" },
         core: { type: "boolean", description: "Render in Core tier (always full text, separate 6KB budget)." },
         expires_at: { type: "number", description: "ms-epoch auto-fade timestamp." },
+        verbose: { type: "boolean", description: "Return the full stored entry instead of the compact ack ({ id, status, text_chars, ... }). Default false." },
       },
     },
   },
@@ -1517,12 +1526,13 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
       required: ["project", "text"],
       properties: {
         project: { type: "string" },
-        summary: { type: "string" },
+        summary_max240: { type: "string", description: "≤240-char headline; stored as `summary`." },
         text: { type: "string" },
         details: { type: "string" },
         kind: { type: "string" },
         core: { type: "boolean" },
         expires_at: { type: "number" },
+        verbose: { type: "boolean", description: "Return the full stored entry instead of the compact ack. Default false." },
       },
     },
   },
@@ -1536,12 +1546,13 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
       required: ["id"],
       properties: {
         id: { type: "string" },
-        summary: { type: "string" },
+        summary_max240: { type: "string", description: "≤240-char headline; stored as `summary`." },
         text: { type: "string" },
         details: { description: "Set to null to clear; string to replace." },
         kind: { type: "string" },
         core: { type: "boolean" },
         status: { type: "string", enum: ["active", "faded", "forgotten"] },
+        verbose: { type: "boolean", description: "Return the full updated entry instead of the compact diff ({ id, status, changed, unchanged, ... }). Default false." },
       },
     },
   },
@@ -1555,12 +1566,13 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
       properties: {
         project: { type: "string" },
         id: { type: "string" },
-        summary: { type: "string" },
+        summary_max240: { type: "string", description: "≤240-char headline; stored as `summary`." },
         text: { type: "string" },
         details: {},
         kind: { type: "string" },
         core: { type: "boolean" },
         status: { type: "string", enum: ["active", "faded", "forgotten"] },
+        verbose: { type: "boolean", description: "Return the full updated entry instead of the compact diff. Default false." },
       },
     },
   },

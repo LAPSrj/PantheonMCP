@@ -98,6 +98,18 @@ Memory is topic-scoped + lazy (`docs/memory-redesign/5-proposal-v2.md`;
   in `text`. The stored `details` field + the `get_memory_details` read
   path remain for legacy entries. The notebook tools stay dropped from the
   advertised list (handlers kept).
+- **Write field `summary_max240`:** the agent-facing summary input on
+  `append`/`update`/`set_memory` (+ the project-memory write tools) is
+  named `summary_max240` (the ≤240 cap is in the name). Storage and all
+  reads (`list`/`get`/`recall`) stay `summary` — the rename is write-side
+  only; the handler stores `args.summary_max240` into the `summary` field.
+- **Compact write responses (§16):** `append_memory`/`update_memory` (and
+  the project-memory equivalents) return a compact ack, not the full
+  entry — they no longer echo back the `text` the caller just sent.
+  append → `{ id, status, text_chars, derived?: { summary, expires_at } }`
+  (only server-derived values surface); update → `{ id, status, changed[],
+  unchanged[], coerced?, text_chars? }` (before/after diff of the patch).
+  Pass `verbose: true` to get the full entry back.
 - `append_memory` is the always-safe entry point; `update_memory` /
   `fade_memory` mutate; `forget_memory` (alias `delete`) tombstones.
 

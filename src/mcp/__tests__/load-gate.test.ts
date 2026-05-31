@@ -131,7 +131,7 @@ test("get_instructions returns a section by topic + the menu without one", async
 test("load_memory starts the session ordinal; appends stamp session_seq", async () => {
   await dispatch("load_memory", { topics: ["chat"] }, ctx);
   expect(ctx.session_seq).toBe(1);
-  const created = parse(await dispatch("append_memory", { text: "x", kind: "rule", topic: "chat" }, ctx));
+  const created = parse(await dispatch("append_memory", { text: "x", kind: "rule", topic: "chat", verbose: true }, ctx));
   expect(created.session_seq).toBe(1);
 });
 
@@ -140,7 +140,7 @@ test("summary_max240 is accepted as an alias for summary (stored as summary)", a
   const created = parse(
     await dispatch(
       "append_memory",
-      { text: "body", summary_max240: "when X, do Y", kind: "rule", topic: "git" },
+      { text: "body", summary_max240: "when X, do Y", kind: "rule", topic: "git", verbose: true },
       ctx,
     ),
   );

@@ -269,6 +269,7 @@ test("append_memory persists expires_at; the sweep fades it once past", async ()
     text: "branch note — good until the PR merges",
     kind: "log",
     expires_at: 1_000,
+    verbose: true,
   });
   expect(append.ok).toBe(true);
   expect(append.payload.expires_at).toBe(1_000);
@@ -288,7 +289,7 @@ test("append_memory: kind:handoff auto-gets a 7-day TTL when expires_at omitted"
   const before = Date.now();
   const r = await call("append_memory", { text: "handoff body", kind: "handoff", topic: "work" });
   expect(r.ok).toBe(true);
-  expect(r.payload.expires_at as number).toBeGreaterThan(before);
+  expect((r.payload.derived as { expires_at: number }).expires_at).toBeGreaterThan(before);
 });
 
 test("append_memory: expires_at:null opts a handoff out of auto-TTL", async () => {
@@ -787,7 +788,7 @@ test("get_memory_any renders another persona's memory", async () => {
   await call("claim", { username: "peerpersona" });
   await call("append_memory", {
     text: "Peer pinned rule body.",
-    summary: "peer-pin-rule",
+    summary_max240: "peer-pin-rule",
     kind: "rule",
     topic: "conventions",
     pin: true,
@@ -814,7 +815,7 @@ test("recall_memory_any reads a peer entry WITHOUT mutating its status", async (
   await call("claim", { username: "peerpersona" });
   const appended = await call("append_memory", {
     text: "Peer faded body text.",
-    summary: "peer-faded-entry",
+    summary_max240: "peer-faded-entry",
   });
   const entryId = (appended.payload as { id: string }).id;
   await call("fade_memory", { id: entryId }); // self-fade on the peer

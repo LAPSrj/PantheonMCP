@@ -81,13 +81,13 @@ function doAppend(
   project: string,
 ) {
   const text = asStringRequired(args.text, "text");
-  const summary = asString(args.summary);
+  const summary = asString(args.summary_max240);
   const details = asString(args.details);
   const kind = asString(args.kind);
   const core = asBoolean(args.core);
   const expires_at = asNumber(args.expires_at);
   const author = resolveAuthorUsername(ctx);
-  return wrap(() =>
+  const created = wrap(() =>
     appendProjectEntry(ctx.paths, project, {
       text,
       ...(summary !== undefined ? { summary } : {}),
@@ -98,6 +98,22 @@ function doAppend(
       ...(author !== undefined ? { author_username: author } : {}),
     }),
   );
+  // §16: compact response — don't echo the body the caller just sent.
+  // `verbose: true` returns the full stored entry.
+  if (asBoolean(args.verbose) === true) return created;
+  const derived: Record<string, unknown> = {};
+  if (summary === undefined && created.summary !== undefined) {
+    derived.summary = created.summary;
+  }
+  return {
+    id: created.id,
+    status: created.status,
+    text_chars: text.length,
+    ...(created.author_username !== undefined
+      ? { author_username: created.author_username }
+      : {}),
+    ...(Object.keys(derived).length > 0 ? { derived } : {}),
+  };
 }
 
 function doUpdate(
@@ -106,7 +122,7 @@ function doUpdate(
   project: string,
 ) {
   const id = asStringRequired(args.id, "id");
-  const summary = asString(args.summary);
+  const summary = asString(args.summary_max240);
   const text = asString(args.text);
   const kind = asString(args.kind);
   const core = asBoolean(args.core);
@@ -115,20 +131,46 @@ function doUpdate(
   // Map "all" out — status patch only accepts a single value.
   const patchStatus =
     status === "all" || status === undefined ? undefined : status;
-  return wrap(() =>
-    updateProjectEntry(ctx.paths, project, id, {
-      ...(summary !== undefined ? { summary } : {}),
-      ...(text !== undefined ? { text } : {}),
-      ...(kind !== undefined ? { kind } : {}),
-      ...(core !== undefined ? { core } : {}),
-      ...(detailsRaw === null
-        ? { details: null }
-        : typeof detailsRaw === "string"
-          ? { details: detailsRaw }
-          : {}),
-      ...(patchStatus !== undefined ? { status: patchStatus } : {}),
-    }),
-  );
+  const patch: Record<string, unknown> = {
+    ...(summary !== undefined ? { summary } : {}),
+    ...(text !== undefined ? { text } : {}),
+    ...(kind !== undefined ? { kind } : {}),
+    ...(core !== undefined ? { core } : {}),
+    ...(detailsRaw === null
+      ? { details: null }
+      : typeof detailsRaw === "string"
+        ? { details: detailsRaw }
+        : {}),
+    ...(patchStatus !== undefined ? { status: patchStatus } : {}),
+  };
+  const before = getProjectEntry(ctx.paths, project, id);
+  const updated = wrap(() => updateProjectEntry(ctx.paths, project, id, patch));
+  // §16: compact response — per-field changed/unchanged, no body echo.
+  // `verbose: true` returns the full updated entry.
+  if (asBoolean(args.verbose) === true) return updated;
+  const eq = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  const u = updated as unknown as Record<string, unknown>;
+  const prev = (before ?? {}) as unknown as Record<string, unknown>;
+  const changed: string[] = [];
+  const unchanged: string[] = [];
+  const coerced: Record<string, unknown> = {};
+  for (const key of Object.keys(patch)) {
+    if (eq(prev[key], u[key])) unchanged.push(key);
+    else changed.push(key);
+    if (u[key] !== undefined && key !== "text" && key !== "details" && !eq(patch[key], u[key])) {
+      coerced[key] = u[key];
+    }
+  }
+  return {
+    id: u.id,
+    status: u.status,
+    changed,
+    unchanged,
+    ...(Object.keys(coerced).length > 0 ? { coerced } : {}),
+    ...(changed.includes("text") && typeof u.text === "string"
+      ? { text_chars: (u.text as string).length }
+      : {}),
+  };
 }
 
 /** §4 lifecycle rule (project-memory parity): core + active reference-
