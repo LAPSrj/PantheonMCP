@@ -9,6 +9,7 @@ import {
   type MemorySource,
   type MemoryStatus,
   type MemoryStore,
+  type WatcherMeta,
 } from "./types.ts";
 
 /** §4 / §12-H — `details` field hard cap. Enforced at the API boundary
@@ -96,6 +97,9 @@ export interface AppendInput {
   /** Structured handoff metadata — set only for `kind: "handoff"`
    * entries written via `rest({ handoff })`. */
   handoff?: HandoffMeta;
+  /** Watcher metadata — set only for `kind: "watcher"` entries written
+   * via the arm path. Carries the two bindings + the re-arm payload. */
+  watcher?: WatcherMeta;
   // ── Redesign v2 (schema-additive; behavior lands in later phases).
   topic?: string;
   pin?: boolean;
@@ -168,6 +172,7 @@ export function appendEntry(
         : {}),
       ...(input.expires_at !== undefined ? { expires_at: input.expires_at } : {}),
       ...(input.handoff !== undefined ? { handoff: input.handoff } : {}),
+      ...(input.watcher !== undefined ? { watcher: input.watcher } : {}),
       ...(input.replies_to !== undefined ? { replies_to: input.replies_to } : {}),
       ...(input.see_also !== undefined && input.see_also.length > 0
         ? { see_also: [...input.see_also] }

@@ -40,6 +40,14 @@ export interface RenderOptions {
   loaded_topics?: string[];
   /** Override "now" for deterministic due-reminder tests. */
   now?: number;
+  /** The set of chat `agent_id`s currently live in the presence table
+   * (`ChatRouter.liveAgentIds()`), threaded in by the caller — the same
+   * injection path as `now`/`session_seq`. Drives the ORPHANED WATCHERS
+   * block: a `kind:"watcher"` entry whose `watcher.owner_agent_id` is
+   * absent from this set is orphaned. When UNDEFINED (peer renders, no
+   * chat wired) the orphan block is skipped — a watcher only surfaces as
+   * orphaned when liveness is actually known. Never mutates status. */
+  live_agent_ids?: Set<string>;
   /** §10/§16 — this conversation's session ordinal, so a
    * `due: "next-session"` reminder fires only in a session LATER than
    * the one that created it. Undefined → treat next-session as due. */
@@ -94,6 +102,27 @@ export function renderStore(
   const isPinned = (e: MemoryEntry) => Boolean(e.pin) || Boolean(e.core);
   const pinned = visible.filter(isPinned);
   const unpinned = visible.filter((e) => !isPinned(e));
+
+  // --- ORPHANED WATCHERS (top, full, loud, regardless of topic) ---
+  // Render-DERIVED from the live presence set — status is never mutated.
+  // Silent while the arming session (`owner_agent_id`) is live; loud the
+  // moment it leaves presence. Skipped entirely when liveness is unknown
+  // (`live_agent_ids` undefined) so a peer render never false-alarms.
+  if (!onlyCore && options.live_agent_ids !== undefined) {
+    const orphaned = unpinned
+      .filter(
+        (e) =>
+          e.status === "active" &&
+          mapLegacyKind(e.kind) === "watcher" &&
+          isWatcherOrphaned(e, options.live_agent_ids),
+      )
+      .sort((a, b) => (a.date < b.date ? -1 : 1));
+    if (orphaned.length > 0) {
+      sections.push("═══ ORPHANED WATCHERS — re-arm now ═══");
+      for (const e of orphaned) sections.push(formatOrphanedWatcher(e));
+      sections.push("");
+    }
+  }
 
   // --- DUE REMINDERS (top, full, regardless of topic) ---
   if (!onlyCore) {
@@ -327,6 +356,21 @@ function budgetSummaryNewestFirst(
   return { titleIds };
 }
 
+/** Render-time orphan predicate (the `isReminderDue` analog). A watcher
+ * is orphaned iff its arming session (`watcher.owner_agent_id`) is no
+ * longer in the live presence set. Pure: never mutates status. Returns
+ * false when liveness is unknown or the entry carries no owner binding —
+ * we only ever call a watch orphaned on positive evidence. */
+export function isWatcherOrphaned(
+  e: MemoryEntry,
+  liveAgentIds: Set<string> | undefined,
+): boolean {
+  if (liveAgentIds === undefined) return false;
+  const ownerId = e.watcher?.owner_agent_id;
+  if (!ownerId) return false;
+  return !liveAgentIds.has(ownerId);
+}
+
 function isReminderDue(
   e: MemoryEntry,
   now: number,
@@ -355,6 +399,30 @@ function formatFull(entry: MemoryEntry, opts: { collapsed?: boolean } = {}): str
   } else {
     parts.push(entry.text);
   }
+  return parts.join("\n");
+}
+
+/** Loud orphan formatter: the binding that died + the executable re-arm
+ * payload + the atomic-claim hint, so a successor can re-arm in place
+ * without opening the entry's prose first. */
+function formatOrphanedWatcher(entry: MemoryEntry): string {
+  const parts: string[] = [];
+  const dateShort = entry.date.slice(0, 10);
+  parts.push(`#### [${entry.id}] (${dateShort}) (kind=watcher, ORPHANED)`);
+  parts.push(`> ${entry.summary}`);
+  const w = entry.watcher;
+  if (w) {
+    parts.push(
+      `Owner session offline (armed by ${w.owner_username}). To re-arm: claim_watcher("${entry.id}") — atomic, you win or a live sibling did — then recreate:`,
+    );
+    const r = w.rearm ?? {};
+    if (r.crons && r.crons.length > 0) parts.push(`  crons: ${r.crons.join(" | ")}`);
+    if (r.commands && r.commands.length > 0) parts.push(`  commands: ${r.commands.join(" | ")}`);
+    if (r.ledger) parts.push(`  ledger: ${r.ledger}`);
+    if (r.notes) parts.push(`  notes: ${r.notes}`);
+    if (w.close_condition) parts.push(`  close when: ${w.close_condition}`);
+  }
+  parts.push(entry.text);
   return parts.join("\n");
 }
 

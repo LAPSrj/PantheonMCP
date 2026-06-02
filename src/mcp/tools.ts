@@ -633,6 +633,69 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
     },
   },
   {
+    name: "arm_watcher",
+    description:
+      "Arm a WATCH LANE — a long-lived background job (package tracking, a deploy/CI watch, a poll) whose resources (crons / Monitors) die with THIS session. Writes a kind:\"watcher\" memory entry binding the arming session (owner_agent_id) + your canonical persona (owner_username) and a re-arm payload. When the arming session leaves chat presence, the watch is detected as ORPHANED and surfaced LOUD at every boot (load_memory/login) of your persona until a sibling re-arms it via `claim_watcher`. Must run from a session logged into chat (the owner binding is the live agent_id). Topic-required (durable kind). `rearm` MUST carry enough to re-arm without archaeology — at least one of crons/commands/ledger/notes. scope:'persona' (default, fully wired); 'project' is a flagged fast-follow (rejected for now).",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["topic", "text", "rearm"],
+      properties: {
+        topic: { type: "string", description: "Topic for the entry (slug = <topic>/<name>)." },
+        summary_max240: {
+          type: "string",
+          description: "≤240-char headline; phrase the trigger (\"when the X watch is orphaned, re-arm Y\").",
+        },
+        text: { type: "string", description: "What the watch is for; prose context for a successor." },
+        rearm: {
+          type: "object",
+          additionalProperties: false,
+          description: "Executable re-arm payload — the machine slice a successor needs. At least one field required.",
+          properties: {
+            crons: { type: "array", items: { type: "string" }, description: "Cron specs / IDs to recreate (e.g. CronCreate args)." },
+            commands: { type: "array", items: { type: "string" }, description: "Monitor commands / shell to re-run." },
+            ledger: { type: "string", description: "Pointer to a ledger / notes file, if the lane keeps one." },
+            notes: { type: "string", description: "Free-form 'to re-arm: …' instructions." },
+          },
+        },
+        close_condition: {
+          type: "string",
+          description: "Human-readable 'done when …'. v1 close is explicit (close_watcher); not auto-evaluated.",
+        },
+        scope: {
+          type: "string",
+          enum: ["persona", "project"],
+          description: "Re-arm pool. 'persona' (default): any live sibling of your persona may claim. 'project': deferred fast-follow.",
+        },
+      },
+    },
+  },
+  {
+    name: "claim_watcher",
+    description:
+      "Atomically claim an ORPHANED watch lane for re-arming. Compare-and-swap: re-binds owner_agent_id to YOUR live session ONLY IF the current owner is still orphaned (absent from presence). If a live sibling already holds it you lose cleanly (`won:false`) — no duplicate re-arm. On win, returns the `rearm` payload so you can recreate the crons/Monitors, then `close_watcher` when the watch completes. Run from a session logged into chat.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id"],
+      properties: { id: { type: "string", description: "The watcher entry id." } },
+    },
+  },
+  {
+    name: "close_watcher",
+    description:
+      "Close a watch lane when the watch completes — fades the kind:\"watcher\" entry (recoverable via recall_memory if it re-opens). Explicit close; the close_condition is the human-readable check, not auto-evaluated.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id"],
+      properties: {
+        id: { type: "string", description: "The watcher entry id." },
+        verbose: { type: "boolean", description: "Return the full faded entry." },
+      },
+    },
+  },
+  {
     name: "list_memory",
     description:
       "Index-shape listing of YOUR OWN memory: id, date, status, core, summary, size_kb, has_details, kind?, topic?. Cheaper than `get_memory` — no body content. Self-only — for another persona use `list_memory_any`. Sorted date-descending. Filters compose: `status` (default 'active'; pass 'all'), `core`, `kind`, `since`, `filter` (substring).",

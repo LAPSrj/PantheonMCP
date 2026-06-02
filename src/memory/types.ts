@@ -48,6 +48,13 @@ export interface MemoryEntry {
    * Surfaces structured in the next session's boot payload. */
   handoff?: HandoffMeta;
 
+  /** Watcher metadata — populated only on `kind: "watcher"` entries
+   * (`docs/memory-redesign/6-watcher-kind.md`). The free-form `text`
+   * carries the prose ("what this watch is for", history, caveats);
+   * this carries the two bindings + the machine-usable re-arm payload a
+   * successor needs to re-arm without archaeology. See `WatcherMeta`. */
+  watcher?: WatcherMeta;
+
   // ── Redesign v2 (5-proposal-v2.md) — all schema-additive + optional.
   // Existing entries lack them; readers default. See the proposal for
   // the model. P1 adds storage; later phases add behavior.
@@ -134,6 +141,55 @@ export interface HandoffMeta {
   memory_refs?: { id: string; why: string }[];
   /** Explicit "do NOT do X" directives carried into the next session. */
   prohibitions?: string[];
+}
+
+/** Watcher metadata — the machine-usable slice of a watch lane (see the
+ * model in `docs/memory-redesign/6-watcher-kind.md`). TWO bindings:
+ * `owner_agent_id` (the arming session — the EXACT orphan trigger) and
+ * `owner_username` (the canonical persona — responsibility / re-arm
+ * pool). "Orphaned" is NEVER stored — it is derived at render time from
+ * the live presence set (`isWatcherOrphaned`), mirroring `isReminderDue`. */
+export interface WatcherMeta {
+  /** The chat `agent_id` of the arming session (`ctx.chat_agent_id`).
+   * Orphan trigger: the watcher is orphaned iff this id is absent from
+   * the live presence set. Re-bound by `claim_watcher` on re-arm. */
+  owner_agent_id: string;
+  /** The CANONICAL persona handle (`ctx.session.claimedUsername`, never
+   * the suffixed chat handle). Who is responsible / who may claim. */
+  owner_username: string;
+  /** The re-arm pool — reuses the persona/project memory tiers, not a
+   * new axis. `persona`: any live sibling of `owner_username` may claim
+   * (entry in persona memory). `project`: any live session in the
+   * project may claim (entry in project memory). Default `persona`. */
+  scope: "persona" | "project";
+  /** Everything a successor needs to re-arm WITHOUT reading source. The
+   * prose stays in the entry `text`; this is the executable slice. */
+  rearm: {
+    /** Cron specs / IDs to recreate (e.g. `CronCreate` args). */
+    crons?: string[];
+    /** Monitor commands / shell to re-run. */
+    commands?: string[];
+    /** Pointer to a ledger / notes file, when the lane keeps one. */
+    ledger?: string;
+    /** Free-form "to re-arm: …" instructions. */
+    notes?: string;
+  };
+  /** Human-readable "done when …". The owner checks it; v1 close is
+   * explicit (`close_watcher`), not auto-evaluated. */
+  close_condition?: string;
+  /** ms-epoch when first armed. */
+  armed_at: number;
+  /** ms-epoch of the last successful `claim_watcher` re-arm, if any.
+   * The liveness check IS the claim TTL: a claim re-binds the owner to
+   * the (live) claiming session, so if that session later dies the
+   * watcher simply re-orphans on the next cycle — no separate timer. */
+  last_rearmed_at?: number;
+  /** Daemon-tick push dedup (the reminder `notified` analog): set true
+   * when the tick has pushed the "ORPHANED — re-arm now" notification,
+   * so siblings don't re-push every 30s. Reset to false by
+   * `claim_watcher` on a successful re-arm. NOT a status — orphaned-ness
+   * itself is always derived live from presence, never stored. */
+  orphan_notified?: boolean;
 }
 
 export interface MemoryStore {

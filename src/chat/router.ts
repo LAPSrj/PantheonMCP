@@ -1125,6 +1125,23 @@ export class ChatRouter {
     return out;
   }
 
+  /** Cross-process snapshot of every live chat `agent_id`. The EXACT
+   * orphan-trigger set for watcher memory entries (a watcher whose
+   * `owner_agent_id` is absent here is orphaned). Prefers the SQLite
+   * presence table so it sees siblings across MCP processes; falls back
+   * to the in-memory map for in-process-only test routers. */
+  liveAgentIds(): Set<string> {
+    if (this.db) {
+      try {
+        const rows = listActive(this.db, { now: this.clock() });
+        return new Set(rows.map((r) => r.agent_id));
+      } catch {
+        // fall through
+      }
+    }
+    return new Set(this.subscribers.keys());
+  }
+
   // -------------------------------------------------------------------- //
   // Internals
   // -------------------------------------------------------------------- //

@@ -18,7 +18,7 @@ import {
   consumeForceLifecycleRequests,
 } from "./handlers/lifecycle.ts";
 import { sweepSummonVerifications } from "./handlers/spawn.ts";
-import { expireEntries, sweepDueReminders } from "../memory/index.ts";
+import { expireEntries, sweepDueReminders, sweepOrphanedWatchers } from "../memory/index.ts";
 import { isProjectSingleAgent, openChatDb, resolvePaths } from "../storage/index.ts";
 import { importLegacySchemas } from "../schemas/index.ts";
 import {
@@ -378,6 +378,25 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
       }
     } catch {
       // best-effort — never let reminder delivery crash the daemon
+    }
+    // Watcher orphan fast-path (§7): a watch lane's arming session has
+    // left presence → push a live sibling of the owning persona to
+    // re-arm, once (deduped across siblings by `orphan_notified`). The
+    // boot-render ORPHANED WATCHERS block is the real guarantee; this
+    // only accelerates when a sibling process is alive to run the tick.
+    try {
+      const username = ctx.session.claimedUsername;
+      if (username && ctx.chat) {
+        const live = ctx.chat.liveAgentIds();
+        const orphaned = sweepOrphanedWatchers(ctx.paths, username, live, Date.now());
+        for (const w of orphaned) {
+          void ctx.pushNotification(
+            `ORPHANED WATCHER — re-arm now: ${w.summary} (claim_watcher("${w.id}"))`,
+          );
+        }
+      }
+    } catch {
+      // best-effort — never let the orphan sweep crash the daemon
     }
     // Status-digest sweep: gated by time-since-last so the 30s tick
     // doesn't over-fire. Per Yapsmith's chat-mcp revamp: replaces

@@ -65,13 +65,27 @@ and points `PANTHEON_HOME` at it.
 Memory is topic-scoped + lazy (`docs/memory-redesign/5-proposal-v2.md`;
 `docs/memory.md` has the reference). The shape:
 
-- **Kinds (7):** `rule`, `fact`, `gotcha`, `pointer`, `note`, `handoff`,
-  `reminder`. Legacy kinds (decision/log/audit/…) are auto-mapped on read
-  + warned on write (`src/memory/taxonomy.ts`).
-- **Topics:** every durable kind (rule/fact/gotcha/pointer) + handoff
-  needs a `topic`; the slug is `<topic>/<name>`. Notes inherit the
-  session topic; reminders are due-gated. The reserved topic `always`
+- **Kinds (8):** `rule`, `fact`, `gotcha`, `pointer`, `note`, `handoff`,
+  `reminder`, `watcher`. Legacy kinds (decision/log/audit/…) are
+  auto-mapped on read + warned on write (`src/memory/taxonomy.ts`).
+- **Topics:** every durable kind (rule/fact/gotcha/pointer) + handoff +
+  watcher needs a `topic`; the slug is `<topic>/<name>`. Notes inherit
+  the session topic; reminders are due-gated. The reserved topic `always`
   loads (as summaries) every session.
+- **Watcher kind (8th — `docs/memory-redesign/6-watcher-kind.md`):** a
+  watch lane (cron/Monitor job whose resources die with the arming
+  session). `WatcherMeta` (`src/memory/types.ts`) binds TWO things:
+  `owner_agent_id` (arming session — the orphan trigger) +
+  `owner_username` (canonical persona — re-arm pool), plus a `rearm`
+  payload. Orphaned-ness is render-DERIVED, never stored:
+  `isWatcherOrphaned(entry, liveAgentIds)` (the `isReminderDue` analog).
+  Render shows a loud `ORPHANED WATCHERS` top block when the owner left
+  presence (`live_agent_ids` is threaded into `RenderOptions` from
+  `ChatRouter.liveAgentIds()`); the daemon-tick `sweepOrphanedWatchers`
+  pushes a sibling. Tools (`src/mcp/handlers/watcher.ts`): `arm_watcher`,
+  `claim_watcher` (atomic CAS rebind via `mutateStore`, `src/memory/
+  watcher.ts`), `close_watcher` (fade). v1 = persona scope only +
+  explicit close; project scope is a flagged fast-follow.
 - **Boot + load gate:** `manifest → list_topics → load_memory(topic) →
   login → monitor`. The dispatcher rejects non-exempt tools with
   `memory_not_loaded` until `load_memory` runs (enabled only in the real

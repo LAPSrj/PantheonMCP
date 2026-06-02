@@ -5,6 +5,7 @@ export {
   type MemoryStatus,
   type MemoryIndexEntry,
   type MemoryErrorCode,
+  type WatcherMeta,
   MemoryError,
 } from "./types.ts";
 
@@ -34,6 +35,7 @@ export {
 export {
   renderForPrompt,
   renderStore,
+  isWatcherOrphaned,
   type RenderOptions,
   type RenderResult,
   ACTIVE_BUDGET_BYTES,
@@ -81,6 +83,13 @@ export {
   HANDOFF_MATCH_THRESHOLD,
   type DecaySummary,
 } from "./decay.ts";
+
+export {
+  claimWatcher,
+  sweepOrphanedWatchers,
+  type ClaimResult,
+  type ClaimReason,
+} from "./watcher.ts";
 
 export {
   snapshotMemory,

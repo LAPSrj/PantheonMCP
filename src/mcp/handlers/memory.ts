@@ -200,6 +200,9 @@ function renderMemoryFor(
     only_core: onlyCore,
     ...(isSelf ? { loaded_topics: ctx.loaded_topics } : {}),
     ...(isSelf && ctx.session_seq !== null ? { session_seq: ctx.session_seq } : {}),
+    // Orphan trigger is self-only (your watch lanes, your responsibility);
+    // a peer render keeps liveness undefined so it never false-alarms.
+    ...(isSelf && ctx.chat ? { live_agent_ids: ctx.chat.liveAgentIds() } : {}),
   });
   return {
     username,
@@ -279,6 +282,10 @@ export const load_memory: Handler = async (args, ctx) => {
   const rendered = renderForPrompt(ctx.paths, username, {
     loaded_topics: ctx.loaded_topics,
     ...(sessionSeq !== undefined ? { session_seq: sessionSeq } : {}),
+    // Boot-render orphan check (the guarantee): surface watch lanes whose
+    // arming session has left presence. ctx.chat is the daemon's router,
+    // available even before this session's own login.
+    ...(ctx.chat ? { live_agent_ids: ctx.chat.liveAgentIds() } : {}),
   });
   // §8/§10 session-boundary decay (self only; never mutate a peer).
   let decay;

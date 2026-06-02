@@ -11,7 +11,10 @@
 
 import type { MemoryEntry } from "./types.ts";
 
-/** §2 — the seven kinds, in render-precedence-ish order. */
+/** §2 — the canonical kinds, in render-precedence-ish order. `watcher`
+ * (8th kind, `docs/memory-redesign/6-watcher-kind.md`) is durable +
+ * topic-required like rule/fact, but additionally orphan-surfaced at
+ * render time (see `isWatcherOrphaned` in render.ts). */
 export const MEMORY_KINDS = [
   "rule",
   "fact",
@@ -20,6 +23,7 @@ export const MEMORY_KINDS = [
   "note",
   "handoff",
   "reminder",
+  "watcher",
 ] as const;
 
 export type MemoryKind = (typeof MEMORY_KINDS)[number];
@@ -40,6 +44,10 @@ export const DURABLE_KINDS: ReadonlySet<string> = new Set([
 export const TOPIC_REQUIRED_KINDS: ReadonlySet<string> = new Set([
   ...DURABLE_KINDS,
   "handoff",
+  // `watcher` is topic-grouped (visible under its topic when armed) and
+  // additionally orphan-surfaced; it carries its own close→fade decay,
+  // so it's topic-required without being in DURABLE_KINDS (no-auto-decay).
+  "watcher",
 ]);
 
 /** §4 — the reserved topic loaded in every session (as SUMMARY). Must
