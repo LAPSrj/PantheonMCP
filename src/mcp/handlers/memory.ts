@@ -25,8 +25,15 @@ import {
   type FindMemoryFilter,
   type ListIndexFilter,
   type MemoryEntry,
+  type MemorySource,
 } from "../../memory/index.ts";
-import { listPersonas } from "../../identity/index.ts";
+import { listPersonas, readPersona } from "../../identity/index.ts";
+import { openChatDb } from "../../storage/index.ts";
+import { getMessageById } from "../../chat/index.ts";
+import {
+  fetchHistoryMessage,
+  validateUserQuote,
+} from "../../history-search/index.ts";
 import { getInstructions, INSTRUCTION_TOPICS } from "../../responses/instructions.ts";
 import {
   asBoolean,
@@ -51,6 +58,129 @@ function selfUsername(claimed: string | null): string {
     );
   }
   return claimed;
+}
+
+/** Resolve the agent-supplied `sources` input into stored `MemorySource`
+ * snapshots (Leandro's "snapshot at write"). Each input carries ONE
+ * coordinate kind; we resolve it to durable text via the existing read
+ * paths and keep both the coordinates (for later re-verification) and the
+ * snapshot (durable against chat/transcript pruning). Resolution is
+ * best-effort: an unresolvable coordinate stores `resolved: false` rather
+ * than failing the memory write — provenance shouldn't block a save. */
+function resolveSources(
+  ctx: HandlerContext,
+  username: string,
+  raw: unknown,
+): MemorySource[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: MemorySource[] = [];
+  let cwd: string | null = null;
+  try {
+    cwd = readPersona(ctx.paths, username)?.cwd ?? null;
+  } catch {
+    cwd = null;
+  }
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null) continue;
+    const o = item as Record<string, unknown>;
+    const messageId = asString(o.message_id);
+    const sessionId = asString(o.session_id);
+    const messageAt = asString(o.message_at);
+    const quote = asString(o.quote);
+    const label = asString(o.label);
+
+    if (messageId !== undefined) {
+      out.push(resolveChatMessage(ctx, messageId, label));
+    } else if (sessionId !== undefined && messageAt !== undefined) {
+      out.push(resolveTranscript(cwd, sessionId, messageAt, label));
+    } else if (quote !== undefined) {
+      out.push(resolveQuote(cwd, quote, label));
+    } else if (label !== undefined) {
+      // Bare label — no resolvable coordinate, but the agent's
+      // attribution is still worth keeping.
+      out.push({ label, resolved: false });
+    }
+    // Otherwise the item carried nothing usable — skip it silently.
+  }
+  return out;
+}
+
+function resolveChatMessage(
+  ctx: HandlerContext,
+  messageId: string,
+  label: string | undefined,
+): MemorySource {
+  const base: MemorySource = { message_id: messageId, resolved: false };
+  if (label !== undefined) base.label = label;
+  try {
+    const db = openChatDb(ctx.paths.chatDbPath);
+    const row = getMessageById(db, messageId);
+    if (row) {
+      base.text = row.text;
+      base.author = row.from_username_inline ?? row.from_agent_id;
+      base.ts = row.ts;
+      base.resolved = true;
+    }
+  } catch {
+    // chat db unavailable — keep the coordinate, resolved stays false.
+  }
+  return base;
+}
+
+function resolveTranscript(
+  cwd: string | null,
+  sessionId: string,
+  messageAt: string,
+  label: string | undefined,
+): MemorySource {
+  const base: MemorySource = {
+    session_id: sessionId,
+    message_at: messageAt,
+    resolved: false,
+  };
+  if (label !== undefined) base.label = label;
+  if (!cwd) return base;
+  try {
+    const fetched = fetchHistoryMessage({ cwd, session_id: sessionId, message_at: messageAt });
+    if (fetched && fetched.content.length > 0) {
+      base.text = fetched.content;
+      base.resolved = true;
+    }
+  } catch {
+    // transcript not readable — keep coordinates, resolved stays false.
+  }
+  return base;
+}
+
+function resolveQuote(
+  cwd: string | null,
+  quote: string,
+  label: string | undefined,
+): MemorySource {
+  const base: MemorySource = { quote, resolved: false };
+  if (label !== undefined) base.label = label;
+  if (!cwd) return base;
+  try {
+    const result = validateUserQuote({ cwd, quote, limit: 1 });
+    const match = result.matches[0];
+    if (result.found && match) {
+      base.text = match.user_message;
+      base.session_id = match.session_id;
+      if (match.message_at !== null) base.message_at = match.message_at;
+      base.resolved = true;
+    }
+  } catch {
+    // transcript not readable — keep the quote, resolved stays false.
+  }
+  return base;
+}
+
+/** Project an entry for a default read path: strip `sources` (never
+ * auto-returned, per the design) and surface a `has_source` flag instead.
+ * The full source set is fetched on demand via `get_memory_source`. */
+function withSourceFlag(entry: MemoryEntry): Record<string, unknown> {
+  const { sources, ...rest } = entry;
+  return { ...rest, has_source: (sources?.length ?? 0) > 0 };
 }
 
 /** Shared render path for `get_memory` (self) and `get_memory_any`
@@ -242,6 +372,8 @@ export const append_memory: Handler = async (args, ctx) => {
   } else if (args.due === "next-session") {
     due = "next-session";
   }
+  // Provenance — opt-in, snapshotted at write (see `resolveSources`).
+  const sources = resolveSources(ctx, claimed, args.sources);
 
   // §12/§17 write-time validation. v2 is the only model now, so this is
   // always enforced — hard issues throw. The warn-only
@@ -273,6 +405,7 @@ export const append_memory: Handler = async (args, ctx) => {
     ...(due !== undefined ? { due } : {}),
     ...(supersedes !== undefined ? { supersedes } : {}),
     ...(ctx.session_seq !== null ? { session_seq: ctx.session_seq } : {}),
+    ...(sources !== undefined && sources.length > 0 ? { sources } : {}),
   });
   // §7 — superseding an entry tombstones the one it replaces (recoverable
   // via include_forgotten). Tolerant: a missing/absent target is ignored.
@@ -326,11 +459,20 @@ export const append_memory: Handler = async (args, ctx) => {
   if (expiresAtAutoSet && created.expires_at !== undefined) {
     derived.expires_at = created.expires_at;
   }
+  // Surface source resolution so an unresolved coordinate isn't silent.
+  let sourcesInfo: Record<string, unknown> | undefined;
+  if (sources !== undefined && sources.length > 0) {
+    sourcesInfo = {
+      count: sources.length,
+      resolved: sources.filter((s) => s.resolved).length,
+    };
+  }
   return {
     id: created.id,
     status: created.status,
     text_chars: text.length,
     ...(Object.keys(derived).length > 0 ? { derived } : {}),
+    ...(sourcesInfo !== undefined ? { sources: sourcesInfo } : {}),
     ...warningFields,
     ...(hint !== undefined ? { hint } : {}),
   };
@@ -366,6 +508,10 @@ export const update_memory: Handler = async (args, ctx) => {
     if (args.due === null) patch.due = null;
     else if (typeof args.due === "number" && Number.isFinite(args.due)) patch.due = args.due;
     else if (args.due === "next-session") patch.due = "next-session";
+  }
+  // Provenance patch: `null` clears; an array replaces (re-snapshotted).
+  if ("sources" in args) {
+    patch.sources = args.sources === null ? null : resolveSources(ctx, claimed, args.sources);
   }
   const before = getEntry(ctx.paths, claimed, id);
   const updated = updateEntry(ctx.paths, claimed, id, patch);
@@ -420,7 +566,9 @@ export const set_memory: Handler = async (args, ctx) => {
 export const recall_memory: Handler = async (args, ctx) => {
   const username = selfUsername(ctx.session.claimedUsername);
   const id = asStringRequired(args.id, "id");
-  return recallEntry(ctx.paths, username, id);
+  // `sources` is never auto-returned — surface `has_source` and let the
+  // agent fetch provenance via `get_memory_source(id)` when needed.
+  return withSourceFlag(recallEntry(ctx.paths, username, id));
 };
 
 /** Cross-persona full-text read (deniable by tool name). Unlike
@@ -434,7 +582,8 @@ export const recall_memory_any: Handler = async (args, ctx) => {
   if (!entry) {
     throw new ToolError("entry_not_found", `No memory entry '${id}' for '${username}'.`);
   }
-  return entry;
+  // Same projection as self-recall: provenance via `get_memory_source_any`.
+  return withSourceFlag(entry);
 };
 
 export const fade_memory: Handler = async (args, ctx) => {
@@ -535,6 +684,37 @@ export const get_memory_details: Handler = async (args, ctx) => {
 /** Cross-persona details read (deniable by tool name). */
 export const get_memory_details_any: Handler = async (args, ctx) => {
   return detailsFor(
+    ctx,
+    asStringRequired(args.username, "username"),
+    asStringRequired(args.id, "id"),
+  );
+};
+
+/** Provenance read — returns the entry's stored `sources` snapshots (the
+ * write-time text + the coordinates for re-verifying via `get_message` /
+ * `get_history_message` / `validate_user_quote`). Mirrors
+ * `get_memory_details`: the heavy/optional field has its own read path so
+ * it's never bundled into the default render or `recall_memory`. */
+function sourcesFor(
+  ctx: HandlerContext,
+  username: string,
+  id: string,
+): Record<string, unknown> {
+  const entry = getEntry(ctx.paths, username, id);
+  if (!entry) {
+    throw new ToolError("entry_not_found", `No memory entry '${id}' for '${username}'.`);
+  }
+  return { id, username, sources: entry.sources ?? [] };
+}
+
+export const get_memory_source: Handler = async (args, ctx) => {
+  return sourcesFor(ctx, selfUsername(ctx.session.claimedUsername), asStringRequired(args.id, "id"));
+};
+
+/** Cross-persona provenance read (deniable by tool name) — the audit
+ * path for verifying where a peer's memory came from. */
+export const get_memory_source_any: Handler = async (args, ctx) => {
+  return sourcesFor(
     ctx,
     asStringRequired(args.username, "username"),
     asStringRequired(args.id, "id"),

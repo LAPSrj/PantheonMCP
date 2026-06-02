@@ -6,6 +6,7 @@ import {
   type HandoffMeta,
   type MemoryEntry,
   type MemoryIndexEntry,
+  type MemorySource,
   type MemoryStatus,
   type MemoryStore,
 } from "./types.ts";
@@ -52,6 +53,7 @@ function v2Fields(input: {
   session_seq?: number;
   matched?: number;
   last_matched_seq?: number;
+  sources?: MemorySource[];
 }): Partial<MemoryEntry> {
   const out: Partial<MemoryEntry> = {};
   if (input.topic !== undefined) out.topic = input.topic;
@@ -63,6 +65,9 @@ function v2Fields(input: {
   if (input.matched !== undefined) out.matched = input.matched;
   if (input.last_matched_seq !== undefined) {
     out.last_matched_seq = input.last_matched_seq;
+  }
+  if (input.sources !== undefined && input.sources.length > 0) {
+    out.sources = input.sources;
   }
   return out;
 }
@@ -100,6 +105,8 @@ export interface AppendInput {
   session_seq?: number;
   matched?: number;
   last_matched_seq?: number;
+  /** v2 provenance — opt-in, write-time-snapshotted source refs. */
+  sources?: MemorySource[];
 }
 
 export interface UpdateInput {
@@ -119,6 +126,8 @@ export interface UpdateInput {
   supersedes?: string;
   matched?: number;
   last_matched_seq?: number;
+  /** v2 provenance — replace the source set; `null` clears it. */
+  sources?: MemorySource[] | null;
 }
 
 export function appendEntry(
@@ -376,6 +385,12 @@ export function updateEntry(
     if (patch.matched !== undefined) next.matched = patch.matched;
     if (patch.last_matched_seq !== undefined) {
       next.last_matched_seq = patch.last_matched_seq;
+    }
+    if (patch.sources === null) {
+      delete next.sources;
+    } else if (patch.sources !== undefined) {
+      if (patch.sources.length > 0) next.sources = patch.sources;
+      else delete next.sources;
     }
     const entries = store.entries.slice();
     entries[idx] = next;

@@ -45,6 +45,8 @@ export const HANDLERS: Record<string, Handler> = {
   find_memory_any: memory.find_memory_any,
   get_memory_details: memory.get_memory_details,
   get_memory_details_any: memory.get_memory_details_any,
+  get_memory_source: memory.get_memory_source,
+  get_memory_source_any: memory.get_memory_source_any,
   snapshot_memory: memory.snapshot_memory,
   restore_memory: memory.restore_memory,
   list_snapshots: memory.list_snapshots,

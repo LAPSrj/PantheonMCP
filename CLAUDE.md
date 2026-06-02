@@ -111,6 +111,18 @@ Memory is topic-scoped + lazy (`docs/memory-redesign/5-proposal-v2.md`;
   Pass `verbose: true` to get the full entry back.
 - `append_memory` is the always-safe entry point; `update_memory` /
   `fade_memory` mutate; `forget_memory` (alias `delete`) tombstones.
+- **Provenance — `sources[]` (opt-in):** `append_memory`/`update_memory`
+  accept a `sources` array (`src/memory/types.ts` `MemorySource`). Each
+  item cites ONE origin and is SNAPSHOTTED at write
+  (`resolveSources` in `handlers/memory.ts`): `{ message_id }` resolves via
+  `getMessageById`, `{ session_id, message_at }` via `fetchHistoryMessage`,
+  `{ quote }` via `validateUserQuote` — best-effort, an unresolvable
+  coordinate stores `resolved: false` rather than failing the write. The
+  stored ref keeps both the snapshot text (durable vs pruning) and the
+  coordinates for live re-verification. Never rendered and STRIPPED from
+  `recall_memory` (which adds a `has_source` flag); fetched via
+  `get_memory_source(id)` / `get_memory_source_any` — the
+  `has_details`/`get_memory_details` pattern. Not mandatory on any kind.
 
 ### Chat scopes
 

@@ -1,5 +1,6 @@
 export {
   type MemoryEntry,
+  type MemorySource,
   type MemoryStore,
   type MemoryStatus,
   type MemoryIndexEntry,

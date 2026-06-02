@@ -80,6 +80,42 @@ export interface MemoryEntry {
   /** v2 reminder: set once the daemon-tick has pushed a notification for
    * a due date-reminder, so it isn't re-pushed every tick. */
   notified?: boolean;
+  /** v2 provenance — opt-in, multiple per entry. Where this memory came
+   * from, SNAPSHOTTED at write time (durable against chat/transcript
+   * pruning). NEVER rendered at boot and stripped from `recall_memory`
+   * (which only flags `has_source`); fetched via `get_memory_source(id)`.
+   * Each ref keeps the snapshot text AND the coordinates the existing
+   * read tools consume, so an agent can re-verify live. See `MemorySource`. */
+  sources?: MemorySource[];
+}
+
+/** One provenance reference on a memory entry. At least one resolution
+ * coordinate is set; the snapshot fields capture what the coordinate
+ * resolved to at write time. Coordinates map to the existing read tools:
+ *   - `message_id`           → `get_message({ message_id })`        (chat)
+ *   - `session_id`+`message_at` → `get_history_message({ … })`      (transcript)
+ *   - `quote`                → `validate_user_quote({ username, quote })`
+ * `username` for the quote path is the entry's owning persona. */
+export interface MemorySource {
+  /** chat.db message id. */
+  message_id?: string;
+  /** CC transcript coordinates. */
+  session_id?: string;
+  message_at?: string;
+  /** Verbatim user-typed substring (validatable against the transcript). */
+  quote?: string;
+  /** Optional human label the agent supplied (e.g. "Leandro 2026-06-01"). */
+  label?: string;
+  /** Snapshot captured at write — the resolved message/quote text. */
+  text?: string;
+  /** Author handle of the snapshotted message, when resolvable. */
+  author?: string;
+  /** ms-epoch timestamp of the snapshotted message, when resolvable. */
+  ts?: number;
+  /** True when the coordinate resolved to `text` at write time; false
+   * when resolution failed (bad id / not found) and only the
+   * agent-supplied fields were stored. */
+  resolved?: boolean;
 }
 
 /** The machine-usable slice of a context handoff (see the canonical

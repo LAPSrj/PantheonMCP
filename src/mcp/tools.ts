@@ -476,6 +476,22 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
           description:
             "v2: id of an entry this one replaces. The superseded entry is coerced to forgotten (recoverable).",
         },
+        sources: {
+          type: "array",
+          description:
+            "v2 provenance (opt-in, one or more). Each item cites ONE origin; the system SNAPSHOTS its text at write (durable against chat/transcript pruning) and keeps the coordinates for later re-verification. Pass exactly one of: { message_id } (a chat message), { session_id, message_at } (a transcript turn), or { quote } (verbatim user-typed text). `label` is an optional human tag (e.g. \"Leandro 2026-06-01\"). NEVER returned by default — recall_memory only flags `has_source`; fetch the full set via `get_memory_source(id)`.",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              message_id: { type: "string" },
+              session_id: { type: "string" },
+              message_at: { type: "string" },
+              quote: { type: "string" },
+              label: { type: "string" },
+            },
+          },
+        },
         verbose: {
           type: "boolean",
           description:
@@ -524,6 +540,27 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
           description: "v2 reminder due; null clears.",
         },
         supersedes: { type: "string", description: "v2: id this entry supersedes." },
+        sources: {
+          oneOf: [
+            {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  message_id: { type: "string" },
+                  session_id: { type: "string" },
+                  message_at: { type: "string" },
+                  quote: { type: "string" },
+                  label: { type: "string" },
+                },
+              },
+            },
+            { type: "null" },
+          ],
+          description:
+            "v2 provenance: replace the source set (re-snapshotted at write) or null to clear. Same item shape as append_memory.sources.",
+        },
         verbose: {
           type: "boolean",
           description:
@@ -684,6 +721,33 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
     name: "get_memory_details_any",
     description:
       "Cross-persona details read: return ONLY the `details` field of another persona's entry. The `_any` suffix marks this as the elevated, separately-deniable variant of self-only `get_memory_details`. Errors `entry_not_found` if no entry.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "id"],
+      properties: {
+        username: { type: "string", description: "Persona that owns the entry." },
+        id: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "get_memory_source",
+    description:
+      "Return the `sources` (provenance) of one of YOUR OWN entries — the write-time snapshots plus the coordinates to re-verify each origin live (`message_id` → get_message; `session_id`+`message_at` → get_history_message; `quote` → validate_user_quote, with username = you). Provenance is never auto-returned — recall_memory only flags `has_source`; this is the fetch path. Returns `sources: []` when the entry has none. Self-only — for a peer use `get_memory_source_any`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id"],
+      properties: {
+        id: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "get_memory_source_any",
+    description:
+      "Cross-persona provenance read: return the `sources` of another persona's entry — the audit path for verifying where a peer's memory came from. The `_any` suffix marks this as the elevated, separately-deniable variant of self-only `get_memory_source`. Errors `entry_not_found` if no entry.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
