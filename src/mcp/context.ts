@@ -41,6 +41,9 @@ export interface CreateContextOptions {
    * false so test / e2e contexts that drive handlers directly aren't
    * gated. */
   memory_gate_enabled?: boolean;
+  /** True when this session's project is `single_agent`. Resolved at
+   * MCP boot from the project config; defaults false. */
+  single_agent?: boolean;
 }
 
 /** Build a runtime context around the four foundation layers. The MCP
@@ -130,6 +133,7 @@ export function createContext(options: CreateContextOptions = {}): HandlerContex
     setSessionSeq(seq: number): void {
       sessionSeq = seq;
     },
+    single_agent: options.single_agent ?? false,
   } as HandlerContext;
 }
 

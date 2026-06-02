@@ -6,7 +6,11 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { DEFAULT_REST_TIMEOUT_SECONDS } from "../watchdog/index.ts";
-import { transitionClaim } from "../identity/index.ts";
+import {
+  personasForCwd,
+  readPersona,
+  transitionClaim,
+} from "../identity/index.ts";
 import { ChatRouter, pruneStale } from "../chat/index.ts";
 import { pruneStaleRestRequests, pruneStaleSummons } from "../lifecycle/index.ts";
 import {
@@ -15,7 +19,7 @@ import {
 } from "./handlers/lifecycle.ts";
 import { sweepSummonVerifications } from "./handlers/spawn.ts";
 import { expireEntries, sweepDueReminders } from "../memory/index.ts";
-import { openChatDb, resolvePaths } from "../storage/index.ts";
+import { isProjectSingleAgent, openChatDb, resolvePaths } from "../storage/index.ts";
 import { importLegacySchemas } from "../schemas/index.ts";
 import {
   isContextCheckDisabled,
@@ -30,7 +34,7 @@ import {
 import { createContext } from "./context.ts";
 import { dispatch } from "./dispatch.ts";
 import { HookPoller, sweepStaleSessionDirs } from "./hook-poller.ts";
-import { TOOLS } from "./tools.ts";
+import { SINGLE_AGENT_HIDDEN, TOOLS } from "./tools.ts";
 
 export interface ServerOptions {
   /** Override at boot for tests or sandboxed runs. */
@@ -107,6 +111,12 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
   const router = new ChatRouter({ paths, db: chatDb });
 
   const blockSelfExit = process.env.PANTHEON_BLOCK_SELF_EXIT === "1";
+  // Single-agent project resolution: figure out this session's project
+  // from the env-named persona (summoned) or the cwd (cold/hand-started),
+  // then read its config. Computed BEFORE createContext so the
+  // `tools/list` handler (served at the MCP handshake, before the agent
+  // ever calls the `login` tool) already reflects the trimmed surface.
+  const singleAgent = resolveBootSingleAgent(paths);
   const ctx =
     options.context ??
     createContext({
@@ -117,6 +127,7 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
       spawn_metadata: spawnMetadata,
       chat: router,
       claude_session_id: claudeSessionAtBoot,
+      single_agent: singleAgent,
       // §9 load gate: real boot requires `load_memory` before chat. A
       // fresh / empty persona is auto-skipped inside the dispatcher.
       memory_gate_enabled: true,
@@ -198,9 +209,16 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
   // Replace the no-op pushNotification on the context so handlers can use it.
   Object.assign(ctx, { pushNotification });
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: TOOLS as unknown as Array<(typeof TOOLS)[number]>,
-  }));
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    // Single-agent project: advertise only the valid surface. The MCP
+    // config is global (one server entry for every project), so the
+    // filter is per-conversation — it keys off this session's project,
+    // resolved at boot. Normal projects see the full list.
+    const advertised = ctx.single_agent
+      ? TOOLS.filter((t) => !SINGLE_AGENT_HIDDEN.has(t.name))
+      : TOOLS;
+    return { tools: advertised as unknown as Array<(typeof TOOLS)[number]> };
+  });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const name = request.params.name;
@@ -406,6 +424,33 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
     cleanup();
     process.exit(0);
   });
+}
+
+/** Resolve whether this MCP session's project is `single_agent`, at
+ * boot, without needing a chat login. Order:
+ *   1. `PANTHEON_USERNAME` (set on summoned agents) → persona → project
+ *   2. fall back to `process.cwd()` → the persona registered there
+ * Returns false when no project can be resolved (e.g. the very first
+ * `register` into an empty project — which must show the full surface
+ * anyway, since `register` is what creates the lone persona). Best
+ * effort: any read failure resolves to false (fail open). */
+function resolveBootSingleAgent(paths: ReturnType<typeof resolvePaths>): boolean {
+  try {
+    let project: string | null = null;
+    const envUser = process.env.PANTHEON_USERNAME;
+    if (envUser) {
+      const persona = readPersona(paths, envUser);
+      if (persona) project = persona.project;
+    }
+    if (!project) {
+      const here = personasForCwd(paths, process.cwd());
+      if (here.length > 0) project = here[0]!.project;
+    }
+    if (!project) return false;
+    return isProjectSingleAgent(paths, project);
+  } catch {
+    return false;
+  }
 }
 
 function readSpawnMetadataFromEnv() {

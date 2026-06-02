@@ -25,6 +25,7 @@ import { runFetch } from "../src/cli/fetch.ts";
 import { runConsole } from "../src/cli/console.ts";
 import { runStatusline } from "../src/cli/statusline.ts";
 import { runSummon } from "../src/cli/summon.ts";
+import { runProject } from "../src/cli/project.ts";
 import { validateFile, type ValidateType } from "../src/cli/validate.ts";
 import { runContextCheck } from "../src/cli/context-check.ts";
 import { EXIT_CODES } from "../src/cli/exit-codes.ts";
@@ -39,6 +40,8 @@ Usage: pantheon <subcommand> [options]
 Subcommands:
   serve                  Run the MCP server (stdio transport).
   summon <user> [flags]  Spawn a registered persona. See \`pantheon summon --help\`.
+  project <action> ...   Per-project policy. See \`pantheon project --help\`.
+                         e.g. \`pantheon project single-agent <project>\`
   fetch [...flags]       Watcher loop. See \`pantheon-fetch --help\`.
   doctor                 Health check on paths, schema, presence.
   dump-chat [...flags]   Export chat history to JSONL.
@@ -168,6 +171,11 @@ async function main(): Promise<void> {
 
     case "summon": {
       const code = await runSummon({ args: rest });
+      process.exit(code);
+    }
+
+    case "project": {
+      const code = await runProject({ args: rest });
       process.exit(code);
     }
 

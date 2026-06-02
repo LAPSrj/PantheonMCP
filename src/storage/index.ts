@@ -6,6 +6,7 @@ export {
   personaDir,
   projectMemoryFilePath,
   projectMemoryDir,
+  projectConfigFilePath,
   projectNotebookFilePath,
   ensureProjectMemoryDir,
   ensureProjectNotebookDir,
@@ -28,3 +29,11 @@ export {
 } from "./json.ts";
 
 export { openChatDb, CURRENT_SCHEMA_VERSION } from "./sqlite.ts";
+
+export {
+  readProjectConfig,
+  writeProjectConfig,
+  isProjectSingleAgent,
+  setProjectSingleAgent,
+  type ProjectConfig,
+} from "./project-config.ts";

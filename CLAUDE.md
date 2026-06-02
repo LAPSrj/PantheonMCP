@@ -119,6 +119,29 @@ Scopes are `project` / `dm` / `global`. DM messages REQUIRE both
 `scope: "dm"` AND `target: "<username>"`. The dispatcher strict-validates
 this — adding a new field needs a tools.ts schema update first.
 
+### Single-agent projects
+
+A project can be locked to ONE persona (one persona, many concurrent
+sessions — not a fleet). Flag lives at `projects/<project>/config.json`
+(`{ "single_agent": true }`, `src/storage/project-config.ts`); toggle via
+`pantheon project single-agent <project> [--off]`. Two enforcement points:
+
+- **Registry gate** — `createPersona` (`src/identity/registry.ts`) refuses
+  a SECOND distinct persona in a single-agent project (`project_single_agent`
+  IdentityError). Every creation path funnels through here (register /
+  conjure / summon / fork / merge / promote), so the one gate covers them
+  all. Re-registering the SAME handle (idempotent update, or force-overwrite
+  from a new cwd) is allowed; the lock wins over `force`. `merge` reduces the
+  count so it's never blocked.
+- **Tool surface** — sessions in a single-agent project get a trimmed
+  `tools/list` (no persona-creation, no shared project-memory/notebook, no
+  cross-persona `*_any` reads; chat + `force_*` stay). The hidden set is
+  `SINGLE_AGENT_HIDDEN` (`src/mcp/tools.ts`, computed from tool names).
+  Resolved at MCP boot (`resolveBootSingleAgent` in `src/mcp/server.ts`)
+  from the env-named persona or cwd — BEFORE the chat `login` tool call —
+  and stashed on `ctx.single_agent`. The dispatcher also rejects hidden
+  tools (`tool_unavailable_single_agent`) so hiding is authoritative.
+
 ### Storage atomicity
 
 Every JSON write goes through `writeJsonAtomic` (`src/storage/json.ts`):

@@ -108,6 +108,11 @@ export interface HandlerContext {
   session_seq: number | null;
   /** Set the session ordinal — called once by `load_memory`. */
   setSessionSeq(seq: number): void;
+  /** True when this session's project is flagged `single_agent`
+   * (one persona, many sessions). Resolved once at MCP boot. The
+   * `tools/list` response omits the single-agent-hidden tools and the
+   * dispatcher rejects them with `tool_unavailable_single_agent`. */
+  single_agent: boolean;
 }
 
 export interface SpawnMetadata {

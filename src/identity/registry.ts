@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   ensureDataDirs,
   ensurePersonaDir,
+  isProjectSingleAgent,
   memoryFilePath,
   personaDir,
   personaFilePath,
@@ -167,6 +168,28 @@ export function createPersona(
 ): Persona {
   validateUsername(input.username);
 
+  // Single-agent project lock: a project flagged `single_agent` allows
+  // exactly one persona. Block any path that would introduce a SECOND
+  // distinct persona (register / conjure / summon / fork / merge /
+  // promote all funnel through here). Re-registering the SAME handle —
+  // idempotent update, or a force-overwrite from a new cwd — is fine
+  // (still one persona). The lock wins over `force`: force overrides
+  // name/cwd collisions, not project policy.
+  if (isProjectSingleAgent(paths, input.project)) {
+    const others = personasForProject(paths, input.project).filter(
+      (p) => p.username !== input.username,
+    );
+    if (others.length > 0) {
+      throw new IdentityError(
+        "project_single_agent",
+        `Project '${input.project}' is single-agent — persona '${others[0]!.username}' already holds it. ` +
+          `Single-agent projects allow exactly one persona; run it in multiple sessions instead of creating another. ` +
+          `To replace it, unregister '${others[0]!.username}' first.`,
+        { project: input.project, existing: others[0]!.username },
+      );
+    }
+  }
+
   const now = (opts.now ?? NOW)();
   const pid = opts.pid ?? process.pid;
   const existing = readPersona(paths, input.username);
@@ -277,6 +300,10 @@ export function stampRested(
 
 export function personasForCwd(paths: Paths, cwd: string): Persona[] {
   return listPersonas(paths).filter((p) => p.cwd === cwd);
+}
+
+export function personasForProject(paths: Paths, project: string): Persona[] {
+  return listPersonas(paths).filter((p) => p.project === project);
 }
 
 function stripUndefined<T extends object>(obj: T): Partial<T> {

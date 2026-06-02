@@ -5,7 +5,7 @@ import { ChatError } from "../chat/index.ts";
 import { validatePayload, type JsonSchema } from "../schemas/index.ts";
 import { computePressure, isSaveTool, pressureHint } from "./context-pressure.ts";
 import { HANDLERS } from "./handlers/index.ts";
-import { TOOLS } from "./tools.ts";
+import { SINGLE_AGENT_HIDDEN, TOOLS } from "./tools.ts";
 import { ToolError, type HandlerContext, type MCPCallResult } from "./types.ts";
 
 const TOOL_SCHEMAS: Record<string, JsonSchema> = Object.fromEntries(
@@ -72,6 +72,18 @@ export async function dispatch(
     return errorResult({
       error: "unknown_tool",
       message: `Unknown tool: '${toolName}'.`,
+    });
+  }
+  // Single-agent project: these tools are omitted from `tools/list`, but
+  // a model that "remembers" the name could still call one. Reject here
+  // so hiding is authoritative, not cosmetic.
+  if (ctx.single_agent && SINGLE_AGENT_HIDDEN.has(toolName)) {
+    return errorResult({
+      error: "tool_unavailable_single_agent",
+      message:
+        `Tool '${toolName}' is unavailable: this is a single-agent project ` +
+        `(one persona shared across sessions). Persona-creation, shared ` +
+        `project-memory/notebook, and cross-persona reads are disabled here.`,
     });
   }
   // Reject unknown args + missing required fields against the tool's

@@ -24,6 +24,7 @@ export {
   stampSummoned,
   stampRested,
   personasForCwd,
+  personasForProject,
 } from "./registry.ts";
 
 export { Session, type SessionState } from "./session-state.ts";

@@ -2493,3 +2493,48 @@ export const TOOLS: readonly ToolDef[] = ALL_TOOL_DEFS.filter(
 export const DEPRECATED_TOOLS: readonly string[] = ALL_TOOL_DEFS.filter((t) =>
   DEPRECATED_TOOL_PREFIXES.some((p) => t.name.startsWith(p)),
 ).map((t) => t.name);
+
+/** Tools hidden from sessions in a `single_agent` project (one persona,
+ * many concurrent sessions). The MCP server omits these from
+ * `tools/list`, and the dispatcher rejects them with
+ * `tool_unavailable_single_agent` (hiding is UX; the dispatch guard makes
+ * it authoritative). Policy — computed from tool names so newly-added
+ * tools are covered automatically:
+ *   - persona creation / multiplicity: register, claim, become, fork, merge
+ *   - spawning other agents: summon, conjure (and their `_any`)
+ *   - shared project memory: every `*project_memory*` tool
+ *   - shared project notebook: every `project_notebook_*` tool
+ *   - cross-persona reads: every `*_any` tool EXCEPT `force_*_any`
+ * Kept visible: all chat tools, all `force_*` (incl. `_any` — rest/exit a
+ * sibling session of the same persona), own memory / history, lifecycle,
+ * self-identity, dream, remanifest, find_role. */
+const SINGLE_AGENT_HIDDEN_EXPLICIT = new Set<string>([
+  "register",
+  "claim",
+  "become",
+  "fork",
+  "merge",
+  "summon",
+  "conjure",
+]);
+const SINGLE_AGENT_KEEP_ANY = new Set<string>(["force_rest_any", "force_exit_any"]);
+
+function computeSingleAgentHidden(names: readonly string[]): Set<string> {
+  const hidden = new Set<string>();
+  for (const name of names) {
+    if (SINGLE_AGENT_HIDDEN_EXPLICIT.has(name)) {
+      hidden.add(name);
+    } else if (name.includes("project_memory")) {
+      hidden.add(name);
+    } else if (name.startsWith("project_notebook")) {
+      hidden.add(name);
+    } else if (name.endsWith("_any") && !SINGLE_AGENT_KEEP_ANY.has(name)) {
+      hidden.add(name);
+    }
+  }
+  return hidden;
+}
+
+export const SINGLE_AGENT_HIDDEN: ReadonlySet<string> = computeSingleAgentHidden(
+  ALL_TOOL_DEFS.map((t) => t.name),
+);

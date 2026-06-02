@@ -179,4 +179,5 @@ export type IdentityErrorCode =
   | "not_registered"
   | "already_registered"
   | "merge_into_self"
-  | "no_persona";
+  | "no_persona"
+  | "project_single_agent";
