@@ -24,6 +24,40 @@ test("plugin/plugin.json exists and parses", () => {
   expect(manifest.commands_dir).toBe("./commands");
 });
 
+test("plugin manifest hooks use the canonical CC shape", () => {
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(PLUGIN_DIR, "plugin.json"), "utf8"),
+  ) as { hooks: Record<string, unknown> };
+  const hooks = manifest.hooks;
+  expect(hooks).toBeDefined();
+  // Every event value is an ARRAY of matcher groups (not the legacy
+  // single-object / top-level command+args shorthand).
+  for (const [event, groups] of Object.entries(hooks)) {
+    expect(Array.isArray(groups)).toBe(true);
+    for (const g of groups as Array<Record<string, unknown>>) {
+      expect(typeof g.matcher).toBe("string");
+      // No legacy top-level command/args on the matcher object.
+      expect(g.command).toBeUndefined();
+      expect(g.args).toBeUndefined();
+      expect(Array.isArray(g.hooks)).toBe(true);
+      for (const h of g.hooks as Array<Record<string, unknown>>) {
+        expect(h.type).toBe("command");
+        expect(typeof h.command).toBe("string");
+        // Plugin-dir reference must be CC's built-in, not a manifest env var.
+        expect(h.command as string).toContain("${CLAUDE_PLUGIN_ROOT}");
+        expect(h.command as string).not.toContain("${PANTHEON_PLUGIN}");
+      }
+    }
+    void event;
+  }
+  // The subagent-block hook is registered on the pantheon tool surface.
+  const pre = hooks.PreToolUse as Array<{ matcher: string; hooks: Array<{ command: string }> }>;
+  const block = pre.find((g) => g.matcher === "mcp__pantheon__.*");
+  expect(block).toBeDefined();
+  const blockCmd = block?.hooks?.[0]?.command ?? "";
+  expect(blockCmd).toContain("block-subagent-pantheon.sh");
+});
+
 test("plugin manifest declares the seven canonical slash commands", () => {
   const expected = [
     "pantheon-summon",
@@ -45,7 +79,13 @@ test("plugin manifest declares the seven canonical slash commands", () => {
 });
 
 test("plugin hooks exist and are executable", () => {
-  const hooks = ["watchdog-reset.sh", "color-binding.sh", "context-pct-nudge.sh", "tab-title.sh"];
+  const hooks = [
+    "watchdog-reset.sh",
+    "block-subagent-pantheon.sh",
+    "color-binding.sh",
+    "context-pct-nudge.sh",
+    "tab-title.sh",
+  ];
   for (const h of hooks) {
     const file = path.join(PLUGIN_DIR, "hooks", h);
     expect(fs.existsSync(file)).toBe(true);

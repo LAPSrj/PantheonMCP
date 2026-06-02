@@ -21,36 +21,47 @@
   },
 
   "hooks": {
-    "PreToolUse": {
-      "matcher": "*",
-      "command": "bash",
-      "args": ["${PANTHEON_PLUGIN}/hooks/watchdog-reset.sh"],
-      "description": "Per §14: reset the watchdog on every CC tool-use event so plugin-mode gets the richer activity signal vanilla MCP can't see."
-    },
-    "PostToolUse": {
-      "matcher": "color",
-      "command": "bash",
-      "args": ["${PANTHEON_PLUGIN}/hooks/color-binding.sh"],
-      "description": "After /color: persist the new color to the claimed persona via update_profile."
-    },
-    "UserPromptSubmit": {
-      "matcher": "",
-      "command": "bash",
-      "args": ["${PANTHEON_PLUGIN}/hooks/context-pct-nudge.sh"],
-      "description": "Auto-context-percent nudge per §6 HIGH. Emits a chat DM at 70% / 85% / 95% with the recommended action."
-    }
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/watchdog-reset.sh\"" }
+        ]
+      },
+      {
+        "matcher": "mcp__pantheon__.*",
+        "hooks": [
+          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/block-subagent-pantheon.sh\"" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "color",
+        "hooks": [
+          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/color-binding.sh\"" }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/context-pct-nudge.sh\"" }
+        ]
+      }
+    ]
   },
 
   "settings_templates_dir": "./settings-templates",
 
   "env": {
-    "PANTHEON_BIN": "${PANTHEON_HOME}/bin",
-    "PANTHEON_PLUGIN": "${plugin_dir}"
+    "PANTHEON_BIN": "${PANTHEON_HOME}/bin"
   },
 
   "notes": [
-    "Variables: ${PANTHEON_HOME} = pantheon repo root; ${plugin_dir} = this plugin's install dir; ${PANTHEON_BIN} = ${PANTHEON_HOME}/bin.",
-    "Hooks ship as best-effort stubs today — they declare the intent + script entry point. Full daemon-side wiring lands when the §15 singleton daemon ships.",
+    "Variables: ${PANTHEON_HOME} = pantheon repo root; ${PANTHEON_BIN} = ${PANTHEON_HOME}/bin. Hook command strings use CC's built-in ${CLAUDE_PLUGIN_ROOT} (the plugin's install dir) — manifest env vars are NOT substituted into hook commands.",
+    "Hooks: watchdog-reset (PreToolUse *) and block-subagent-pantheon (PreToolUse mcp__pantheon__.*) are wired; color-binding (PostToolUse) and context-pct-nudge (UserPromptSubmit) are best-effort stubs pending CC exposing the needed values. See plugin/README.md 'Hook status'.",
     "Settings-templates are install-time scaffolds: copy snippet contents into your ~/.claude/settings.json under the relevant role folder. The plugin does NOT auto-overwrite your existing settings.",
     "Tab-title-from-status hook is Windows-only (WT/kitty/wezterm adapters); see plugin/hooks/tab-title.sh."
   ]

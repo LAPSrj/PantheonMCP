@@ -51,6 +51,10 @@ each piece by hand.
          {
            "matcher": "*",
            "hooks": [{ "type": "command", "command": "bash ~/.claude/plugins/pantheon/hooks/watchdog-reset.sh" }]
+         },
+         {
+           "matcher": "mcp__pantheon__.*",
+           "hooks": [{ "type": "command", "command": "bash ~/.claude/plugins/pantheon/hooks/block-subagent-pantheon.sh" }]
          }
        ]
      }
@@ -106,6 +110,7 @@ per-project; guests get `*` suffix.
 | Hook                    | Status     | Notes |
 |-------------------------|------------|-------|
 | Watchdog reset (PreToolUse) | **wired** | `touch`es `<stateDir>/sessions/$PPID/last_tool_use_at`; MCP server polls every 5s, calls `watchdog.touch` on mtime advance. End-to-end. |
+| Subagent pantheon block (PreToolUse) | **wired** | Matcher `mcp__pantheon__.*`. Denies the pantheon surface to subagents (Task/Agent spawns) — they inherit the parent's `PANTHEON_*` env and hit the same MCP connection as the same persona, so the server can't distinguish them. Keys off the PreToolUse `agent_type` field (subagent-only); main agent passes through. |
 | `/color` binding (PostToolUse) | stub | Needs CC to expose the chosen color value to hooks. |
 | Context-pct nudge (UserPromptSubmit) | stub | Needs CC to expose context-percent to hooks. |
 | Tab-title-from-status   | stub       | Windows-only design. Needs daemon-side listener (likely folds into watcher loop) + per-session tab-id tracking. |
