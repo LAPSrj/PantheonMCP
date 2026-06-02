@@ -201,23 +201,47 @@ export async function* tailLoop(options: LoopOptions): AsyncGenerator<WatcherEve
     if (options.max_iterations !== undefined && iterations >= options.max_iterations) break;
     iterations++;
 
-    if (Date.now() - receiverLoadedAt > refreshMs) {
-      const refreshed = await loadReceiver(options.db, options.agent_id, options.mode_override);
-      if (!refreshed) {
-        // Presence row evaporated. Flush any pending silent buffer
-        // first so the caller still sees them, then signal expiry.
-        if (pendingSilent.length > 0) yield coalesceSilent(pendingSilent);
-        throw new SessionExpiredError(options.agent_id);
+    // Read this iteration's rows. The DB ops here (loadReceiver,
+    // selectReceivableRows) can throw a TRANSIENT SQLite error
+    // (SQLITE_BUSY / "database is locked") when many pantheon processes
+    // contend on the shared WAL file — e.g. a burst of simultaneous
+    // boots. A transient throw must NOT kill the watcher: an unhandled
+    // throw exits the subprocess and zombies the agent (heartbeat alive,
+    // events undelivered). On transient errors we log + back off + retry;
+    // only SessionExpiredError (presence gone) and genuinely-fatal
+    // errors propagate. (`busy_timeout` on the connection already
+    // absorbs most contention; this is the backstop for the rest.)
+    let rows: MessageRow[];
+    try {
+      if (Date.now() - receiverLoadedAt > refreshMs) {
+        const refreshed = await loadReceiver(options.db, options.agent_id, options.mode_override);
+        if (!refreshed) {
+          // Presence row evaporated. Flush any pending silent buffer
+          // first so the caller still sees them, then signal expiry.
+          if (pendingSilent.length > 0) yield coalesceSilent(pendingSilent);
+          throw new SessionExpiredError(options.agent_id);
+        }
+        receiver = refreshed;
+        receiverLoadedAt = Date.now();
       }
-      receiver = refreshed;
-      receiverLoadedAt = Date.now();
-    }
 
-    const rows = selectReceivableRows({
-      db: options.db,
-      receiver,
-      since_seq: lastSeq,
-    });
+      rows = selectReceivableRows({
+        db: options.db,
+        receiver,
+        since_seq: lastSeq,
+      });
+    } catch (err) {
+      if (err instanceof SessionExpiredError) throw err;
+      if (isTransientDbError(err)) {
+        process.stderr.write(
+          `pantheon-watcher: transient DB error, retrying after ${waitMs}ms: ` +
+            `${err instanceof Error ? err.message : String(err)}\n`,
+        );
+        await sleep(waitMs, options.signal);
+        continue;
+      }
+      throw err;
+    }
 
     for (const row of rows) {
       lastSeq = row.seq;
@@ -255,6 +279,24 @@ export async function* tailLoop(options: LoopOptions): AsyncGenerator<WatcherEve
 }
 
 // ---------- helpers ---------- //
+
+/** True for SQLite errors that are TRANSIENT under concurrency — the DB
+ * was momentarily locked/busy and the same operation will likely succeed
+ * on retry. The watcher loop swallows-and-retries these instead of dying.
+ * Matches both the structured `code` (Bun's SQLiteError carries e.g.
+ * `SQLITE_BUSY` / `SQLITE_LOCKED`) and the message text, since not every
+ * driver/path populates `code`. Anything else is treated as fatal and
+ * propagates. */
+export function isTransientDbError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const code = (err as { code?: unknown }).code;
+  if (typeof code === "string" && /BUSY|LOCKED/i.test(code)) return true;
+  const message = (err as { message?: unknown }).message;
+  if (typeof message === "string" && /database is (locked|busy)/i.test(message)) {
+    return true;
+  }
+  return false;
+}
 
 export function readMaxSeq(db: Database): number {
   const row = db.query("SELECT MAX(seq) AS s FROM messages").get() as { s: number | null };

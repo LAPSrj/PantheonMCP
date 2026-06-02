@@ -8,9 +8,11 @@ import { persistMessage } from "../persistence.ts";
 import { upsertSubscriber } from "../presence.ts";
 import {
   isDeliverableRow,
+  isTransientDbError,
   isVisibleRow,
   readMaxSeq,
   selectReceivableRows,
+  tailLoop,
   tailOnce,
   type ReceiverState,
 } from "../watcher.ts";
@@ -378,4 +380,90 @@ test("formatBatch: structured message renders [kind:X] suffix and persists paylo
     pattern: 14,
     evidence: { file: "a.ts", line: 89 },
   });
+});
+
+// --- transient-error resilience (zombie prevention) ---
+
+test("isTransientDbError: matches SQLITE_BUSY/LOCKED by code or message; fatal otherwise", () => {
+  expect(isTransientDbError(Object.assign(new Error("x"), { code: "SQLITE_BUSY" }))).toBe(true);
+  expect(isTransientDbError(Object.assign(new Error("x"), { code: "SQLITE_LOCKED" }))).toBe(true);
+  expect(isTransientDbError(new Error("database is locked"))).toBe(true);
+  expect(isTransientDbError(new Error("database is busy"))).toBe(true);
+  // Fatal / unrelated errors are NOT transient.
+  expect(isTransientDbError(new Error("no such table: messages"))).toBe(false);
+  expect(isTransientDbError(Object.assign(new Error("x"), { code: "SQLITE_CORRUPT" }))).toBe(false);
+  expect(isTransientDbError(null)).toBe(false);
+  expect(isTransientDbError("database is locked")).toBe(false);
+});
+
+test("tailLoop survives a transient DB error and keeps delivering", async () => {
+  // Seed a message the loop should eventually deliver.
+  persistMessage(
+    db,
+    msg({ id: "survivor", seq: 1, from_agent_id: "peer", scope: "dm", target: "vellumpike", text: "delivered despite the lock" }),
+  );
+
+  // Make the messages-read throw SQLITE_BUSY exactly once, then behave.
+  const origQuery = db.query.bind(db);
+  let thrown = false;
+  (db as unknown as { query: unknown }).query = (sql: string) => {
+    if (!thrown && sql.includes("FROM messages WHERE seq")) {
+      thrown = true;
+      throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+    }
+    return origQuery(sql);
+  };
+
+  // Silence the expected stderr warning for a clean test log.
+  const origWrite = process.stderr.write.bind(process.stderr);
+  let warned = false;
+  (process.stderr as unknown as { write: unknown }).write = (chunk: string) => {
+    if (typeof chunk === "string" && chunk.includes("transient DB error")) warned = true;
+    return true;
+  };
+
+  try {
+    const events = [];
+    for await (const e of tailLoop({
+      db,
+      agent_id: "me",
+      since_seq: 0,
+      wait_ms: 1,
+      max_iterations: 5,
+    })) {
+      events.push(e);
+    }
+    // The first iteration threw (transient) and was retried, not fatal —
+    // the message still arrives on a later iteration.
+    expect(thrown).toBe(true);
+    expect(warned).toBe(true);
+    expect(events.some((e) => e.line.includes("delivered despite the lock"))).toBe(true);
+  } finally {
+    (db as unknown as { query: unknown }).query = origQuery;
+    (process.stderr as unknown as { write: unknown }).write = origWrite;
+  }
+});
+
+test("tailLoop still propagates a FATAL (non-transient) DB error", async () => {
+  const origQuery = db.query.bind(db);
+  (db as unknown as { query: unknown }).query = (sql: string) => {
+    if (sql.includes("FROM messages WHERE seq")) {
+      throw Object.assign(new Error("no such table: messages"), { code: "SQLITE_ERROR" });
+    }
+    return origQuery(sql);
+  };
+  try {
+    let caught: unknown = null;
+    try {
+      for await (const _e of tailLoop({ db, agent_id: "me", since_seq: 0, wait_ms: 1, max_iterations: 3 })) {
+        // drain
+      }
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).not.toBeNull();
+    expect((caught as Error).message).toContain("no such table");
+  } finally {
+    (db as unknown as { query: unknown }).query = origQuery;
+  }
 });

@@ -222,6 +222,14 @@ export function openChatDb(dbPath: string): Database {
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA synchronous = NORMAL");
   db.exec("PRAGMA foreign_keys = ON");
+  // Block-and-retry on a locked DB for up to 5s instead of throwing
+  // SQLITE_BUSY immediately. Many pantheon processes (one MCP server +
+  // one watcher subprocess per CC session) share this single WAL file;
+  // a burst of concurrent boots otherwise produces immediate BUSY
+  // throws. An unhandled BUSY in the watcher loop kills the subprocess
+  // and zombies the agent (heartbeat alive, events undelivered), so the
+  // timeout is load-bearing, not just a nicety.
+  db.exec("PRAGMA busy_timeout = 5000");
 
   ensureSchemaVersionTable(db);
   runPendingMigrations(db);
