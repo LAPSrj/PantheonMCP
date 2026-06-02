@@ -63,6 +63,22 @@ test("heartbeat refreshes last_heartbeat without touching other fields", () => {
   expect(rows[0]?.status).toBe("deep work");
 });
 
+test("heartbeat records last_activity_at when supplied; bare heartbeat leaves it", () => {
+  upsertSubscriber(db, sub({ agent_id: "a-1", username: "vellumpike" }), 1000);
+  // login upsert stamped last_activity_at = 1000.
+  // A heartbeat carrying a fresh activity timestamp advances it.
+  heartbeat(db, "a-1", 5000, 4800);
+  let rows = listActive(db, { now: 5100 });
+  expect(rows[0]?.last_heartbeat).toBe(5000);
+  expect(rows[0]?.last_activity_at).toBe(4800);
+  // A FROZEN agent: heartbeat keeps firing (process alive) but no fresh
+  // activity → last_heartbeat advances, last_activity_at stays put.
+  heartbeat(db, "a-1", 9000, 4800);
+  rows = listActive(db, { now: 9100 });
+  expect(rows[0]?.last_heartbeat).toBe(9000);
+  expect(rows[0]?.last_activity_at).toBe(4800); // unchanged → zombie gap = 4200ms
+});
+
 test("removeSubscriber drops the row entirely", () => {
   upsertSubscriber(db, sub({ agent_id: "a-1", username: "vellumpike" }));
   removeSubscriber(db, "a-1");

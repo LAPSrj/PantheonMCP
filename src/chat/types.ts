@@ -158,6 +158,13 @@ export interface PublicAgent {
   connected_at: number;
   last_seen: number;
   status_updated_at: number;
+  /** Milliseconds since the agent's event loop last made progress
+   * (now − last_activity_at). Null when no activity has been stamped
+   * (fresh row, or a process with no watchdog wired). A LARGE idle_for_ms
+   * alongside a fresh `last_seen` is the zombie signature: live process,
+   * frozen agent. Only populated on the cross-process (SQLite) path;
+   * in-memory-only test routers leave it null. */
+  idle_for_ms?: number | null;
   /** §6 LOW status-with-metadata. Only populated when the
    * subscriber's `status_meta` is set in this process's memory.
    * Cross-process consumers (other MCPs reading via the SQLite

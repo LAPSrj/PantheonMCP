@@ -271,7 +271,13 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
   // a missed heartbeat or two won't evict.
   const heartbeatTimer = setInterval(() => {
     const id = ctx.chat_agent_id;
-    if (id) ctx.chat?.heartbeat(id);
+    if (!id) return;
+    // Pass the watchdog's last event-loop-progress timestamp alongside
+    // the heartbeat. The heartbeat itself is unconditional (process
+    // aliveness); last_activity_at lets `list_agents` surface a zombie
+    // (fresh heartbeat, stale activity = live process, frozen agent).
+    const activity = ctx.watchdog?.inspect(ctx.session.id)?.last_activity_at;
+    ctx.chat?.heartbeat(id, activity);
   }, 5_000);
   // §14 plugin-mode watchdog reset: poll the per-CC-session marker
   // file the PreToolUse hook touches. When mtime advances, reset

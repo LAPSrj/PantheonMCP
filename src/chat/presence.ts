@@ -23,6 +23,11 @@ export interface PresenceRow {
   connected_at: number;
   status_updated_at: number;
   last_heartbeat: number;
+  /** When the agent's event loop last made progress (watchdog-reset on
+   * tool dispatch + hook touch). Null/absent when never stamped. Distinct
+   * from last_heartbeat (unconditional process timer) — the gap is the
+   * zombie signal. */
+  last_activity_at?: number | null;
   promoted_at: number | null;
 }
 
@@ -44,8 +49,9 @@ export function upsertSubscriber(
   db.run(
     `INSERT INTO subscribers (
        agent_id, username, project, transient, mode, status,
-       connected_at, status_updated_at, last_heartbeat, promoted_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       connected_at, status_updated_at, last_heartbeat, last_activity_at,
+       promoted_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(agent_id) DO UPDATE SET
        username = excluded.username,
        project = excluded.project,
@@ -55,6 +61,7 @@ export function upsertSubscriber(
        connected_at = excluded.connected_at,
        status_updated_at = excluded.status_updated_at,
        last_heartbeat = excluded.last_heartbeat,
+       last_activity_at = excluded.last_activity_at,
        promoted_at = excluded.promoted_at`,
     [
       sub.agent_id,
@@ -66,13 +73,18 @@ export function upsertSubscriber(
       sub.connected_at,
       sub.status_updated_at,
       now,
+      now, // login / self-heal upsert is itself an activity
       sub.promoted_at,
     ],
   );
 }
 
-/** Bump `last_heartbeat` only — no other fields change. Cheap; fires
- * every 5-10s from the MCP server's heartbeat scheduler.
+/** Bump `last_heartbeat` — and, when `last_activity_at` is supplied (the
+ * watchdog's last event-loop-progress timestamp for this session), record
+ * that too. Cheap; fires every 5-10s from the MCP server's heartbeat
+ * scheduler. The heartbeat is unconditional (process aliveness);
+ * last_activity_at reflects whether the AGENT is actually progressing, so
+ * the gap between them surfaces zombies.
  *
  * Returns the number of rows updated (0 when the row has been pruned,
  * 1 when the heartbeat landed). The caller uses the zero-rowcount
@@ -82,7 +94,14 @@ export function heartbeat(
   db: Database,
   agent_id: string,
   now: number = Date.now(),
+  last_activity_at?: number | null,
 ): number {
+  if (last_activity_at !== undefined && last_activity_at !== null) {
+    return db.run(
+      "UPDATE subscribers SET last_heartbeat = ?, last_activity_at = ? WHERE agent_id = ?",
+      [now, last_activity_at, agent_id],
+    ).changes;
+  }
   return db.run("UPDATE subscribers SET last_heartbeat = ? WHERE agent_id = ?", [
     now,
     agent_id,
@@ -148,6 +167,7 @@ export function listActive(
     connected_at: number;
     status_updated_at: number;
     last_heartbeat: number;
+    last_activity_at: number | null;
     promoted_at: number | null;
   }>;
   return rows.map((r) => ({
@@ -160,6 +180,7 @@ export function listActive(
     connected_at: r.connected_at,
     status_updated_at: r.status_updated_at,
     last_heartbeat: r.last_heartbeat,
+    last_activity_at: r.last_activity_at,
     promoted_at: r.promoted_at,
   }));
 }

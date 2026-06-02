@@ -5,7 +5,7 @@ import fs from "node:fs";
 /** Bumped when the schema changes. Each `vN` migration runs once and is
  * recorded in `schema_version`. Migrations are idempotent: re-opening an
  * up-to-date DB applies nothing. */
-export const CURRENT_SCHEMA_VERSION = 8;
+export const CURRENT_SCHEMA_VERSION = 9;
 
 /** Migrations indexed by the version they bring the schema to. So
  * `MIGRATIONS[1]` brings a fresh DB from version 0 to version 1. */
@@ -196,6 +196,20 @@ const MIGRATIONS: Record<number, (db: Database) => void> = {
       CREATE INDEX idx_summons_summoner ON summons(summoner_agent_id);
       CREATE INDEX idx_summons_state ON summons(state);
     `);
+  },
+  9: (db) => {
+    // Zombie-detection observability: `last_activity_at` records when the
+    // agent's event loop last made progress (reset by the watchdog on
+    // every MCP tool dispatch + PreToolUse hook touch). Distinct from
+    // `last_heartbeat` (process-aliveness, bumped unconditionally by the
+    // 5s timer). A session whose heartbeat is fresh but last_activity_at
+    // is stale is a zombie — alive process, frozen agent. `list_agents`
+    // surfaces the gap as `idle_for_ms`. Nullable: a row with no value
+    // yet (or a process that never wired a watchdog) renders idle_for_ms
+    // = null rather than a bogus zero.
+    db.exec(
+      `ALTER TABLE subscribers ADD COLUMN last_activity_at INTEGER;`,
+    );
   },
 };
 

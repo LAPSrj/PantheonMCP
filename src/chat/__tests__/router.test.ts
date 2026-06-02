@@ -2,7 +2,7 @@ import { test, expect, beforeEach, afterEach } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { resolvePaths, type Paths } from "../../storage/index.ts";
+import { resolvePaths, openChatDb, type Paths } from "../../storage/index.ts";
 import { ChatError, ChatRouter } from "../index.ts";
 
 let tmpDir: string;
@@ -273,6 +273,38 @@ test("renderStatusDigest singular agent count uses 'agent', not 'agents'", async
 });
 
 // --- keepalive sweep ---
+
+test("publicList surfaces idle_for_ms = now - last_activity_at (zombie signal)", () => {
+  // idle_for_ms is computed only on the cross-process (SQLite) path, so
+  // wire a db-backed router (production shape).
+  let now = 1_000_000;
+  const db = openChatDb(paths.chatDbPath);
+  const r = new ChatRouter({ paths, db, clock: () => now });
+  const a = r.add({ username: "zombie", project: "p", transient: false });
+  // login upsert stamps last_activity_at = 1_000_000.
+  now += 60_000;
+  // Process stays alive (heartbeat fires at `now`), but the agent loop
+  // is frozen — no fresh activity, so we re-assert the OLD timestamp.
+  r.heartbeat(a.agent_id, 1_000_000);
+  const row = r.publicList("p").find((x) => x.username === "zombie");
+  expect(row).toBeDefined();
+  expect(row!.last_seen).toBe(now); // heartbeat fresh → still visible
+  expect(row!.idle_for_ms).toBe(60_000); // but idle 60s = the zombie gap
+  db.close();
+});
+
+test("publicList idle_for_ms tracks fresh activity (live agent ~ 0)", () => {
+  let now = 2_000_000;
+  const db = openChatDb(paths.chatDbPath);
+  const r = new ChatRouter({ paths, db, clock: () => now });
+  const a = r.add({ username: "busy", project: "p", transient: false });
+  now += 60_000;
+  // A LIVE agent: each heartbeat carries a current activity timestamp.
+  r.heartbeat(a.agent_id, now);
+  const row = r.publicList("p").find((x) => x.username === "busy");
+  expect(row!.idle_for_ms).toBe(0);
+  db.close();
+});
 
 test("sweepKeepalive: pings only subscribers idle longer than threshold", () => {
   let now = 1_000_000;

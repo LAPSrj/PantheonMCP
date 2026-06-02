@@ -523,12 +523,17 @@ export class ChatRouter {
    * row would produce a duplicate-username situation in SQLite and
    * peers would race to route. In that case the agent's next `login`
    * will auto-suffix legitimately. */
-  heartbeat(agent_id: string): void {
+  heartbeat(agent_id: string, last_activity_at?: number | null): void {
     if (!this.db) return;
     const sub = this.subscribers.get(agent_id);
     if (!sub) return;
     try {
-      const changed = presenceHeartbeat(this.db, agent_id, this.clock());
+      const changed = presenceHeartbeat(
+        this.db,
+        agent_id,
+        this.clock(),
+        last_activity_at,
+      );
       if (changed === 0) {
         const stolen = listActive(this.db, { now: this.clock() }).some(
           (r) =>
@@ -1076,6 +1081,7 @@ export class ChatRouter {
           stale_threshold_ms: DEFAULT_STALE_THRESHOLD_MS,
           now: this.clock(),
         });
+        const nowMs = this.clock();
         return rows.map((r) => ({
           username: r.username,
           project: r.project,
@@ -1085,6 +1091,10 @@ export class ChatRouter {
           connected_at: r.connected_at,
           last_seen: r.last_heartbeat,
           status_updated_at: r.status_updated_at,
+          // Zombie signal: large idle_for_ms next to a fresh last_seen
+          // means a live process with a frozen agent loop.
+          idle_for_ms:
+            r.last_activity_at != null ? nowMs - r.last_activity_at : null,
         }));
       } catch {
         // fall through to in-memory below
