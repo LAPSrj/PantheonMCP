@@ -204,12 +204,20 @@ export function validateUserQuote(
   }
 
   const matches: QuoteMatch[] = [];
+  // De-dupe key: a queued-then-delivered message can surface as both a
+  // queue-operation enqueue AND a real user turn; collapse identical
+  // (session, timestamp, text) hits so limit>1 can't return one twice.
+  const seen = new Set<string>();
   for (const filename of allFiles) {
     const session_id = filename.replace(/\.jsonl$/, "");
     const filePath = path.join(dir, filename);
     const lines = readJsonlSafely(filePath);
     for (let i = 0; i < lines.length; i++) {
-      const extracted = extractUserTypedText(lines[i]);
+      // A genuine human message is EITHER a materialized role:"user"
+      // record OR a mid-turn queue-operation enqueue the main loop never
+      // re-logged as a user turn. Both are valid quote sources.
+      const extracted =
+        extractUserTypedText(lines[i]) ?? extractQueuedUserText(lines[i]);
       if (extracted === null) continue;
       if (
         sinceMs !== null &&
@@ -222,6 +230,10 @@ export function validateUserQuote(
         ? extracted.text
         : extracted.text.toLowerCase();
       if (!hay.includes(needle)) continue;
+
+      const dedupeKey = `${session_id} ${extracted.timestamp ?? ""} ${extracted.text}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
 
       const previous = findPreviousAssistantMessage(lines, i);
       const userTruncated = extracted.text.length > maxChars;
@@ -847,9 +859,18 @@ function stringifyContent(content: unknown): string {
  * any other block type. Used by `validateUserQuote` so an agent can't
  * spoof a quote by embedding it inside a tool_result they triggered.
  *
+ * Also drops system/harness injections that CC materializes as
+ * `role: "user"` records with STRING content — task-notifications (the
+ * chat-watcher relay), the summon/remanifest bootstrap manifest, interrupt
+ * markers, and `<<...>>` sentinels. Without this, a quote an agent merely
+ * RELAYED through chat (delivered to the recipient as a task-notification)
+ * would validate as if the human typed it — a quote-laundering false
+ * positive. The audit answers "did the human type this"; a relay is not
+ * the human typing.
+ *
  * Returns null when the record is not a user-typed message (wrong role,
- * empty content, only tool blocks, etc.). Callers should treat null as
- * "this record cannot contain a real Leandro quote." */
+ * empty content, only tool blocks, a system injection, etc.). Callers
+ * should treat null as "this record cannot contain a real Leandro quote." */
 export function extractUserTypedText(raw: unknown): ExtractedMessage | null {
   if (!raw || typeof raw !== "object") return null;
   const entry = raw as Record<string, unknown>;
@@ -860,6 +881,55 @@ export function extractUserTypedText(raw: unknown): ExtractedMessage | null {
   const content = msg.content;
   const text = stringifyUserTextBlocksOnly(content);
   if (text.length === 0) return null;
+  if (
+    isSystemUserInjection(text) ||
+    isInterruptMarker(text) ||
+    isHarnessSentinel(text)
+  ) {
+    return null;
+  }
+  const timestamp = typeof entry.timestamp === "string" ? entry.timestamp : null;
+  const timestampMs = timestamp ? Date.parse(timestamp) : null;
+  return {
+    role: "user",
+    text,
+    timestamp,
+    timestampMs: Number.isFinite(timestampMs) ? timestampMs : null,
+  };
+}
+
+/** Recover a genuine mid-turn human message that CC logged as a
+ * `queue-operation` enqueue but never materialized as a `role: "user"`
+ * record. When the user types while the agent is mid-turn, the message is
+ * enqueued (and may be consumed within the ongoing turn, leaving NO
+ * type:"user" record); the only durable artifact is:
+ *
+ *   { type: "queue-operation", operation: "enqueue", content: "<raw text>", timestamp }
+ *
+ * Mirrors `flattenConversation` pre-pass 2 (the conversation-extractor
+ * already recovers these). Keys on `queue-operation/enqueue` only — the
+ * sibling `attachment.queued_command` record carries the same text, so
+ * walking both would double-match. Applies the SAME injection guards as
+ * `extractUserTypedText` so a task-notification enqueued to the agent (or
+ * a `<<...>>` sentinel / interrupt marker) cannot launder back in.
+ *
+ * Returns null when the record is not a genuine queued human message. */
+export function extractQueuedUserText(raw: unknown): ExtractedMessage | null {
+  if (!raw || typeof raw !== "object") return null;
+  const entry = raw as Record<string, unknown>;
+  if (entry.type !== "queue-operation" || entry.operation !== "enqueue") {
+    return null;
+  }
+  const text =
+    typeof entry.content === "string" ? entry.content.trim() : "";
+  if (text.length === 0) return null;
+  if (
+    isSystemUserInjection(text) ||
+    isInterruptMarker(text) ||
+    isHarnessSentinel(text)
+  ) {
+    return null;
+  }
   const timestamp = typeof entry.timestamp === "string" ? entry.timestamp : null;
   const timestampMs = timestamp ? Date.parse(timestamp) : null;
   return {
