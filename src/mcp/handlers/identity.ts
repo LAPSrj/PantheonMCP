@@ -131,9 +131,7 @@ export const claim: Handler = async (args, ctx) => {
   return {
     persona,
     memory: { entries: memory.entries.length, version: memory.version },
-    resume_summary: buildResumeSummary(ctx.paths, persona.username, {
-      project: persona.project,
-    }),
+    resume_summary: buildResumeSummary(ctx.paths, persona.username),
     ...coreMemoryFields(ctx.paths, persona.username),
   };
 };
@@ -147,9 +145,7 @@ export const manifest: Handler = async (args, ctx) => {
       claimed: persona,
       reason: "explicit-username",
       memory_entries: memory.entries.length,
-      resume_summary: buildResumeSummary(ctx.paths, persona.username, {
-        project: persona.project,
-      }),
+      resume_summary: buildResumeSummary(ctx.paths, persona.username),
       ...coreMemoryFields(ctx.paths, persona.username),
     };
   }
@@ -165,7 +161,6 @@ export const manifest: Handler = async (args, ctx) => {
       resume_summary: buildResumeSummary(
         ctx.paths,
         result.matched.persona.username,
-        { project: result.matched.persona.project },
       ),
       ...coreMemoryFields(ctx.paths, result.matched.persona.username),
     };

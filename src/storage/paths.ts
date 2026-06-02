@@ -89,20 +89,8 @@ export function memoryFilePath(paths: Paths, handle: string): string {
   return path.join(paths.personasDir, handle, "memory.json");
 }
 
-export function notebookFilePath(paths: Paths, handle: string): string {
-  return path.join(paths.personasDir, handle, "notebook.json");
-}
-
 export function personaDir(paths: Paths, handle: string): string {
   return path.join(paths.personasDir, handle);
-}
-
-/** Project-notebook file path. Mirror of `projectMemoryFilePath` —
- * shared across all agents in a project at
- * `<root>/projects/<project>/notebook.json`. The project name is used
- * verbatim as a directory component; callers must validate it. */
-export function projectNotebookFilePath(paths: Paths, project: string): string {
-  return path.join(paths.root, "projects", project, "notebook.json");
 }
 
 /** Project-memory file path. Project memory is shared across all
@@ -118,18 +106,14 @@ export function projectMemoryDir(paths: Paths, project: string): string {
 }
 
 /** Per-project config file path — `<root>/projects/<project>/config.json`.
- * Sits alongside the project's shared memory + notebook. Holds
- * project-level policy (e.g. `single_agent`). The project name is used
- * verbatim as a directory component, so callers must validate it. */
+ * Sits alongside the project's shared memory. Holds project-level policy
+ * (e.g. `single_agent`). The project name is used verbatim as a directory
+ * component, so callers must validate it. */
 export function projectConfigFilePath(paths: Paths, project: string): string {
   return path.join(paths.root, "projects", project, "config.json");
 }
 
 export function ensureProjectMemoryDir(paths: Paths, project: string): void {
-  fs.mkdirSync(projectMemoryDir(paths, project), { recursive: true });
-}
-
-export function ensureProjectNotebookDir(paths: Paths, project: string): void {
   fs.mkdirSync(projectMemoryDir(paths, project), { recursive: true });
 }
 

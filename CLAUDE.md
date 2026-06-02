@@ -96,8 +96,7 @@ Memory is topic-scoped + lazy (`docs/memory-redesign/5-proposal-v2.md`;
   accepted by `append_memory` / `update_memory` — passing either returns
   `invalid_args`. Use `pin` + `pin_reason` instead of `core`; put payload
   in `text`. The stored `details` field + the `get_memory_details` read
-  path remain for legacy entries. The notebook tools stay dropped from the
-  advertised list (handlers kept).
+  path remain for legacy entries.
 - **Write field `summary_max240`:** the agent-facing summary input on
   `append`/`update`/`set_memory` (+ the project-memory write tools) is
   named `summary_max240` (the ≤240 cap is in the name). Storage and all
@@ -134,7 +133,7 @@ sessions — not a fleet). Flag lives at `projects/<project>/config.json`
   from a new cwd) is allowed; the lock wins over `force`. `merge` reduces the
   count so it's never blocked.
 - **Tool surface** — sessions in a single-agent project get a trimmed
-  `tools/list` (no persona-creation, no shared project-memory/notebook, no
+  `tools/list` (no persona-creation, no shared project-memory, no
   cross-persona `*_any` reads; chat + `force_*` stay). The hidden set is
   `SINGLE_AGENT_HIDDEN` (`src/mcp/tools.ts`, computed from tool names).
   Resolved at MCP boot (`resolveBootSingleAgent` in `src/mcp/server.ts`)

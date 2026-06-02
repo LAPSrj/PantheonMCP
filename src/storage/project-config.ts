@@ -11,9 +11,9 @@ import { readJson, writeJsonAtomic } from "./json.ts";
  * one persona: every brand-new persona-creation path (register / conjure
  * / summon / fork / merge / promote) is refused once the lone persona
  * exists, and the MCP server advertises a trimmed tool surface (no
- * persona-creation, no shared project-memory/notebook, no cross-persona
- * `*_any` reads) to sessions in such a project. The point is one persona
- * shared across many concurrent sessions, not a fleet. */
+ * persona-creation, no shared project-memory, no cross-persona `*_any`
+ * reads) to sessions in such a project. The point is one persona shared
+ * across many concurrent sessions, not a fleet. */
 export interface ProjectConfig {
   single_agent?: boolean;
 }

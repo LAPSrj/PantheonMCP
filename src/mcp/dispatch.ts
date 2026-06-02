@@ -83,7 +83,7 @@ export async function dispatch(
       message:
         `Tool '${toolName}' is unavailable: this is a single-agent project ` +
         `(one persona shared across sessions). Persona-creation, shared ` +
-        `project-memory/notebook, and cross-persona reads are disabled here.`,
+        `project-memory, and cross-persona reads are disabled here.`,
     });
   }
   // Reject unknown args + missing required fields against the tool's
@@ -207,10 +207,10 @@ function okResult(data: unknown): MCPCallResult {
   };
 }
 
-/** §11/§13 JIT — auto-surface `get_instructions` from error codes so the
- * tool doesn't strand like the notebook did. Maps the error code to the
- * instruction topic that explains it; the agent can pull the section
- * without knowing it exists. */
+/** §11/§13 JIT — auto-surface `get_instructions` from error codes so a
+ * tool doesn't strand an agent that hit an error it can't interpret. Maps
+ * the error code to the instruction topic that explains it; the agent can
+ * pull the section without knowing it exists. */
 const ERROR_INSTRUCTION_TOPIC: Record<string, string> = {
   memory_not_loaded: "boot",
   topic_required: "topics",

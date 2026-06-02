@@ -28,9 +28,6 @@ test("isSaveTool covers every memory-write tool", () => {
     "append_project_memory_any",
     "update_project_memory",
     "update_project_memory_any",
-    "notebook_write_page",
-    "project_notebook_write_page",
-    "project_notebook_write_page_any",
     "rest",
   ]) {
     expect(isSaveTool(t)).toBe(true);
@@ -44,8 +41,6 @@ test("isSaveTool covers every memory-write tool", () => {
     "forget_memory",
     "fade_project_memory",
     "forget_project_memory",
-    "notebook_delete_page",
-    "notebook_restore_page",
   ]) {
     expect(isSaveTool(t)).toBe(false);
   }

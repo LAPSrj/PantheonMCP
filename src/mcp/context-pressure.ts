@@ -92,11 +92,10 @@ export function resolveThresholds(): PressureThresholds {
  * counter when they succeed. The activity tracker on each tool
  * dispatch checks this set and calls `markMemorySave()` accordingly.
  *
- * Includes per-persona memory writes, project-memory writes, and
- * notebook writes (per-persona + project). `fade_memory` /
- * `forget_memory` and their project variants are NOT included —
- * those are metadata-only mutations (status changes), not content
- * writes, and shouldn't reset the "you've saved state" signal. */
+ * Includes per-persona memory writes and project-memory writes.
+ * `fade_memory` / `forget_memory` and their project variants are NOT
+ * included — those are metadata-only mutations (status changes), not
+ * content writes, and shouldn't reset the "you've saved state" signal. */
 const SAVE_TOOLS: ReadonlySet<string> = new Set([
   // Per-persona memory writes
   "append_memory",
@@ -108,10 +107,6 @@ const SAVE_TOOLS: ReadonlySet<string> = new Set([
   "append_project_memory_any",
   "update_project_memory",
   "update_project_memory_any",
-  // Notebook writes (per-persona + project — add long-form content)
-  "notebook_write_page",
-  "project_notebook_write_page",
-  "project_notebook_write_page_any",
   // Lifecycle
   "rest", // rest with handoff slot also acts as a save
 ]);

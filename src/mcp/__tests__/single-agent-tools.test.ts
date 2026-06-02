@@ -58,7 +58,6 @@ test("SINGLE_AGENT_HIDDEN hides persona-creation, project, and cross-persona rea
     "find_memory_any",
     "search_history_any",
     "get_history_conversation_any",
-    "project_notebook_open",
   ]) {
     expect(SINGLE_AGENT_HIDDEN.has(name)).toBe(true);
   }
