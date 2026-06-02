@@ -1,6 +1,7 @@
 import {
   ChatError,
   getMessageById,
+  getMessageBySeq,
   incarnationBase,
   promoteInPlace,
   type ChatErrorCode,
@@ -1305,14 +1306,29 @@ function requireAgentId(ctx: Parameters<Handler>[1]): string {
   return ctx.chat_agent_id;
 }
 
-/** Fetch the full text of a single chat message by id. The recovery
- * path for watcher events that arrived as `[oversized message …]`
- * stubs — pantheon source-truncates messages above the watcher emit
- * threshold so they fit inside CC's Monitor harness cap, and ships
- * the full body through this tool on demand. Returns the row's full
- * text + metadata; throws `not_found` if the id is unknown. */
+/** Fetch the full text of a single chat message, by `message_id` OR by
+ * the monotonic `seq` (pass exactly one). The recovery path for watcher
+ * events that arrived truncated — pantheon stubs oversized messages, and
+ * EVERY directed watcher line carries the row's `#<seq>` in its prefix so
+ * that even when the CC Monitor harness truncates the line tail (its
+ * ~500-char per-line cap), the seq survives in the head and the full body
+ * is one `get_message({ seq })` away. Returns the row's full text +
+ * metadata; throws `not_found` if neither coordinate matches. */
 export const get_message: Handler = async (args, ctx) => {
-  const messageId = asStringRequired(args.message_id, "message_id");
+  const messageId = asString(args.message_id);
+  const seq = asNumber(args.seq);
+  if (messageId === undefined && seq === undefined) {
+    throw new ToolError(
+      "invalid_args",
+      "Provide either `message_id` or `seq`.",
+    );
+  }
+  if (messageId !== undefined && seq !== undefined) {
+    throw new ToolError(
+      "invalid_args",
+      "Provide only one of `message_id` or `seq`, not both.",
+    );
+  }
   // Open the chat DB read-only via the resolved path. The router's
   // private db handle isn't exposed; opening here keeps the handler
   // self-contained and works in test harnesses that wire a router
@@ -1327,12 +1343,17 @@ export const get_message: Handler = async (args, ctx) => {
     );
   }
   try {
-    const row = getMessageById(db, messageId);
+    const row =
+      messageId !== undefined
+        ? getMessageById(db, messageId)
+        : getMessageBySeq(db, seq!);
     if (!row) {
+      const coord =
+        messageId !== undefined ? `id '${messageId}'` : `seq ${seq}`;
       throw new ToolError(
         "not_found",
-        `No message with id '${messageId}'.`,
-        { message_id: messageId },
+        `No message with ${coord}.`,
+        messageId !== undefined ? { message_id: messageId } : { seq },
       );
     }
     let parsedPayload: unknown = null;

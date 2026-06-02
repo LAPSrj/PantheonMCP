@@ -329,18 +329,27 @@ function priorityTagForRow(
   return "[no reply]";
 }
 
-/** Watcher emit threshold: messages whose body exceeds this byte
+/** Watcher emit threshold: messages whose body exceeds this char
  * count get source-truncated to a stub that names the sender +
  * carries the message_id, so observers can call `get_message` to
- * pull the full text. CC's Monitor harness has its own per-event
- * cap that truncates messages mid-text without warning; pantheon's
+ * pull the full text. CC's Monitor harness has its own per-line cap
+ * that truncates messages mid-text without warning; pantheon's
  * source-truncation lands ahead of that cap so the agent gets a
  * structured signal ("call get_message") instead of a silent cut.
  *
- * Default 1500 chars — conservative; may need bumping if CC's cap
- * turns out to be larger. Configurable via env
+ * Default 400 chars, derived from a MEASURED cap (2026-06-02): the
+ * harness truncates each emitted line at ~500 chars (a 2000-char ruler
+ * line cut at offset ~500; a 25-line/~2750-char burst arrived intact,
+ * confirming the cap is per-LINE, not per-notification — trailing lines
+ * are NOT dropped). 500 minus the line prefix (tag/time/sender/target +
+ * the `#<seq>` handle, ~60-100 chars worst case) leaves ~400 of safe
+ * body headroom. Messages past it become a compact stub (~120 chars,
+ * well under the cap). Note this thresholds on TOTAL body length, so a
+ * long body whose individual newline-segments are all short is stubbed
+ * conservatively even though it would display; the `#<seq>` prefix makes
+ * any residual truncation recoverable regardless. Configurable via env
  * `PANTHEON_WATCHER_TRUNCATE_AT`. */
-const DEFAULT_WATCHER_TRUNCATE_AT = 1500;
+const DEFAULT_WATCHER_TRUNCATE_AT = 400;
 
 function watcherTruncateThreshold(): number {
   const raw = process.env.PANTHEON_WATCHER_TRUNCATE_AT;
@@ -378,7 +387,7 @@ function formatDirected(row: MessageRow, receiver: ReceiverState): WatcherEvent 
   // sender/target suffix — it's a system event.
   if (row.kind === "status_digest") {
     return {
-      line: `${tag} ${dateStr} · status_digest\n${body}`,
+      line: `${tag} ${dateStr} · status_digest #${row.seq}\n${body}`,
       message_ids: [row.id],
       last_seq: row.seq,
     };
@@ -393,7 +402,14 @@ function formatDirected(row: MessageRow, receiver: ReceiverState): WatcherEvent 
   // arrived without having to call get_message. The full payload is on
   // the row at row.payload (JSON string); receivers fetch via get_message.
   const kindSuffix = row.user_kind ? ` [kind:${row.user_kind}]` : "";
-  const line = `${tag} ${dateStr} ${sender}${targetSuffix}${replySuffix}${correlationSuffix}${kindSuffix}: ${body}`;
+  // `#<seq>` recovery handle in the PREFIX (before the body). The CC
+  // Monitor harness truncates each emitted line at a ~500-char per-line
+  // cap (measured), eating the tail — where the body, and any
+  // message_id-bearing stub, would sit. Putting the seq in the head
+  // guarantees it survives the cut: a receiver whose line was truncated
+  // reads `#<seq>` and calls `get_message({ seq })`. Cheaper than the
+  // 36-char UUID and already on every row.
+  const line = `${tag} ${dateStr} ${sender}${targetSuffix}${replySuffix}${correlationSuffix}${kindSuffix} #${row.seq}: ${body}`;
   return { line, message_ids: [row.id], last_seq: row.seq };
 }
 

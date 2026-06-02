@@ -115,6 +115,20 @@ export function getMessageById(db: Database, id: string): MessageRow | null {
   return row ?? null;
 }
 
+/** Fetch a single persisted message by its monotonic `seq`. Companion
+ * to `getMessageById` for the watcher-recovery path: every directed
+ * watcher event carries the row's `seq` in its line prefix (compact —
+ * survives the harness's ~500-char per-line truncation, which eats the
+ * tail where the message_id-bearing stub body would sit). An observer
+ * whose event was harness-truncated reads the `#<seq>` from the prefix
+ * and calls `get_message({ seq })`. Returns `null` when no row matches. */
+export function getMessageBySeq(db: Database, seq: number): MessageRow | null {
+  const row = db.query("SELECT * FROM messages WHERE seq = ?").get(seq) as
+    | MessageRow
+    | undefined;
+  return row ?? null;
+}
+
 /** Raw row shape — kind/from_transient as stored. Renderers convert
  * back to `Message` shape when needed. `payload` arrives as the raw
  * JSON string (or null); callers parse it with `JSON.parse` before

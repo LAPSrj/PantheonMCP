@@ -1536,13 +1536,13 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
   {
     name: "get_message",
     description:
-      "Fetch the full text of a single chat message by id. Recovery path for watcher events that arrived as `[oversized message …]` stubs — pantheon source-truncates messages above its watcher emit threshold so they fit inside CC's Monitor-event harness cap, and ships the full body through this tool on demand. The `message_id` is in the stub event the watcher emitted. Returns the full row (text + metadata, plus `user_kind` + parsed `payload` for structured messages); errors `not_found` for unknown ids.",
+      "Fetch the full text of a single chat message, by `message_id` OR `seq` (pass exactly one). Recovery path for watcher events that arrived truncated — pantheon source-truncates oversized messages to a stub, AND every directed watcher line carries the row's `#<seq>` in its prefix so that even when CC's Monitor harness cuts the line tail (its ~500-char per-line cap), the seq survives in the head. Read the `#<seq>` (or the stub's `message_id`) off the truncated event and call this. Returns the full row (text + metadata, plus `user_kind` + parsed `payload` for structured messages); errors `not_found` for unknown coordinates, `invalid_args` if neither or both are given.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
-      required: ["message_id"],
       properties: {
-        message_id: { type: "string" },
+        message_id: { type: "string", description: "Message UUID (from an oversized-stub event)." },
+        seq: { type: "number", description: "Monotonic message seq (from the `#<seq>` in a watcher line prefix)." },
       },
     },
   },

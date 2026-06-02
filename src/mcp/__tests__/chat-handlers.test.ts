@@ -980,6 +980,44 @@ test("get_message: unknown id returns not_found", async () => {
   expect(r.payload.error).toBe("not_found");
 });
 
+test("get_message: returns the full row by seq (watcher-prefix recovery path)", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const { openChatDb } = await import("../../storage/index.ts");
+  const db = openChatDb(ctx.paths.chatDbPath);
+  db.run(
+    "INSERT INTO messages (id, seq, ts, scope, project, target_username, from_agent_id, from_transient, from_username_inline, text, kind, reply_to, correlation_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ["by-seq-id", 4242, Date.now(), "dm", "X", "alpha", "system", 0, null, "recover me by seq", null, null, null],
+  );
+  db.close();
+
+  const r = await call("get_message", { seq: 4242 });
+  expect(r.ok).toBe(true);
+  expect(r.payload.id).toBe("by-seq-id");
+  expect(r.payload.seq).toBe(4242);
+  expect(r.payload.text).toBe("recover me by seq");
+});
+
+test("get_message: neither message_id nor seq → invalid_args", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const r = await call("get_message", {});
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("invalid_args");
+});
+
+test("get_message: both message_id and seq → invalid_args", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const r = await call("get_message", { message_id: "x", seq: 1 });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("invalid_args");
+});
+
+test("get_message: unknown seq returns not_found", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const r = await call("get_message", { seq: 999999 });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("not_found");
+});
+
 test("ask: offline target fails recipient_offline immediately (no timeout wait)", async () => {
   await call("login", { username: "asker", project: "p", transient: false });
   const t0 = Date.now();

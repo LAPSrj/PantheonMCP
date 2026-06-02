@@ -44,6 +44,7 @@ export {
   persistMessage,
   queryMessages,
   getMessageById,
+  getMessageBySeq,
   type QueryFilter,
   type MessageRow,
 } from "./persistence.ts";

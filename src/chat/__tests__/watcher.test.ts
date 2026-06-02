@@ -170,7 +170,7 @@ test("formatBatch: silent events get coalesced into a single <silent-event> line
 });
 
 test("formatBatch: oversized message body is replaced with a get_message stub", () => {
-  const longText = "x".repeat(2000); // > default 1500 threshold
+  const longText = "x".repeat(2000); // > default 400 threshold
   persistMessage(
     db,
     msg({
@@ -200,7 +200,7 @@ test("formatBatch: oversized message body is replaced with a get_message stub", 
 });
 
 test("formatBatch: messages at or below threshold pass through unchanged", () => {
-  const fits = "y".repeat(1500); // exactly the default threshold
+  const fits = "y".repeat(400); // exactly the default threshold
   persistMessage(
     db,
     msg({
@@ -239,6 +239,46 @@ test("formatBatch: PANTHEON_WATCHER_TRUNCATE_AT env override changes the thresho
     if (prev === undefined) delete process.env.PANTHEON_WATCHER_TRUNCATE_AT;
     else process.env.PANTHEON_WATCHER_TRUNCATE_AT = prev;
   }
+});
+
+test("formatBatch: directed line carries a #<seq> recovery handle in the prefix, before the body", () => {
+  persistMessage(
+    db,
+    msg({
+      id: "m1",
+      seq: 42,
+      from_agent_id: "peer",
+      scope: "dm",
+      target: "vellumpike",
+      text: "the body text",
+    }),
+  );
+  const events = tailOnce({ db, receiver: me, since_seq: 0 });
+  expect(events).toHaveLength(1);
+  const line = events[0]!.line;
+  const seq = events[0]!.last_seq;
+  expect(line).toContain(`#${seq}`);
+  // Handle is in the prefix: it precedes the ": body" boundary, so it
+  // survives a tail-truncation that would eat the body.
+  expect(line.indexOf(`#${seq}`)).toBeLessThan(line.indexOf("the body text"));
+});
+
+test("formatBatch: oversized stub ALSO carries the #<seq> prefix handle", () => {
+  persistMessage(
+    db,
+    msg({
+      id: "big2",
+      seq: 7,
+      from_agent_id: "peer",
+      scope: "dm",
+      target: "vellumpike",
+      text: "z".repeat(2000),
+    }),
+  );
+  const events = tailOnce({ db, receiver: me, since_seq: 0 });
+  const line = events[0]!.line;
+  expect(line).toContain(`#${events[0]!.last_seq}`);
+  expect(line).toContain("[oversized message");
 });
 
 test("formatBatch: silent events flushed before a directed message", () => {
