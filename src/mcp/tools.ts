@@ -1909,7 +1909,7 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
   {
     name: "search_history",
     description:
-      "Search this persona's past CC conversations (JSONL files under ~/.claude/projects/<cwd>/). WARNING: not durable storage — CC may compact / delete / evict these files at any time. Save anything you want to keep with `append_memory`. scope: 'current' = this conversation only; 'previous' = every OTHER session; 'all' = both (default). Supports regex via `regex: true`.",
+      "Search this persona's past CC conversations (JSONL files under ~/.claude/projects/<cwd>/). WARNING: not durable storage — CC may compact / delete / evict these files at any time. Save anything you want to keep with `append_memory`. scope: 'current' = this conversation only; 'previous' = every OTHER session; 'all' = both (default). Supports regex via `regex: true`. Also covers mid-turn messages the user typed while the agent was busy (CC logs these as `queue-operation` enqueues, sometimes with no `role: \"user\"` record) — surfaced under `role: \"user\"`. As a DISCOVERY tool it does NOT filter system/notification injections (task-notifications, sentinels remain findable); contrast `validate_user_quote`, which is an AUDIT and excludes them.",
     inputSchema: {
       type: "object",
       additionalProperties: false,

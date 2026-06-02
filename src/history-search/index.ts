@@ -799,11 +799,23 @@ interface ExtractedMessage {
  *   - { type: "user",      message: { content: <string|array> }, timestamp }
  *   - { type: "assistant", message: { content: <string|array> }, timestamp }
  *   - { type: "system",    text: <string>, timestamp }
+ *   - { type: "queue-operation", operation: "enqueue", content: <string>, timestamp }
  *
  * `content` arrays carry text blocks `{ type: "text", text: "..." }` and
  * tool-use blocks `{ type: "tool_use" | "tool_result", ... }`. We
  * concatenate text blocks; tool blocks are joined as compact JSON so the
- * search can find tool names / arg-values when relevant. */
+ * search can find tool names / arg-values when relevant.
+ *
+ * The `queue-operation/enqueue` branch surfaces messages the user typed
+ * mid-turn (CC logs these as enqueues, sometimes without ever
+ * materializing a `role: "user"` record — see `extractQueuedUserText`).
+ * It is tagged `role: "user"`. NOTE — intentional split from the audit
+ * path: `searchHistory`/`fetchHistoryMessage` are DISCOVERY tools, so they
+ * do NOT apply the system-injection guards (`isSystemUserInjection` etc.)
+ * here — a search legitimately wants to find task-notification / sentinel
+ * content. `validateUserQuote` is an AUDIT ("did the human type this") and
+ * keeps EXCLUDING those injections via `extractUserTypedText` /
+ * `extractQueuedUserText`. Keep the two paths distinct deliberately. */
 function extractText(raw: unknown): ExtractedMessage | null {
   if (!raw || typeof raw !== "object") return null;
   const entry = raw as Record<string, unknown>;
@@ -815,6 +827,16 @@ function extractText(raw: unknown): ExtractedMessage | null {
     return {
       role: "system",
       text: entry.text,
+      timestamp,
+      timestampMs: Number.isFinite(timestampMs) ? timestampMs : null,
+    };
+  }
+  if (type === "queue-operation" && entry.operation === "enqueue") {
+    const text = typeof entry.content === "string" ? entry.content : "";
+    if (text.length === 0) return null;
+    return {
+      role: "user",
+      text,
       timestamp,
       timestampMs: Number.isFinite(timestampMs) ? timestampMs : null,
     };

@@ -551,3 +551,82 @@ test("since filter excludes older messages", () => {
   expect(hits).toHaveLength(1);
   expect(hits[0]!.snippet).toContain("fresh");
 });
+
+// --- mid-turn (queue-operation) coverage: discovery, NOT audit -------- //
+
+test("searchHistory surfaces a mid-turn queue-operation enqueue as role:user", () => {
+  writeJsonl("s1", [
+    {
+      type: "queue-operation",
+      operation: "enqueue",
+      content: "ship the migration tonight",
+      timestamp: "2026-05-10T10:00:00.000Z",
+    },
+  ]);
+  const hits = searchHistory({
+    cwd: personaCwd,
+    query: "migration tonight",
+    claudeProjectsRoot: projectsRoot,
+  });
+  expect(hits).toHaveLength(1);
+  expect(hits[0]!.role).toBe("user");
+  expect(hits[0]!.snippet).toContain("ship the migration tonight");
+});
+
+test("searchHistory role:user filter includes queue-op enqueues", () => {
+  writeJsonl("s1", [
+    {
+      type: "queue-operation",
+      operation: "enqueue",
+      content: "queued human words",
+      timestamp: "2026-05-10T10:00:00.000Z",
+    },
+  ]);
+  const hits = searchHistory({
+    cwd: personaCwd,
+    query: "queued human words",
+    role: "user",
+    claudeProjectsRoot: projectsRoot,
+  });
+  expect(hits).toHaveLength(1);
+});
+
+test("searchHistory (discovery) does NOT filter task-notification injections from queue-ops", () => {
+  // Deliberate divergence from validate_user_quote (audit): search must
+  // still find notification/sentinel content typed/enqueued in a session.
+  writeJsonl("s1", [
+    {
+      type: "queue-operation",
+      operation: "enqueue",
+      content:
+        "<task-notification>\n<event>peer relayed: deploy now</event>\n</task-notification>",
+      timestamp: "2026-05-10T10:00:00.000Z",
+    },
+  ]);
+  const hits = searchHistory({
+    cwd: personaCwd,
+    query: "deploy now",
+    claudeProjectsRoot: projectsRoot,
+  });
+  expect(hits).toHaveLength(1);
+});
+
+test("fetchHistoryMessage returns a queue-operation enqueue by (session, timestamp)", () => {
+  writeJsonl("s1", [
+    {
+      type: "queue-operation",
+      operation: "enqueue",
+      content: "the full queued message body",
+      timestamp: "2026-05-10T10:00:00.000Z",
+    },
+  ]);
+  const msg = fetchHistoryMessage({
+    cwd: personaCwd,
+    session_id: "s1",
+    message_at: "2026-05-10T10:00:00.000Z",
+    claudeProjectsRoot: projectsRoot,
+  });
+  expect(msg).not.toBeNull();
+  expect(msg!.role).toBe("user");
+  expect(msg!.content).toBe("the full queued message body");
+});
