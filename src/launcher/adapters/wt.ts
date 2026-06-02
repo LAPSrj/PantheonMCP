@@ -70,7 +70,6 @@ export const wt: Adapter = {
     const target = args.target ?? {};
     const mode = target.mode ?? "new-tab-window";
     const windowName = resolveWindowArg(target.window);
-    const colorHex = colorToHex(target.color ?? args.color);
     // Profile resolution cascade: per-call target override > persona
     // default > nothing (use WT's user-default profile). When set, the
     // adapter emits `--profile <value>` so the new tab opens in the
@@ -78,6 +77,16 @@ export const wt: Adapter = {
     // personas land in a WSL profile tab instead of a default-profile
     // (often PowerShell) tab that happens to be running wsl.exe.
     const wtProfile = target.wt_profile ?? args.wt_profile;
+    // Tab-color cascade: an explicit per-call `target.color` always
+    // renders `--tabColor`; the persona-DEFAULT color is suppressed
+    // when a wt_profile is pinned. Rationale: pinning a WT profile
+    // means that profile owns the tab's look (its own tabColor /
+    // scheme / icon — wt.exe lets a command-line --tabColor override
+    // the profile's), while the persona color keeps serving identity
+    // surfaces (statusline PANTHEON_COLOR, session_info echo).
+    const colorHex = colorToHex(
+      target.color ?? (wtProfile ? undefined : args.color),
+    );
     const subcommands: string[] = [];
 
     const splitDirection = resolveSplitDirection(args, target.split);

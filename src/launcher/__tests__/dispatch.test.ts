@@ -411,12 +411,28 @@ test("WT adapter: no --profile emitted when neither persona nor target sets it",
   expect(plan.args).not.toContain("--profile");
 });
 
-test("WT adapter: wt_profile coexists with --tabColor (both render)", () => {
+test("WT adapter: persona color suppressed when wt_profile pinned (profile owns tab look)", () => {
   const plan = resolveSpawnPlan(
     args({
       color: "purple",
       wt_profile: "Ubuntu-22.04",
       target: { mode: "new-tab-here" },
+    }),
+    { adapter: wt },
+  );
+  expect(plan.args).toContain("--profile");
+  expect(plan.args).toContain("Ubuntu-22.04");
+  // Persona-default color must NOT override the pinned profile's own
+  // tabColor — wt.exe gives command-line --tabColor precedence over
+  // the profile setting, so emitting it would defeat the pin.
+  expect(plan.args).not.toContain("--tabColor");
+});
+
+test("WT adapter: explicit target.color renders --tabColor even with wt_profile pinned", () => {
+  const plan = resolveSpawnPlan(
+    args({
+      wt_profile: "Ubuntu-22.04",
+      target: { mode: "new-tab-here", color: "purple" },
     }),
     { adapter: wt },
   );
