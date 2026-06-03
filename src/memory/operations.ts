@@ -596,6 +596,33 @@ function byteSizeKb(text: string): number {
   return Math.round((Buffer.byteLength(text, "utf8") / 1024) * 10) / 10;
 }
 
+/** Byte-aware cap for index-shape list/search results. `list_memory` has
+ * no count limit and `find_memory`'s limit is agent-tunable, so either can
+ * serialize past the MCP-client inline tool-result cap and get spilled to a
+ * flat, user-readable file — the same hazard the `load_memory` render
+ * guards against. Entries are assumed already sorted by relevance/recency
+ * (listIndex / findMemory order); keep the leading run whose serialized
+ * size fits `ceilingBytes`, and report how many were dropped so the handler
+ * can surface a "narrow your query" hint. At least one entry is always kept
+ * (a single oversized row is better than an empty result). The estimate
+ * uses the same pretty-print the dispatcher serializes with, plus a small
+ * per-row allowance for array indentation/commas. */
+export function capIndexResult<T>(
+  entries: T[],
+  ceilingBytes: number,
+): { kept: T[]; truncated: boolean } {
+  if (!Number.isFinite(ceilingBytes)) return { kept: entries, truncated: false };
+  const kept: T[] = [];
+  let running = 0;
+  for (const e of entries) {
+    const cost = Buffer.byteLength(JSON.stringify(e, null, 2), "utf8") + 6;
+    if (running + cost > ceilingBytes && kept.length > 0) break;
+    kept.push(e);
+    running += cost;
+  }
+  return { kept, truncated: kept.length < entries.length };
+}
+
 function validateAppend(input: AppendInput): void {
   if (!input.text || input.text.length === 0) {
     throw new MemoryError("missing_text", "Entry text is required.");

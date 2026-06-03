@@ -9,7 +9,8 @@ import {
   ALWAYS_SUMMARY_BUDGET_BYTES,
   TOPIC_FULL_BUDGET_BYTES,
   FADED_PER_TOPIC,
-  RENDER_TOTAL_BUDGET_BYTES,
+  RENDER_FULLTEXT_BUDGET_BYTES,
+  RENDER_INLINE_CEILING_BYTES,
 } from "../budgets.ts";
 import type { MemoryEntry, MemoryStore } from "../types.ts";
 
@@ -212,7 +213,7 @@ test("global ceiling collapses cross-topic full bodies once the shared budget is
   );
   const r = renderStore(store(entries), { loaded_topics: topics });
 
-  expect(r.warning).toContain("full-text ceiling");
+  expect(r.warning).toContain("full-text budget");
   // earliest-budgeted topics render full…
   expect(r.text).toMatch(/\[t1\/e\][\s\S]*?zzzz/);
   // …the one past the ceiling collapses to summary (recoverable via recall).
@@ -223,7 +224,8 @@ test("no global warning when the render fits under the ceiling", () => {
   const a = entry({ id: "chat/a", date: day(1), text: "small body", topic: "chat", kind: "rule" });
   const r = renderStore(store([a]), { loaded_topics: ["chat"] });
   expect(r.text).toContain("small body");
-  expect(r.warning ?? "").not.toContain("full-text ceiling");
+  expect(r.warning ?? "").not.toContain("full-text budget");
+  expect(r.warning ?? "").not.toContain("inline ceiling");
 });
 
 // --- faded subsection cap ---
@@ -243,6 +245,76 @@ test("faded subsection caps to newest-N per topic with a count of the rest", () 
   expect(r.text).toContain(`+${8 - FADED_PER_TOPIC} older faded`);
 });
 
+// --- inline ceiling (TIER 2 — hard whole-output guarantee) ---
+
+const byteLen = (s: string): number => Buffer.byteLength(s, "utf8");
+
+test("many loaded topics: whole render stays under the inline ceiling, collapsing low-priority topics to counts", () => {
+  // 60 topics × 12 summary-sized durable entries each. TIER 1 (24 KB
+  // full-text) collapses most bodies to summary, but WITHOUT TIER 2 the
+  // collapsed-summary lines alone (60 × 12 × ~250 B ≈ 180 KB) would blow
+  // the inline cap — exactly the topic-count residual. TIER 2 must keep the
+  // whole result under 32 KB.
+  const entries: MemoryEntry[] = [];
+  for (let t = 0; t < 60; t++) {
+    for (let e = 0; e < 12; e++) {
+      entries.push(
+        entry({
+          id: `topic${String(t).padStart(2, "0")}/e${e}`,
+          date: day(((t * 12 + e) % 28) + 1),
+          text: "body ".repeat(60), // ~300 B each
+          summary: `summary for topic ${t} entry ${e} — some descriptive text here`,
+          topic: `topic${String(t).padStart(2, "0")}`,
+          kind: "rule",
+        }),
+      );
+    }
+  }
+  const topics = Array.from({ length: 60 }, (_, t) => `topic${String(t).padStart(2, "0")}`);
+  const r = renderStore(store(entries), { loaded_topics: topics });
+
+  expect(byteLen(r.text)).toBeLessThanOrEqual(RENDER_INLINE_CEILING_BYTES);
+  expect(r.warning).toContain("inline ceiling");
+  // The result is still self-describing: collapsed topics show a count line
+  // + an expansion hint, never a file pointer.
+  expect(r.text).toContain("collapsed to fit");
+  expect(r.text).toContain("recall_memory");
+  expect(r.text).not.toContain("tool-results");
+});
+
+test("pinned + always survive inline-ceiling pressure; topics collapse first", () => {
+  const entries: MemoryEntry[] = [
+    entry({ id: "conventions/rule", date: day(1), text: "STANDING RULE BODY", summary: "the standing rule", topic: "conventions", kind: "rule", pin: true }),
+    entry({ id: "always/floor", date: day(1), text: "always full text", summary: "ALWAYS-SUMMARY-MARKER", topic: "always", kind: "fact" }),
+  ];
+  const topics = ["conventions", "always"];
+  for (let t = 0; t < 50; t++) {
+    const topic = `bulk${String(t).padStart(2, "0")}`;
+    topics.push(topic);
+    for (let e = 0; e < 10; e++) {
+      entries.push(
+        entry({ id: `${topic}/e${e}`, date: day((e % 28) + 1), text: "x".repeat(280), summary: `bulk ${t}.${e} summary line with enough text to matter`, topic, kind: "rule" }),
+      );
+    }
+  }
+  const r = renderStore(store(entries), { loaded_topics: topics });
+
+  expect(byteLen(r.text)).toBeLessThanOrEqual(RENDER_INLINE_CEILING_BYTES);
+  // The sacrosanct pin and the always-floor are never sacrificed.
+  expect(r.text).toContain("STANDING RULE BODY");
+  expect(r.text).toContain("ALWAYS-SUMMARY-MARKER");
+});
+
+test("a normal small render is byte-identical to the pre-block flat join (no compaction)", () => {
+  const a = entry({ id: "chat/a", date: day(1), text: "the chat body", topic: "chat", kind: "rule" });
+  const b = entry({ id: "chat/b", date: day(2), text: "note body", topic: "chat", kind: "note" });
+  const r = renderStore(store([a, b]), { loaded_topics: ["chat"] });
+  expect(byteLen(r.text)).toBeLessThan(RENDER_INLINE_CEILING_BYTES);
+  expect(r.warning ?? "").not.toContain("inline ceiling");
+  expect(r.text).toContain("the chat body");
+  expect(r.text).toContain("TOPIC: chat");
+});
+
 // --- constants ---
 
 test("v2 budgets exported", () => {
@@ -250,8 +322,9 @@ test("v2 budgets exported", () => {
   expect(ALWAYS_SUMMARY_BUDGET_BYTES).toBe(8192);
   expect(TOPIC_FULL_BUDGET_BYTES).toBe(8192);
   expect(FADED_PER_TOPIC).toBe(5);
-  // Default ceiling (no PANTHEON_RENDER_MAX_BYTES override in test env).
-  expect(RENDER_TOTAL_BUDGET_BYTES).toBe(24 * 1024);
+  // Defaults (no PANTHEON_RENDER_* overrides in test env).
+  expect(RENDER_FULLTEXT_BUDGET_BYTES).toBe(24 * 1024);
+  expect(RENDER_INLINE_CEILING_BYTES).toBe(32 * 1024);
   // legacy aliases still resolve.
   expect(ACTIVE_BUDGET_BYTES).toBe(TOPIC_FULL_BUDGET_BYTES);
   expect(CORE_BUDGET_BYTES).toBe(PIN_FULL_BUDGET_BYTES);

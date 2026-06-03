@@ -12,6 +12,7 @@ import {
   getDetails,
   getEntry,
   listIndex,
+  capIndexResult,
   recallEntry,
   setMemory,
   updateEntry,
@@ -305,4 +306,37 @@ test("deriveSummary hard-trims with ellipsis when no sentence boundary present",
   const got = deriveSummary(noBoundary);
   expect(got.length).toBe(SUMMARY_MAX_CHARS);
   expect(got).toEndWith("…");
+});
+
+// --- capIndexResult (byte-aware list/find cap) ---
+
+test("capIndexResult keeps the leading run under the byte ceiling and flags truncation", () => {
+  const rows = Array.from({ length: 200 }, (_, i) => ({
+    id: `topic/entry-number-${i}`,
+    summary: `summary line ${i} `.repeat(8),
+    date: "2026-04-01T00:00:00.000Z",
+  }));
+  const ceiling = 8 * 1024;
+  const { kept, truncated } = capIndexResult(rows, ceiling);
+  expect(truncated).toBe(true);
+  expect(kept.length).toBeLessThan(rows.length);
+  expect(kept.length).toBeGreaterThan(0);
+  // The kept rows are the leading run (relevance/recency order preserved).
+  expect(kept[0]).toBe(rows[0]);
+  // Serialized size stays within the ceiling.
+  const bytes = Buffer.byteLength(JSON.stringify(kept, null, 2), "utf8");
+  expect(bytes).toBeLessThanOrEqual(ceiling);
+});
+
+test("capIndexResult is a no-op under the ceiling and when ceiling is Infinity", () => {
+  const rows = [{ id: "a", summary: "short", date: "2026-04-01T00:00:00.000Z" }];
+  expect(capIndexResult(rows, 64 * 1024)).toEqual({ kept: rows, truncated: false });
+  expect(capIndexResult(rows, Number.POSITIVE_INFINITY)).toEqual({ kept: rows, truncated: false });
+});
+
+test("capIndexResult always keeps at least one row even if it alone exceeds the ceiling", () => {
+  const rows = [{ id: "huge", summary: "z".repeat(5000), date: "2026-04-01T00:00:00.000Z" }];
+  const { kept, truncated } = capIndexResult(rows, 100);
+  expect(kept.length).toBe(1);
+  expect(truncated).toBe(false);
 });

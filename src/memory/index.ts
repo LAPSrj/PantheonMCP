@@ -22,6 +22,7 @@ export {
   setMemory,
   listIndex,
   findMemory,
+  capIndexResult,
   deriveSummary,
   DETAILS_MAX_BYTES,
   SUMMARY_MAX_CHARS,
@@ -73,6 +74,10 @@ export {
   ALWAYS_SUMMARY_BUDGET_BYTES,
   TOPIC_FULL_BUDGET_BYTES,
   NOTES_PER_TOPIC,
+  RENDER_FULLTEXT_BUDGET_BYTES,
+  RENDER_INLINE_CEILING_BYTES,
+  LIST_RESULT_CEILING_BYTES,
+  FIND_LIMIT_MAX,
 } from "./budgets.ts";
 
 export { slugify } from "./derive.ts";

@@ -1,6 +1,9 @@
 import {
   appendEntry,
   beginSession,
+  capIndexResult,
+  LIST_RESULT_CEILING_BYTES,
+  FIND_LIMIT_MAX,
   decayOnLoad,
   deleteSnapshot,
   defaultHandoffExpiresAt,
@@ -629,7 +632,24 @@ function listMemoryFor(
   if (asString(args.since) !== undefined) filter.since = asString(args.since)!;
   if (asString(args.filter) !== undefined) filter.filter = asString(args.filter)!;
   const entries = listIndex(ctx.paths, username, filter);
-  return { username, count: entries.length, entries };
+  // Byte-cap so a large index can't serialize past the harness inline cap
+  // and get spilled to a flat, readable tool-results file (the same hazard
+  // the load_memory render guards). Newest-first already, so the leading
+  // run is kept; the rest are reachable by narrowing the query.
+  const { kept, truncated } = capIndexResult(entries, LIST_RESULT_CEILING_BYTES);
+  return {
+    username,
+    count: kept.length,
+    ...(truncated ? { total: entries.length, truncated: true } : {}),
+    entries: kept,
+    ...(truncated
+      ? {
+          note:
+            `Showing the ${kept.length} newest of ${entries.length} matches (capped to stay inline). ` +
+            `Narrow with kind / status / since / filter, or use find_memory(query).`,
+        }
+      : {}),
+  };
 }
 
 export const list_memory: Handler = async (args, ctx) => {
@@ -648,8 +668,32 @@ function findFilterFrom(args: Record<string, unknown>): FindMemoryFilter {
   if (asString(args.since) !== undefined) filter.since = asString(args.since)!;
   if (asString(args.status) !== undefined) filter.status = asString(args.status) as never;
   if (asBoolean(args.core) !== undefined) filter.core = asBoolean(args.core)!;
-  if (asNumber(args.limit) !== undefined) filter.limit = asNumber(args.limit)!;
+  // Clamp the agent-supplied limit so `limit: 100000` can't force an
+  // oversized result; the byte-aware cap below is the hard backstop.
+  if (asNumber(args.limit) !== undefined) {
+    filter.limit = Math.min(asNumber(args.limit)!, FIND_LIMIT_MAX);
+  }
   return filter;
+}
+
+/** Project a find result through the same byte-cap as `list_memory` so a
+ * broad query can't spill to a readable tool-results file. */
+function findResult(scope: "self" | "all", query: string, hits: unknown[]): Record<string, unknown> {
+  const { kept, truncated } = capIndexResult(hits, LIST_RESULT_CEILING_BYTES);
+  return {
+    scope,
+    query,
+    count: kept.length,
+    ...(truncated ? { total: hits.length, truncated: true } : {}),
+    hits: kept,
+    ...(truncated
+      ? {
+          note:
+            `Showing the ${kept.length} newest of ${hits.length} hits (capped to stay inline). ` +
+            `Add kind / since / status or a more specific query to narrow.`,
+        }
+      : {}),
+  };
 }
 
 /** Search the CALLER's own memory for entries matching `query`. Cross-
@@ -658,7 +702,7 @@ export const find_memory: Handler = async (args, ctx) => {
   const username = selfUsername(ctx.session.claimedUsername);
   const filter = findFilterFrom(args);
   const hits = findMemory(ctx.paths, [username], filter);
-  return { scope: "self", query: filter.query, count: hits.length, hits };
+  return findResult("self", filter.query, hits);
 };
 
 /** Search across EVERY registered persona's memory (deniable by tool
@@ -668,7 +712,7 @@ export const find_memory_any: Handler = async (args, ctx) => {
   const filter = findFilterFrom(args);
   const usernames = listPersonas(ctx.paths).map((p) => p.username);
   const hits = findMemory(ctx.paths, usernames, filter);
-  return { scope: "all", query: filter.query, count: hits.length, hits };
+  return findResult("all", filter.query, hits);
 };
 
 function detailsFor(

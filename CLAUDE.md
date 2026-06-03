@@ -97,19 +97,43 @@ Memory is topic-scoped + lazy (`docs/memory-redesign/5-proposal-v2.md`;
   + a count, delivered handoffs (A∩H≠∅), unloaded topics as menu counts.
   **Status never auto-mutates from rendering** — collapse is render-time
   only; `recall_memory(id)` returns full text.
-- **Global render ceiling (`RENDER_TOTAL_BUDGET_BYTES`, env
-  `PANTHEON_RENDER_MAX_BYTES`, default 24 KB):** a single shared FULL-text
-  budget across the render's full sections (orphaned watchers → due
-  reminders → pinned → declared-topic durable → delivered handoffs),
-  spent in that priority order via `selectFullGlobal` in `render.ts`. The
-  per-section budgets (PIN 10 KB, TOPIC_FULL 8 KB/topic) still apply; the
-  ceiling additionally bounds the cross-topic accumulation (N loaded
-  topics each contributing up to 8 KB) so an oversized boot render can't
-  be spilled by the MCP-client harness to a flat, unisolated
-  `tool-results/*.txt` a subagent could read. Pins are sacrosanct (never
-  globally demoted, but their bytes draw down the shared budget); bodies
-  past the ceiling collapse to summary + a loud `RenderResult.warning`.
-  A non-positive / unparseable env value disables the ceiling (Infinity).
+- **Two-tier render bound — the inline-cap guarantee (`render.ts`):** a
+  `load_memory` render must NEVER exceed the MCP-client harness's inline
+  tool-result token cap (CC `MAX_MCP_OUTPUT_TOKENS`, default 25 000), past
+  which the harness spills the whole payload to a flat, user-readable
+  `tool-results/*.txt` any subagent could `Read`. Pantheon's only lever is
+  to never emit an oversized result, so the render is bounded twice:
+  - **TIER 1 — full-text budget (`RENDER_FULLTEXT_BUDGET_BYTES`, env
+    `PANTHEON_RENDER_MAX_BYTES`, 24 KB):** a single shared budget across the
+    full sections (orphaned watchers → due reminders → pinned →
+    declared-topic durable → delivered handoffs), spent in that order via
+    `selectFullGlobal`. Per-section caps (PIN 10 KB, TOPIC_FULL 8 KB/topic)
+    still apply; this bounds the cross-topic FULL-body accumulation. Bodies
+    past it collapse to summary + a `RenderResult.warning`. Pins are
+    sacrosanct (never demoted, but their bytes draw down the budget).
+  - **TIER 2 — whole-output inline ceiling (`RENDER_INLINE_CEILING_BYTES`,
+    env `PANTHEON_RENDER_INLINE_CEILING`, 32 KB):** the HARD guarantee.
+    TIER 1 bounds only full bodies; the SUMMARY/menu accumulation (always
+    band + notes-5 + faded-5 + collapsed-durable summaries + reminder/
+    watcher/handoff summary fallbacks + menu) still scales with the loaded-
+    topic count. `renderStore` assembles priority-tagged `RenderBlock`s
+    (push order = priority order = byte-identical to the old flat join in
+    the common case); `fitToInlineCeiling` then guarantees the joined body
+    ≤ the ceiling: collapse the lowest-VALUE section to a one-line count
+    first (highest priority number first — pins/reminders/watchers/always
+    survive; oldest/last-loaded topics collapse first, consistent with
+    TIER 1's left-to-right spend), then drop lowest-value one-liners, then a
+    UTF-8-safe hard-trim backstop (unreachable given the per-section caps).
+    Each collapsed section keeps a `recall_memory(id)` / `list_memory` hint
+    — smart compaction, never a file pointer or "use a subagent" path. Sized
+    in bytes (conservative vs. token-dense slugs/box-drawing). Both env
+    values: non-positive / unparseable → disabled (Infinity).
+  - **List/find caps (`capIndexResult`, `LIST_RESULT_CEILING_BYTES` 32 KB /
+    `FIND_LIMIT_MAX` 200):** `list_memory` has no count limit and
+    `find_memory`'s `limit` is agent-tunable, so either index result can
+    also spill. The handlers byte-cap the (newest-first) rows to the inline
+    ceiling and return `{ count, total?, truncated?, note? }` — `find`'s
+    `limit` is additionally clamped to `FIND_LIMIT_MAX`.
 - **Decay (`src/memory/decay.ts`)** runs at the `load_memory` session
   boundary: handoff matching-session fade (§8), next-session reminder
   consumption, superseded → forgotten. Date-reminder delivery is on the

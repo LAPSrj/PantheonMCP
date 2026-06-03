@@ -5,7 +5,8 @@ import {
   FADED_PER_TOPIC,
   NOTES_PER_TOPIC,
   PIN_FULL_BUDGET_BYTES,
-  RENDER_TOTAL_BUDGET_BYTES,
+  RENDER_FULLTEXT_BUDGET_BYTES,
+  RENDER_INLINE_CEILING_BYTES,
   TOPIC_FULL_BUDGET_BYTES,
   byteLen,
 } from "./budgets.ts";
@@ -63,6 +64,38 @@ export interface RenderResult {
   warning: string | null;
 }
 
+/** One render section, tagged with a `priority` (lower = higher value,
+ * compacted/dropped LAST) and an optional one-line `compact` fallback the
+ * inline-ceiling pass swaps in when the whole result must shrink. The
+ * blocks are pushed in priority order, so flattening them in push order
+ * yields the prior flat-`sections` output byte-for-byte in the common
+ * (under-ceiling) case. */
+interface RenderBlock {
+  priority: number;
+  lines: string[];
+  /** Self-describing one-line replacement (count + how to expand). `null`
+   * = already minimal; the fit pass can only drop it, never compact it. */
+  compact: string | null;
+  compacted?: boolean;
+  dropped?: boolean;
+}
+
+/** Compaction priorities — lower value = higher worth, collapsed/dropped
+ * LAST. Pins are sacrosanct (10) and, being PIN_FULL_BUDGET-capped, in
+ * practice never need compacting; declared topics carry a per-topic offset
+ * so the oldest/last-loaded (the same ones TIER 1 already demoted) collapse
+ * first. */
+const PRI = {
+  PINNED: 10,
+  WATCHERS: 20,
+  REMINDERS: 25,
+  ALWAYS: 30,
+  TOPIC: 40,
+  HANDOFFS: 60,
+  MENU: 70,
+  HIDDEN: 80,
+} as const;
+
 /** §6 topic-scoped render. Status is NEVER mutated here; collapse is
  * render-time only and `recall_memory(id)` always returns full text. */
 export function renderForPrompt(
@@ -96,17 +129,17 @@ export function renderStore(
     };
   }
 
-  const sections: string[] = [];
+  const blocks: RenderBlock[] = [];
   const warnings: string[] = [];
 
-  // §spill-fix — one shared FULL-text ceiling for the whole render, so an
-  // oversized boot payload can't get spilled by the MCP-client harness to
-  // a flat, unisolated tool-results file. Spent in priority order:
-  // orphaned watchers → due reminders → pinned → declared-topic durable →
-  // delivered handoffs. `only_core` peer peeks (pinned + always only) are
-  // already individually bounded, so they skip the shared ceiling.
+  // §spill-fix TIER 1 — one shared FULL-text budget across the render's
+  // full sections (orphaned watchers → due reminders → pinned →
+  // declared-topic durable → delivered handoffs), demoting oldest-first to
+  // summary under pressure. TIER 2 (the whole-output inline ceiling) is
+  // applied as a final pass in `finalize`. `only_core` peer peeks (pinned +
+  // always only) are already individually bounded.
   const budget: RenderBudget = {
-    remaining: RENDER_TOTAL_BUDGET_BYTES,
+    remaining: RENDER_FULLTEXT_BUDGET_BYTES,
     globalDemoted: false,
   };
 
@@ -136,12 +169,17 @@ export function renderStore(
       // newest still wins the budget first; the rest fall to a summary the
       // successor can `recall_memory(id)` + `claim_watcher(id)` from.
       const { summaryIds } = selectFullGlobal(orphaned, Number.POSITIVE_INFINITY, budget);
-      sections.push("═══ ORPHANED WATCHERS — re-arm now ═══");
+      const lines = ["═══ ORPHANED WATCHERS — re-arm now ═══"];
       for (const e of orphaned)
-        sections.push(
+        lines.push(
           summaryIds.has(e.id) ? formatSummary(e) : formatOrphanedWatcher(e),
         );
-      sections.push("");
+      lines.push("");
+      blocks.push({
+        priority: PRI.WATCHERS,
+        lines,
+        compact: `═══ ORPHANED WATCHERS — ${orphaned.length} to re-arm (recall_memory(id) then claim_watcher(id)) ═══`,
+      });
     }
   }
 
@@ -157,10 +195,15 @@ export function renderStore(
       .sort((a, b) => (a.date < b.date ? -1 : 1));
     if (due.length > 0) {
       const { summaryIds } = selectFullGlobal(due, Number.POSITIVE_INFINITY, budget);
-      sections.push("═══ DUE REMINDERS ═══");
+      const lines = ["═══ DUE REMINDERS ═══"];
       for (const e of due)
-        sections.push(formatFull(e, { collapsed: summaryIds.has(e.id) }));
-      sections.push("");
+        lines.push(formatFull(e, { collapsed: summaryIds.has(e.id) }));
+      lines.push("");
+      blocks.push({
+        priority: PRI.REMINDERS,
+        lines,
+        compact: `═══ DUE REMINDERS — ${due.length} due (recall_memory(id) for each) ═══`,
+      });
     }
   }
 
@@ -177,13 +220,13 @@ export function renderStore(
       .reduce((s, e) => s + byteLen(e.text), 0);
     budget.remaining = Math.max(0, budget.remaining - pinnedFullBytes);
     const totalKb = (sumBytes(sorted, (e) => e.text) / 1024).toFixed(1);
-    sections.push(
+    const lines = [
       `═══ PINNED (full text) — ${sorted.length} entries, ${totalKb} KB / ${(
         PIN_FULL_BUDGET_BYTES / 1024
       ).toFixed(0)} KB ═══`,
-    );
+    ];
     for (const e of sorted.slice().reverse()) {
-      sections.push(formatFull(e, { collapsed: summaryIds.has(e.id) }));
+      lines.push(formatFull(e, { collapsed: summaryIds.has(e.id) }));
     }
     if (summaryIds.size > 0) {
       warnings.push(
@@ -196,17 +239,22 @@ export function renderStore(
         `Pinned set exceeds the ${(PIN_FULL_BUDGET_BYTES / 1024).toFixed(0)} KB budget even collapsed — consolidate.`,
       );
     }
-    sections.push("");
+    lines.push("");
+    blocks.push({
+      priority: PRI.PINNED,
+      lines,
+      compact: `═══ PINNED — ${sorted.length} entries (collapsed to fit; recall_memory(id) for any) ═══`,
+    });
   }
 
   if (onlyCore) {
     // Peer-inspection: pinned + always summaries only.
-    appendAlways(sections, warnings, unpinned, true);
-    return finalize(sections, warnings);
+    appendAlways(blocks, warnings, unpinned, true);
+    return finalize(blocks, warnings);
   }
 
   // --- ALWAYS (summary, byte-budgeted) ---
-  appendAlways(sections, warnings, unpinned, false);
+  appendAlways(blocks, warnings, unpinned, false);
 
   // --- DECLARED TOPICS (load × detail ladder) ---
   // Group unpinned, non-always, non-reminder entries by topic.
@@ -224,9 +272,13 @@ export function renderStore(
     .filter((t) => loaded.has(t))
     .sort((a, b) => (a === UNTOPICED ? 1 : b === UNTOPICED ? -1 : a < b ? -1 : 1));
 
-  for (const topic of loadedTopicNames) {
-    renderTopic(sections, warnings, topic, byTopic.get(topic)!, budget);
-  }
+  // The per-topic priority offset increases with load order, so under
+  // inline-ceiling pressure the later-loaded topics — the same ones TIER 1
+  // already demoted as the shared full-text budget drained left-to-right —
+  // collapse to a count FIRST. Deterministic and consistent with TIER 1.
+  loadedTopicNames.forEach((topic, i) => {
+    renderTopic(blocks, warnings, topic, byTopic.get(topic)!, budget, i);
+  });
 
   // --- DELIVERED HANDOFFS (A ∩ H ≠ ∅) ---
   const handoffs = unpinned.filter(
@@ -239,10 +291,15 @@ export function renderStore(
   if (delivered.length > 0) {
     const deliveredAsc = sortAscByDate(delivered);
     const { summaryIds } = selectFullGlobal(deliveredAsc, Number.POSITIVE_INFINITY, budget);
-    sections.push("═══ DELIVERED HANDOFFS (fade if not needed) ═══");
+    const lines = ["═══ DELIVERED HANDOFFS (fade if not needed) ═══"];
     for (const e of sortDescByDate(delivered))
-      sections.push(formatFull(e, { collapsed: summaryIds.has(e.id) }));
-    sections.push("");
+      lines.push(formatFull(e, { collapsed: summaryIds.has(e.id) }));
+    lines.push("");
+    blocks.push({
+      priority: PRI.HANDOFFS,
+      lines,
+      compact: `═══ DELIVERED HANDOFFS — ${delivered.length} (recall_memory(id) to read) ═══`,
+    });
   }
 
   // --- NOT LOADED (menu counts only) ---
@@ -251,38 +308,48 @@ export function renderStore(
     .map(([t, entries]) => `${t}(${entries.filter((e) => e.status !== "forgotten").length})`)
     .sort();
   if (menu.length > 0) {
-    sections.push("═══ NOT LOADED (load_memory to expand) ═══");
-    sections.push(menu.join("  "));
-    sections.push("");
+    blocks.push({
+      priority: PRI.MENU,
+      lines: ["═══ NOT LOADED (load_memory to expand) ═══", menu.join("  "), ""],
+      // Already a compact count line; if even this overflows, the fit pass
+      // collapses it to the topic count rather than the full slug list.
+      compact: `═══ NOT LOADED — ${menu.length} topics (list_topics to browse) ═══`,
+    });
   }
 
   // --- HIDDEN (forgotten — only when explicitly requested) ---
   if (includeForgotten) {
     const forgotten = visible.filter((e) => e.status === "forgotten");
     if (forgotten.length > 0) {
-      sections.push("═══ HIDDEN (forgotten — shown by request) ═══");
-      for (const e of sortDescByDate(forgotten)) sections.push(formatSummary(e));
-      sections.push("");
+      const lines = ["═══ HIDDEN (forgotten — shown by request) ═══"];
+      for (const e of sortDescByDate(forgotten)) lines.push(formatSummary(e));
+      lines.push("");
+      blocks.push({
+        priority: PRI.HIDDEN,
+        lines,
+        compact: `═══ HIDDEN — ${forgotten.length} forgotten (list_memory({ status: "forgotten" })) ═══`,
+      });
     }
   }
 
-  // Loud, render-time-only warning when the shared ceiling (not just a
-  // per-section cap) forced FULL bodies down to summaries.
-  if (budget.globalDemoted && Number.isFinite(RENDER_TOTAL_BUDGET_BYTES)) {
+  // Loud, render-time-only warning when TIER 1 (the shared full-text
+  // budget, not just a per-section cap) forced FULL bodies down to
+  // summaries. TIER 2 (inline ceiling) adds its own warning in `finalize`.
+  if (budget.globalDemoted && Number.isFinite(RENDER_FULLTEXT_BUDGET_BYTES)) {
     warnings.push(
-      `Boot render hit the ${(RENDER_TOTAL_BUDGET_BYTES / 1024).toFixed(0)} KB full-text ceiling ` +
+      `Boot render hit the ${(RENDER_FULLTEXT_BUDGET_BYTES / 1024).toFixed(0)} KB full-text budget ` +
         `(PANTHEON_RENDER_MAX_BYTES) — older full bodies collapsed to summary. ` +
         `recall_memory(id) for any one in full, or load fewer topics.`,
     );
   }
 
-  return finalize(sections, warnings);
+  return finalize(blocks, warnings);
 }
 
 // --- topic + always rendering --------------------------------------------
 
 function appendAlways(
-  sections: string[],
+  blocks: RenderBlock[],
   warnings: string[],
   unpinned: MemoryEntry[],
   forceShowEmpty: boolean,
@@ -298,24 +365,30 @@ function appendAlways(
   }
   const sorted = sortAscByDate(always);
   const { titleIds } = budgetSummaryNewestFirst(sorted, ALWAYS_SUMMARY_BUDGET_BYTES);
-  sections.push(`═══ ALWAYS (summary) — ${sorted.length} entries ═══`);
+  const lines = [`═══ ALWAYS (summary) — ${sorted.length} entries ═══`];
   for (const e of sorted.slice().reverse()) {
-    sections.push(titleIds.has(e.id) ? formatTitle(e) : formatSummary(e));
+    lines.push(titleIds.has(e.id) ? formatTitle(e) : formatSummary(e));
   }
   if (titleIds.size > 0) {
     warnings.push(
       `${titleIds.size} 'always' entr${titleIds.size === 1 ? "y" : "ies"} collapsed to title (over the always-summary budget) — consolidate.`,
     );
   }
-  sections.push("");
+  lines.push("");
+  blocks.push({
+    priority: PRI.ALWAYS,
+    lines,
+    compact: `═══ ALWAYS — ${sorted.length} entries (recall_memory(id) to read any) ═══`,
+  });
 }
 
 function renderTopic(
-  sections: string[],
+  blocks: RenderBlock[],
   warnings: string[],
   topic: string,
   entries: MemoryEntry[],
   budget: RenderBudget,
+  topicIndex: number,
 ): void {
   const active = entries.filter((e) => e.status === "active");
   const faded = entries.filter((e) => e.status === "faded");
@@ -327,7 +400,7 @@ function renderTopic(
     active.filter((e) => mapLegacyKind(e.kind) !== "note"),
   );
 
-  sections.push(`═══ TOPIC: ${topic} ═══`);
+  const lines = [`═══ TOPIC: ${topic} ═══`];
 
   if (durable.length > 0) {
     // Per-topic 8 KB cap AND the shared global ceiling: a body that the
@@ -335,7 +408,7 @@ function renderTopic(
     // collapses to summary (and flips budget.globalDemoted for the warn).
     const { summaryIds } = selectFullGlobal(durable, TOPIC_FULL_BUDGET_BYTES, budget);
     for (const e of durable.slice().reverse()) {
-      sections.push(formatFull(e, { collapsed: summaryIds.has(e.id) }));
+      lines.push(formatFull(e, { collapsed: summaryIds.has(e.id) }));
     }
     if (summaryIds.size > 0) {
       warnings.push(
@@ -345,8 +418,8 @@ function renderTopic(
   }
 
   if (notes.length > 0) {
-    sections.push(`— notes (last ${NOTES_PER_TOPIC}) —`);
-    for (const e of notes) sections.push(formatSummary(e));
+    lines.push(`— notes (last ${NOTES_PER_TOPIC}) —`);
+    for (const e of notes) lines.push(formatSummary(e));
   }
 
   if (faded.length > 0) {
@@ -357,14 +430,22 @@ function renderTopic(
     const fadedDesc = sortDescByDate(faded);
     const shown = fadedDesc.slice(0, FADED_PER_TOPIC);
     const hidden = fadedDesc.length - shown.length;
-    sections.push("— faded —");
-    for (const e of shown) sections.push(formatSummary(e));
+    lines.push("— faded —");
+    for (const e of shown) lines.push(formatSummary(e));
     if (hidden > 0) {
-      sections.push(`  (+${hidden} older faded — list_memory / find_memory to see)`);
+      lines.push(`  (+${hidden} older faded — list_memory / find_memory to see)`);
     }
   }
 
-  sections.push("");
+  lines.push("");
+  // Per-topic offset: later-loaded topics get a higher priority number, so
+  // the inline-ceiling pass collapses them to a count first.
+  const count = entries.filter((e) => e.status !== "forgotten").length;
+  blocks.push({
+    priority: PRI.TOPIC + topicIndex,
+    lines,
+    compact: `═══ TOPIC: ${topic} — ${count} entr${count === 1 ? "y" : "ies"} (collapsed to fit; recall_memory(id) / list_memory({ filter: "${topic}" })) ═══`,
+  });
 }
 
 // --- budget helpers --------------------------------------------------------
@@ -555,12 +636,110 @@ function tagSuffix(entry: MemoryEntry): string {
   return tags.length > 0 ? ` (${tags.join(", ")})` : "";
 }
 
-function finalize(sections: string[], warnings: string[]): RenderResult {
-  const body = sections.join("\n").trimEnd();
+function finalize(blocks: RenderBlock[], warnings: string[]): RenderResult {
+  fitToInlineCeiling(blocks, warnings);
+  let body = assembleBlocks(blocks);
+  // Absolute backstop — should be unreachable, because every section is
+  // independently byte-capped (pins ≤ PIN_FULL, always ≤ ALWAYS_SUMMARY,
+  // full sections ≤ TIER 1, the rest collapsed to one-liners by the fit
+  // pass) and their sum stays under the ceiling. Kept so the guarantee is
+  // TOTAL even against a future section that forgets its cap: hard-trim on
+  // a UTF-8 boundary + a self-describing tail.
+  const ceiling = RENDER_INLINE_CEILING_BYTES;
+  if (Number.isFinite(ceiling) && byteLen(body) > ceiling) {
+    const tail =
+      "\n\n[render hard-trimmed to stay inline — recall_memory(id) / list_memory to read the rest]";
+    body = truncateToBytes(body, ceiling - byteLen(tail)) + tail;
+    if (!warnings.some((w) => w.includes("inline ceiling"))) {
+      warnings.push(
+        "Boot render hard-trimmed to the inline ceiling — read entries via recall_memory(id) / list_memory.",
+      );
+    }
+  }
   return {
     text: body.length > 0 ? body : "No memory under the loaded topics. `list_topics` to browse, `load_memory` to expand.",
     warning: warnings.length > 0 ? warnings.join(" ") : null,
   };
+}
+
+/** Flatten the live (non-dropped) blocks into the rendered body, in push
+ * order (= priority order). Matches the prior flat-`sections` join exactly
+ * when nothing was compacted/dropped. */
+function assembleBlocks(blocks: RenderBlock[]): string {
+  const lines: string[] = [];
+  for (const b of blocks) {
+    if (b.dropped) continue;
+    for (const line of b.lines) lines.push(line);
+  }
+  return lines.join("\n").trimEnd();
+}
+
+/** §spill-fix TIER 2 — the HARD inline-cap guarantee. While the assembled
+ * body exceeds RENDER_INLINE_CEILING_BYTES, collapse the lowest-VALUE
+ * section to its one-line `compact` form first (highest priority number,
+ * later-pushed on ties), so pins/reminders/watchers/always survive and the
+ * oldest/last-loaded topics shrink first. If everything compactable is
+ * already a one-liner and it STILL doesn't fit (pathological topic counts),
+ * drop the lowest-value one-liners entirely — never a pin/reminder/watcher/
+ * always. Smart compaction, never a file pointer: each collapsed section
+ * keeps a recall_memory(id) / list_memory hint, and one loud warning names
+ * what happened. No-op when the ceiling is disabled (Infinity) or the body
+ * already fits. */
+function fitToInlineCeiling(blocks: RenderBlock[], warnings: string[]): void {
+  const ceiling = RENDER_INLINE_CEILING_BYTES;
+  if (!Number.isFinite(ceiling)) return;
+  if (byteLen(assembleBlocks(blocks)) <= ceiling) return;
+
+  let acted = false;
+
+  // Phase 1 — compact lowest-value compactable blocks to their count line.
+  const compactOrder = blocks
+    .map((b, i) => ({ b, i }))
+    .filter(({ b }) => b.compact !== null && !b.compacted)
+    .sort((x, y) => y.b.priority - x.b.priority || y.i - x.i);
+  for (const { b } of compactOrder) {
+    if (byteLen(assembleBlocks(blocks)) <= ceiling) break;
+    b.lines = [b.compact!, ""];
+    b.compacted = true;
+    acted = true;
+  }
+
+  // Phase 2 — still over: drop lowest-value one-liners outright, but never
+  // the every-session floor (pins/reminders/watchers/always: priority ≤
+  // ALWAYS). Their content is action/standing-critical; they're already
+  // single count lines and cost almost nothing.
+  if (byteLen(assembleBlocks(blocks)) > ceiling) {
+    const dropOrder = blocks
+      .map((b, i) => ({ b, i }))
+      .filter(({ b }) => b.priority > PRI.ALWAYS && !b.dropped)
+      .sort((x, y) => y.b.priority - x.b.priority || y.i - x.i);
+    for (const { b } of dropOrder) {
+      if (byteLen(assembleBlocks(blocks)) <= ceiling) break;
+      b.dropped = true;
+      acted = true;
+    }
+  }
+
+  if (acted) {
+    warnings.push(
+      `Boot render exceeded the ${(ceiling / 1024).toFixed(0)} KB inline ceiling ` +
+        `(PANTHEON_RENDER_INLINE_CEILING) — lower-priority sections were collapsed to ` +
+        `counts to keep the whole result inline (never spilled to a file). ` +
+        `recall_memory(id) for any entry, list_memory / find_memory to browse, or load fewer topics.`,
+    );
+  }
+}
+
+/** Trim a string to at most `maxBytes` UTF-8 bytes without splitting a
+ * multibyte codepoint. */
+function truncateToBytes(s: string, maxBytes: number): string {
+  if (maxBytes <= 0) return "";
+  const buf = Buffer.from(s, "utf8");
+  if (buf.length <= maxBytes) return s;
+  let end = maxBytes;
+  // Back up off any UTF-8 continuation byte (0b10xxxxxx).
+  while (end > 0 && (buf[end]! & 0xc0) === 0x80) end--;
+  return buf.toString("utf8", 0, end);
 }
 
 function sortAscByDate<T extends { date: string }>(arr: T[]): T[] {
