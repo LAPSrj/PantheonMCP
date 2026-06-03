@@ -2,7 +2,12 @@ import {
   DEFAULT_COALESCE_WINDOW_MS,
   DEFAULT_WAIT_MS,
   SessionExpiredError,
+  WATCHER_RESUME_MAX_GAP_MS,
+  advanceChatCursor,
   listActive,
+  readChatCursor,
+  readMaxSeq,
+  readSeqFloorForTs,
   tailLoop,
   tailOnce,
   type LoopOptions,
@@ -63,9 +68,29 @@ export async function runFetch(options: RunFetchOptions): Promise<number> {
   process.on("SIGTERM", onSig);
   process.on("SIGINT", onSig);
 
+  // Resume from where this agent_id last consumed the STREAM (its
+  // persisted chat_cursor), not from MAX(seq). A same-agent_id watcher
+  // restart (the zombie-recovery path) then loses nothing written during
+  // the restart gap. A fresh session's cursor was stamped to MAX at login
+  // (router.add), so a new session still skips backlog.
+  //
+  // Time cap (WATCHER_RESUME_MAX_GAP_MS): clamp the resume so only gap
+  // messages newer than (now − cap) are replayed. We map the wall-clock
+  // cutoff to a seq lower bound via readSeqFloorForTs and take the MAX of
+  // it and the cursor. A normal restart gap is seconds (all within the
+  // window → fully replayed); only a long-frozen zombie recovered under
+  // the same agent_id has the stale tail skipped from the stream (it
+  // stays in the DB, reachable via check_messages). When nothing is newer
+  // than the cutoff, snap to MAX(seq) so nothing replays.
+  const cursor = readChatCursor(db, parsed.agent_id);
+  const floor = readSeqFloorForTs(db, Date.now() - WATCHER_RESUME_MAX_GAP_MS);
+  const timeFloorSeq = floor !== null ? floor - 1 : readMaxSeq(db);
+  const resumeSeq = Math.max(cursor, timeFloorSeq);
+
   const loopOptions: LoopOptions = {
     db,
     agent_id: parsed.agent_id,
+    since_seq: resumeSeq,
     wait_ms: parsed.wait_ms,
     coalesce_window_ms: parsed.coalesce_window_ms,
     signal: controller.signal,
@@ -75,6 +100,11 @@ export async function runFetch(options: RunFetchOptions): Promise<number> {
   try {
     for await (const event of tailLoop(loopOptions)) {
       stdout.write(event.line + "\n");
+      // Persist stream progress so a same-agent_id restart resumes here.
+      // The stream and check_messages now share one "delivered-up-to"
+      // cursor; advanceChatCursor is monotonic, so an interleaved
+      // check_messages advance never walks it backward.
+      advanceChatCursor(db, parsed.agent_id, event.last_seq);
     }
   } catch (err) {
     if (err instanceof SessionExpiredError) {

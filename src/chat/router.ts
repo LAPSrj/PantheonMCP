@@ -30,7 +30,7 @@ import {
   removeSubscriber as presenceRemove,
   upsertSubscriber,
 } from "./presence.ts";
-import { selectReceivableRows } from "./watcher.ts";
+import { selectReceivableRows, readMaxSeq } from "./watcher.ts";
 import { isAdminConsoleMessage } from "./format.ts";
 import type { MessageRow } from "./persistence.ts";
 
@@ -283,6 +283,23 @@ export class ChatRouter {
     this.usernameIndex.set(options.username.toLowerCase(), subscriber.agent_id);
     this.cursors.set(subscriber.agent_id, this.seqCounter);
     this.presenceUpsert(subscriber);
+    // Stamp the persisted chat_cursor to the current MAX(seq) so this
+    // FRESH session starts at "now" — the streaming watcher (which now
+    // resumes from chat_cursor, see cli/fetch.ts) skips backlog exactly
+    // as before. A same-agent_id watcher RESTART keeps this row + its
+    // advanced cursor and resumes losslessly instead of re-snapping to
+    // MAX. New rows default chat_cursor=0; without this stamp the
+    // resume-from-cursor watcher would replay all history on first start.
+    // advanceChatCursor is monotonic (guards chat_cursor < seq), so this
+    // only moves a fresh 0 up to MAX — never walks an existing cursor
+    // backward on a re-login.
+    if (this.db) {
+      try {
+        advanceChatCursor(this.db, subscriber.agent_id, readMaxSeq(this.db));
+      } catch {
+        // best-effort — never fail login on a cursor stamp
+      }
+    }
     return subscriber;
   }
 

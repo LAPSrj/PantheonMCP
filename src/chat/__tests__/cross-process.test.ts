@@ -4,6 +4,8 @@ import path from "node:path";
 import os from "node:os";
 import { resolvePaths, openChatDb, type Paths } from "../../storage/index.ts";
 import { ChatRouter } from "../router.ts";
+import { advanceChatCursor, readChatCursor } from "../presence.ts";
+import { readMaxSeq } from "../watcher.ts";
 
 let tmpDir: string;
 let paths: Paths;
@@ -36,6 +38,34 @@ test("two routers backed by the same chat.db see each other in publicList", () =
   const seenByB = routerB.publicList().map((s) => s.username);
   expect(seenByA.sort()).toEqual(["alpha", "beta"]);
   expect(seenByB.sort()).toEqual(["alpha", "beta"]);
+});
+
+test("router.add stamps chat_cursor = MAX(seq) for a fresh subscriber (no backlog on first stream)", () => {
+  const router = new ChatRouter({ paths, db: dbA });
+  const sender = router.add({ username: "alpha", project: "X", transient: false });
+  // Generate some history before `beta` ever logs in.
+  router.addMessage({ from_agent_id: sender.agent_id, scope: "global", text: "m1" });
+  router.addMessage({ from_agent_id: sender.agent_id, scope: "global", text: "m2" });
+  router.addMessage({ from_agent_id: sender.agent_id, scope: "global", text: "m3" });
+  const max = readMaxSeq(dbA);
+  expect(max).toBeGreaterThan(0);
+
+  const beta = router.add({ username: "beta", project: "X", transient: false });
+  // Fresh subscriber's cursor is stamped to the current MAX — so a
+  // resume-from-cursor watcher starts at "now" and replays no backlog.
+  expect(readChatCursor(dbA, beta.agent_id)).toBe(max);
+});
+
+test("the cursor stamp's monotonic guard never walks an advanced cursor backward", () => {
+  // The add() stamp calls advanceChatCursor(db, id, MAX(seq)); this
+  // guards the safety property it leans on — once a stream/poll has
+  // advanced the cursor, a lower value (e.g. a stale MAX) can't lower it.
+  const router = new ChatRouter({ paths, db: dbA });
+  const beta = router.add({ username: "beta", project: "X", transient: false });
+  advanceChatCursor(dbA, beta.agent_id, 999);
+  expect(readChatCursor(dbA, beta.agent_id)).toBe(999);
+  advanceChatCursor(dbA, beta.agent_id, 5); // lower → ignored
+  expect(readChatCursor(dbA, beta.agent_id)).toBe(999);
 });
 
 test("clones annotation works on the SQLite (cross-process) publicList path", () => {

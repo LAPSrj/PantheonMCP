@@ -32,6 +32,16 @@ export const DEFAULT_WAIT_MS = 500;
 export const DEFAULT_COALESCE_WINDOW_MS = 1000;
 export const DEFAULT_RECEIVER_REFRESH_MS = 5000;
 
+/** Time cap on a watcher RESUME replay. When a same-agent_id watcher
+ * restart resumes from the persisted `chat_cursor` (the documented
+ * zombie-recovery path), only gap messages newer than (now − this) are
+ * replayed to the stream; anything older is skipped from the stream
+ * (still in the DB, still reachable via `check_messages`). A legitimate
+ * restart gap is seconds, so this generously covers it — while bounding
+ * the backlog a long-frozen zombie recovered under the SAME agent_id
+ * could otherwise dump into the stream in one burst. Tunable here. */
+export const WATCHER_RESUME_MAX_GAP_MS = 600_000; // 10 minutes
+
 export interface TailOptions {
   db: Database;
   receiver: ReceiverState;
@@ -301,6 +311,18 @@ export function isTransientDbError(err: unknown): boolean {
 export function readMaxSeq(db: Database): number {
   const row = db.query("SELECT MAX(seq) AS s FROM messages").get() as { s: number | null };
   return row.s ?? 0;
+}
+
+/** Smallest `seq` among messages whose `ts` is at or after `cutoffTs`.
+ * Returns null when no message is that recent. `seq` and `ts` both
+ * increase with insertion order, so this maps a wall-clock cutoff to a
+ * seq lower bound — the basis for the watcher resume time cap
+ * (`WATCHER_RESUME_MAX_GAP_MS`): emit only rows at/after this seq. */
+export function readSeqFloorForTs(db: Database, cutoffTs: number): number | null {
+  const row = db
+    .query("SELECT MIN(seq) AS s FROM messages WHERE ts >= ?")
+    .get(cutoffTs) as { s: number | null };
+  return row.s ?? null;
 }
 
 async function loadReceiver(

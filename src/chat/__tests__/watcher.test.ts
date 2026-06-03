@@ -11,6 +11,7 @@ import {
   isTransientDbError,
   isVisibleRow,
   readMaxSeq,
+  readSeqFloorForTs,
   selectReceivableRows,
   tailLoop,
   tailOnce,
@@ -466,4 +467,24 @@ test("tailLoop still propagates a FATAL (non-transient) DB error", async () => {
   } finally {
     (db as unknown as { query: unknown }).query = origQuery;
   }
+});
+
+// --- readSeqFloorForTs (watcher resume time-cap basis) ---
+
+test("readSeqFloorForTs: returns the smallest seq at/after the ts cutoff", () => {
+  // seq assigned in insertion order (1,2,3); ts ascending alongside.
+  persistMessage(db, msg({ id: "a", seq: 0, from_agent_id: "peer", scope: "global", text: "old", ts: 1000 }));
+  persistMessage(db, msg({ id: "b", seq: 0, from_agent_id: "peer", scope: "global", text: "mid", ts: 2000 }));
+  persistMessage(db, msg({ id: "c", seq: 0, from_agent_id: "peer", scope: "global", text: "new", ts: 3000 }));
+
+  // Cutoff at 2000 → first row with ts>=2000 is seq 2 (id "b").
+  expect(readSeqFloorForTs(db, 2000)).toBe(2);
+  // Cutoff before everything → seq 1.
+  expect(readSeqFloorForTs(db, 0)).toBe(1);
+  // Cutoff after everything → null (nothing that recent).
+  expect(readSeqFloorForTs(db, 5000)).toBeNull();
+});
+
+test("readSeqFloorForTs: empty table → null", () => {
+  expect(readSeqFloorForTs(db, 0)).toBeNull();
 });

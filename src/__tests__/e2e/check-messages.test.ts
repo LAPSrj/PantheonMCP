@@ -55,43 +55,46 @@ test("cross-process: procB's check_messages sees DMs from procA", async () => {
   expect(cursor).toBeGreaterThan(0);
 });
 
-test("cross-process: cursor reset after disconnect (full backlog on rejoin)", async () => {
+test("cross-process: fresh re-login stamps cursor=MAX → no backlog flood; only post-login messages deliver", async () => {
+  // Behavior change (watcher cursor-resume fix, Change A): a fresh login
+  // (new agent_id) stamps chat_cursor = MAX(seq) in router.add, so a
+  // re-logged-in session starts at "now" and does NOT replay everything
+  // written before it rejoined — for the STREAM and for check_messages
+  // alike (they share one delivered-up-to cursor). This protects the
+  // most-visible property: a brand-new session never gets flooded with
+  // historical backlog. (Same-agent_id watcher RESTART resumes from the
+  // advanced cursor; that lossless path is covered in cli/fetch tests.)
   await call(fix.procA, "register", { username: "alpha", project: "p", cwd: "/a", claim_after: true });
   await call(fix.procB, "register", { username: "beta", project: "p", cwd: "/b", claim_after: true });
   await call(fix.procA, "login", { username: "alpha", project: "p", transient: false });
   await call(fix.procB, "login", { username: "beta", project: "p", transient: false });
 
-  // procA writes a project-scoped message visible to all project-p
-  // members (including beta while she's online). No `target` on a
-  // project broadcast — the inverse-guard rejects target on non-dm
-  // sends.
-  await call(fix.procA, "send_message", {
-    text: "before logout",
-    scope: "project",
-  });
+  // Project-scoped message while beta is online (no `target` — the
+  // inverse-guard rejects target on non-dm sends).
+  await call(fix.procA, "send_message", { text: "before logout", scope: "project" });
 
   // beta logs out (subscribers row deleted; cursor goes with it).
   await call(fix.procB, "logout");
 
-  // procA writes another project-scoped message after beta is gone.
-  // (DM-to-offline-target now fails by design; project scope persists
-  // for everyone in the project regardless of who's online, which is
-  // the right vehicle for testing cursor-reset semantics.)
-  await call(fix.procA, "send_message", {
-    text: "after logout",
-    scope: "project",
-  });
+  // procA writes more while beta is gone.
+  await call(fix.procA, "send_message", { text: "during gap", scope: "project" });
 
-  // beta logs in again — fresh agent_id, cursor starts at 0, sees backlog.
+  // beta logs in again — fresh agent_id, cursor stamped to current MAX.
   await call(fix.procB, "login", { username: "beta", project: "p", transient: false });
+
+  // A message AFTER the fresh login must deliver.
+  await call(fix.procA, "send_message", { text: "after relogin", scope: "project" });
+
   const r = await call(fix.procB, "check_messages");
   const projectMsgs = (r.payload.messages as Array<{ text: string; scope: string }>)
     .filter((m) => m.scope === "project")
     .map((m) => m.text);
-  // Both messages should be visible (project membership matches, and
-  // beta's agent_id is fresh so cursor starts at 0 → full backlog).
-  expect(projectMsgs).toContain("before logout");
-  expect(projectMsgs).toContain("after logout");
+  // No backlog flood: messages written before the fresh login are skipped
+  // from the stream/poll (still in the DB), and only what arrives after
+  // the fresh login is delivered.
+  expect(projectMsgs).not.toContain("before logout");
+  expect(projectMsgs).not.toContain("during gap");
+  expect(projectMsgs).toContain("after relogin");
 });
 
 test("cross-process: mention bypass — DM mode receives @mention via check_messages", async () => {
