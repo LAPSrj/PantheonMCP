@@ -423,3 +423,75 @@ test("reclaimCanonicalHandles handles multiple suffixed subscribers in one pass"
   expect(router.getByUsername("alpha")).toBeTruthy();
   expect(router.getByUsername("beta")).toBeTruthy();
 });
+
+// --- clone-addressing: liveSiblings + publicList clones annotation ---
+
+test("liveSiblings returns canonical + suffixed siblings, canonical-first then ascending suffix", () => {
+  router.add({ username: "righthand4", project: "p", transient: false });
+  router.add({ username: "righthand", project: "p", transient: false });
+  router.add({ username: "righthand2", project: "p", transient: false });
+  router.add({ username: "unrelated", project: "p", transient: false });
+
+  const sibs = router.liveSiblings("righthand");
+  expect(sibs.map((s) => s.username)).toEqual([
+    "righthand",
+    "righthand2",
+    "righthand4",
+  ]);
+  expect(sibs.map((s) => s.is_canonical)).toEqual([true, false, false]);
+});
+
+test("liveSiblings accepts a suffixed handle and still resolves the whole family", () => {
+  router.add({ username: "righthand", project: "p", transient: false });
+  router.add({ username: "righthand2", project: "p", transient: false });
+  // Passing the suffixed handle derives the same base.
+  expect(router.liveSiblings("righthand2").map((s) => s.username)).toEqual([
+    "righthand",
+    "righthand2",
+  ]);
+});
+
+test("liveSiblings surfaces siblings across projects (no project filter)", () => {
+  router.add({ username: "righthand", project: "X", transient: false });
+  router.add({ username: "righthand2", project: "Y", transient: false });
+  const sibs = router.liveSiblings("righthand");
+  expect(sibs.map((s) => s.username)).toEqual(["righthand", "righthand2"]);
+  expect(sibs.find((s) => s.username === "righthand2")?.project).toBe("Y");
+});
+
+test("liveSiblings on a lone canonical returns just itself (no siblings)", () => {
+  router.add({ username: "righthand", project: "p", transient: false });
+  const sibs = router.liveSiblings("righthand");
+  expect(sibs.map((s) => s.username)).toEqual(["righthand"]);
+});
+
+test("publicList annotates the canonical entry with a `clones` array; siblings carry none", () => {
+  router.add({ username: "righthand", project: "p", transient: false });
+  router.add({ username: "righthand2", project: "p", transient: false });
+  router.add({ username: "righthand4", project: "p", transient: false });
+
+  const list = router.publicList();
+  const canonical = list.find((a) => a.username === "righthand");
+  expect(canonical?.clones).toEqual(["righthand2", "righthand4"]);
+  // Suffixed siblings are not canonical -> no clones field.
+  expect(list.find((a) => a.username === "righthand2")?.clones).toBeUndefined();
+  expect(list.find((a) => a.username === "righthand4")?.clones).toBeUndefined();
+});
+
+test("publicList omits `clones` when a canonical handle has no live siblings", () => {
+  router.add({ username: "righthand", project: "p", transient: false });
+  router.add({ username: "solo", project: "p", transient: false });
+  const list = router.publicList();
+  expect(list.find((a) => a.username === "righthand")?.clones).toBeUndefined();
+  expect(list.find((a) => a.username === "solo")?.clones).toBeUndefined();
+});
+
+test("publicList `clones` is scoped to the (project-filtered) list — no dangling handles", () => {
+  router.add({ username: "righthand", project: "X", transient: false });
+  router.add({ username: "righthand2", project: "Y", transient: false });
+  // Filtered to project X: only the canonical is in the list, so it gets
+  // no clones (the sibling lives in Y and isn't part of this result set).
+  const listX = router.publicList("X");
+  expect(listX.map((a) => a.username)).toEqual(["righthand"]);
+  expect(listX.find((a) => a.username === "righthand")?.clones).toBeUndefined();
+});

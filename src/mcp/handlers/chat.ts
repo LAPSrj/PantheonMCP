@@ -121,6 +121,40 @@ function resolveDMTarget(
     };
   }
 
+  // Inverse false-offline: the bare CANONICAL handle isn't live, but
+  // suffixed sibling incarnations of the SAME persona ARE (the unsuffixed
+  // holder left and `reclaimCanonicalHandles` hasn't promoted a sibling
+  // cross-process yet, or the persona simply never logged in unsuffixed).
+  // There is genuinely no canonical session to deliver to — the send
+  // fails as offline EITHER WAY — but rather than a bare "offline", name
+  // the live siblings so the sender can re-address one directly. This is
+  // a better message, not a delivery change. A target that is itself
+  // suffixed (`righthand2`) has `incarnationBase(target) !== target`, so
+  // it skips this block and falls through to the normal offline path.
+  if (incarnationBase(target).toLowerCase() === target.toLowerCase()) {
+    const sibs = router.liveSiblings(target).filter((s) => !s.is_canonical);
+    if (sibs.length > 0) {
+      const roster = sibs
+        .map((s) => `'${s.username}'${s.status ? ` — ${s.status}` : ""}`)
+        .join("; ");
+      return {
+        kind: "error",
+        code: "recipient_offline",
+        message:
+          `'${target}' (canonical) isn't currently in chat, but ${sibs.length} sibling ` +
+          `incarnation(s) of the same persona ARE live: ${roster}. There's no canonical ` +
+          `session to deliver to — DM one of them directly by its exact handle ` +
+          `(e.g. target:"${sibs[0]!.username}"). Pantheon has no offline-DM queue; ` +
+          `nothing was persisted.`,
+        extra: {
+          target,
+          canonical_offline: true,
+          candidates: sibs.map((s) => s.username),
+        },
+      };
+    }
+  }
+
   // Doesn't look like an agent_id — treat as an unknown username and
   // enrich the error with what we can learn about the name from the
   // persona registry. A registered-but-offline persona is the
@@ -175,6 +209,33 @@ function assertDMRecipient(
   if (result.kind === "error") {
     throw new ChatError(result.code, result.message, result.extra ?? {});
   }
+}
+
+/** Soft clone-addressing hint for a DM that DID deliver. When `target`
+ * is a bare CANONICAL handle (unsuffixed) that has live suffixed sibling
+ * incarnations, the message still goes to whichever session holds the
+ * unsuffixed slot — but the sender may have meant a sibling. Returns an
+ * advisory string for the response `hints` array; null when there's
+ * nothing to flag. Deliver-and-inform, never block — it mirrors the
+ * existing project-broadcast hint pattern rather than the agent-id
+ * teaching errors. A suffixed target (`righthand2`) is already specific,
+ * so it's never hinted. */
+function cloneAddressingHint(
+  router: ReturnType<typeof requireRouter>,
+  scope: string,
+  target: string | undefined,
+): string | null {
+  if (scope !== "dm" || !target) return null;
+  if (incarnationBase(target).toLowerCase() !== target.toLowerCase()) return null;
+  const clones = router.liveSiblings(target).filter((s) => !s.is_canonical);
+  if (clones.length === 0) return null;
+  const roster = clones.map((s) => `'${s.username}'`).join(", ");
+  const plural = clones.length === 1 ? "" : "s";
+  return (
+    `Delivered to canonical '${target}'. It has ${clones.length} live clone${plural} ` +
+    `(same persona, different session${plural}): ${roster}. If this was meant for a ` +
+    `sibling, re-send with the sibling's exact username.`
+  );
 }
 
 /** Reject a `target` supplied on a non-`dm` send. A `target` paired
@@ -896,6 +957,10 @@ export const send_message: Handler = async (args, ctx) => {
     const unknown = unknownMentionWarning(scan);
     if (unknown) hints.push(unknown);
   }
+  // Clone-addressing soft hint: DM to a canonical handle with live
+  // siblings delivered to the canonical, but flag the siblings.
+  const cloneHint = cloneAddressingHint(router, scope, target);
+  if (cloneHint) hints.push(cloneHint);
   return {
     ok: true,
     message_id: msg.id,
@@ -1066,6 +1131,10 @@ export const send_structured: Handler = async (args, ctx) => {
       if (unknown) hints.push(unknown);
     }
   }
+  // Clone-addressing soft hint (same as send_message): a DM to a
+  // canonical handle with live siblings delivered, but flag the siblings.
+  const cloneHint = cloneAddressingHint(router, scope, target);
+  if (cloneHint) hints.push(cloneHint);
   return {
     ok: true,
     message_id: msg.id,

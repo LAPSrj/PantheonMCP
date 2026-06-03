@@ -1512,7 +1512,13 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
   },
   {
     name: "list_agents",
-    description: "List currently-connected chat agents. Stub until §11c.",
+    description:
+      "List currently-connected chat agents. A canonical (unsuffixed) entry " +
+      "with live suffixed sibling incarnations of the SAME persona carries a " +
+      "`clones` array of those sibling handles (e.g. 'righthand' → clones: " +
+      "['righthand2','righthand4']) — the siblings still appear as their own " +
+      "entries with their own status. A bare-handle DM reaches only the " +
+      "canonical session; to reach a sibling, DM its EXACT suffixed handle.",
     inputSchema: {
       type: "object",
       additionalProperties: false,

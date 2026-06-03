@@ -769,6 +769,96 @@ test("send_message: DM to an entirely-unknown handle → recipient_offline with 
   expect((r.payload as { registered?: boolean }).registered).toBe(false);
 });
 
+// --- clone-addressing: soft hint + inverse false-offline ----------- //
+
+test("send_message: DM to a canonical handle with live siblings DELIVERS + surfaces a clone hint", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  const canonical = ctx.chat!.add({ username: "righthand", project: "X", transient: false });
+  ctx.chat!.add({ username: "righthand2", project: "X", transient: false });
+  ctx.chat!.add({ username: "righthand4", project: "X", transient: false });
+  const r = await call("send_message", {
+    text: "for the canonical",
+    scope: "dm",
+    target: "righthand",
+  });
+  expect(r.ok).toBe(true);
+  // Delivered (not blocked).
+  expect(ctx.chat!.takeMessages(canonical.agent_id).messages.map((m) => m.text)).toContain(
+    "for the canonical",
+  );
+  const hints = (r.payload.hints as string[]) ?? [];
+  const cloneHint = hints.find((h) => h.includes("live clone"));
+  expect(cloneHint).toBeDefined();
+  expect(cloneHint).toContain("'righthand2'");
+  expect(cloneHint).toContain("'righthand4'");
+});
+
+test("send_message: DM to a SUFFIXED handle is specific — no clone hint", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  ctx.chat!.add({ username: "righthand", project: "X", transient: false });
+  const sib = ctx.chat!.add({ username: "righthand2", project: "X", transient: false });
+  const r = await call("send_message", {
+    text: "for the sibling",
+    scope: "dm",
+    target: "righthand2",
+  });
+  expect(r.ok).toBe(true);
+  expect(ctx.chat!.takeMessages(sib.agent_id).messages.map((m) => m.text)).toContain(
+    "for the sibling",
+  );
+  const hints = (r.payload.hints as string[]) ?? [];
+  expect(hints.find((h) => h.includes("live clone"))).toBeUndefined();
+});
+
+test("send_message: DM to a canonical with NO live siblings → no clone hint", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  ctx.chat!.add({ username: "righthand", project: "X", transient: false });
+  const r = await call("send_message", {
+    text: "solo canonical",
+    scope: "dm",
+    target: "righthand",
+  });
+  expect(r.ok).toBe(true);
+  const hints = (r.payload.hints as string[]) ?? [];
+  expect(hints.find((h) => h.includes("live clone"))).toBeUndefined();
+});
+
+test("send_structured: DM to a canonical with live siblings also surfaces the clone hint", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  ctx.chat!.add({ username: "righthand", project: "X", transient: false });
+  ctx.chat!.add({ username: "righthand2", project: "X", transient: false });
+  const r = await call("send_structured", {
+    kind: "note",
+    payload: { x: 1 },
+    scope: "dm",
+    target: "righthand",
+  });
+  expect(r.ok).toBe(true);
+  const hints = (r.payload.hints as string[]) ?? [];
+  expect(hints.find((h) => h.includes("live clone"))?.includes("'righthand2'")).toBe(true);
+});
+
+test("send_message: inverse false-offline — canonical not live but siblings are → recipient_offline naming the siblings", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  // Canonical `righthand` never logs in; only suffixed siblings are live.
+  ctx.chat!.add({ username: "righthand2", project: "X", transient: false });
+  ctx.chat!.add({ username: "righthand4", project: "X", transient: false });
+  const r = await call("send_message", {
+    text: "who am I even reaching",
+    scope: "dm",
+    target: "righthand",
+  });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("recipient_offline");
+  const msg = r.payload.message as string;
+  expect(msg).toContain("isn't currently in chat");
+  expect(msg).toContain("'righthand2'");
+  expect(msg).toContain("'righthand4'");
+  expect((r.payload as { canonical_offline?: boolean }).canonical_offline).toBe(true);
+  // Nothing persisted — the send still fails (no canonical to deliver to).
+  expect(r.payload.message_id).toBeUndefined();
+});
+
 // --- project-broadcast clarity warnings ---------------------------- //
 
 test("send_message: project broadcast with no peers surfaces an emptyProject warning", async () => {

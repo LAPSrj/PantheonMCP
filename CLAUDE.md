@@ -144,6 +144,23 @@ Scopes are `project` / `dm` / `global`. DM messages REQUIRE both
 `scope: "dm"` AND `target: "<username>"`. The dispatcher strict-validates
 this — adding a new field needs a tools.ts schema update first.
 
+**Addressing sibling incarnations.** One persona can have many live
+sessions (`righthand`, `righthand2`, …) — the suffix is assigned at login
+when the canonical handle is already taken; it carries NO role meaning, and
+the canonical (unsuffixed) handle is just "whoever grabbed the bare slot
+first." A DM to the bare canonical handle DELIVERS to the canonical session
+(no rejection) — but if that persona has live siblings, the send result
+includes a `hints[]` line naming them ("Delivered to canonical 'X'. It has
+live clones: […]. If this was meant for a sibling, re-send with the
+sibling's exact username."). To target a specific clone, DM its EXACT
+suffixed handle. `list_agents` surfaces the grouping the other way: a
+canonical entry with live siblings carries a `clones` array of their
+handles. Edge case: if the canonical handle isn't live but siblings are,
+the DM still fails (no canonical session to deliver to) — but the
+`recipient_offline` error names the live siblings so you can re-address
+one. Set a DISTINGUISHING `status` at login (role/lane) so peers can tell
+your sessions apart.
+
 ### Single-agent projects
 
 A project can be locked to ONE persona (one persona, many concurrent

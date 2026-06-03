@@ -13,6 +13,7 @@ import {
   type Subscriber,
 } from "./types.ts";
 import {
+  incarnationBase,
   isHandleAvailable,
   type AvailabilityResult,
 } from "./collision.ts";
@@ -1082,7 +1083,7 @@ export class ChatRouter {
           now: this.clock(),
         });
         const nowMs = this.clock();
-        return rows.map((r) => ({
+        const mapped: PublicAgent[] = rows.map((r) => ({
           username: r.username,
           project: r.project,
           status: r.status,
@@ -1096,6 +1097,8 @@ export class ChatRouter {
           idle_for_ms:
             r.last_activity_at != null ? nowMs - r.last_activity_at : null,
         }));
+        this.annotateClones(mapped);
+        return mapped;
       } catch {
         // fall through to in-memory below
       }
@@ -1115,7 +1118,86 @@ export class ChatRouter {
         ...(sub.status_meta ? { status_meta: sub.status_meta } : {}),
       });
     }
-    return out.sort((a, b) => a.username.localeCompare(b.username));
+    out.sort((a, b) => a.username.localeCompare(b.username));
+    this.annotateClones(out);
+    return out;
+  }
+
+  /** Post-process a public-agent list: for each CANONICAL entry (its
+   * username equals its own incarnation base) that has live suffixed
+   * sibling incarnations ALSO present in this list, attach their handles
+   * as `clones`, sorted by ascending numeric suffix. Pure visibility aid
+   * — the siblings still appear as their own entries with their own
+   * status; this just surfaces the sibling grouping from the canonical
+   * row. Scoped to the supplied list (a project-filtered `publicList`
+   * groups only same-list siblings), so every handle in `clones` always
+   * has a matching `agents[]` entry — no dangling references. */
+  private annotateClones(list: PublicAgent[]): void {
+    const byBase = new Map<string, PublicAgent[]>();
+    for (const a of list) {
+      const base = incarnationBase(a.username).toLowerCase();
+      const group = byBase.get(base);
+      if (group) group.push(a);
+      else byBase.set(base, [a]);
+    }
+    const suffixNum = (h: string) => {
+      const m = /(\d+)$/.exec(h);
+      return m ? Number(m[1]) : 0;
+    };
+    for (const a of list) {
+      const self = a.username.toLowerCase();
+      if (incarnationBase(a.username).toLowerCase() !== self) continue;
+      const group = byBase.get(self);
+      if (!group) continue;
+      const clones = group
+        .filter((s) => s.username.toLowerCase() !== self)
+        .map((s) => s.username)
+        .sort((x, y) => suffixNum(x) - suffixNum(y));
+      if (clones.length > 0) a.clones = clones;
+    }
+  }
+
+  /** All live subscribers (cross-process, ALL projects) whose canonical
+   * base equals `base` — the canonical handle itself plus every suffixed
+   * sibling incarnation (`<base>2`, `<base>3`, ...). The disambiguation
+   * surface for clone-addressing: the DM-send clone hint and the inverse
+   * false-offline message both read it. Searches every project (no
+   * filter) so a cross-project sibling still surfaces. Sorted
+   * canonical-first, then by ascending numeric suffix. */
+  liveSiblings(base: string): Array<{
+    username: string;
+    status: string;
+    project: string;
+    is_canonical: boolean;
+  }> {
+    const baseLower = incarnationBase(base).toLowerCase();
+    const out: Array<{
+      username: string;
+      status: string;
+      project: string;
+      is_canonical: boolean;
+    }> = [];
+    for (const a of this.publicList()) {
+      if (incarnationBase(a.username).toLowerCase() !== baseLower) continue;
+      out.push({
+        username: a.username,
+        status: a.status,
+        project: a.project,
+        is_canonical: a.username.toLowerCase() === baseLower,
+      });
+    }
+    const suffixNum = (h: string) => {
+      const m = /(\d+)$/.exec(h);
+      return m ? Number(m[1]) : 0;
+    };
+    out.sort((x, y) =>
+      x.is_canonical === y.is_canonical
+        ? suffixNum(x.username) - suffixNum(y.username)
+        : x.is_canonical
+          ? -1
+          : 1,
+    );
+    return out;
   }
 
   /** Cross-process online-handles snapshot. Used by `find_role` to

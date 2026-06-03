@@ -170,6 +170,14 @@ export interface PublicAgent {
    * Cross-process consumers (other MCPs reading via the SQLite
    * presence table) see no meta — it isn't persisted. */
   status_meta?: StatusMeta;
+  /** Clone-addressing visibility aid. Present ONLY on a canonical
+   * (unsuffixed) entry that has live suffixed sibling incarnations also
+   * in this list: the array of those sibling handles (`['righthand2',
+   * 'righthand4']`), ascending by numeric suffix. The siblings still
+   * appear as their own entries; this just surfaces the grouping so a
+   * sender can see at a glance that a bare-handle DM to this persona has
+   * other live sessions it won't reach. Omitted when there are none. */
+  clones?: string[];
 }
 
 export class ChatError extends Error {

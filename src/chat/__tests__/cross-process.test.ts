@@ -38,6 +38,29 @@ test("two routers backed by the same chat.db see each other in publicList", () =
   expect(seenByB.sort()).toEqual(["alpha", "beta"]);
 });
 
+test("clones annotation works on the SQLite (cross-process) publicList path", () => {
+  // Canonical lives in process A; suffixed siblings in process B. The
+  // SQLite presence path must still annotate the canonical entry.
+  const routerA = new ChatRouter({ paths, db: dbA });
+  const routerB = new ChatRouter({ paths, db: dbB });
+  routerA.add({ username: "righthand", project: "X", transient: false });
+  routerB.add({ username: "righthand2", project: "X", transient: false });
+  routerB.add({ username: "righthand4", project: "X", transient: false });
+
+  const list = routerA.publicList();
+  expect(list.find((a) => a.username === "righthand")?.clones).toEqual([
+    "righthand2",
+    "righthand4",
+  ]);
+  expect(list.find((a) => a.username === "righthand2")?.clones).toBeUndefined();
+  // liveSiblings reads the same cross-process snapshot.
+  expect(routerA.liveSiblings("righthand").map((s) => s.username)).toEqual([
+    "righthand",
+    "righthand2",
+    "righthand4",
+  ]);
+});
+
 test("router.heartbeat keeps a subscriber row live across the stale threshold", async () => {
   const router = new ChatRouter({ paths, db: dbA });
   const sub = router.add({ username: "vellumpike", project: "p", transient: false });
