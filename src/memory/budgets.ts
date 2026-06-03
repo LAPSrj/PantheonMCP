@@ -33,6 +33,38 @@ export const TOPIC_FULL_BUDGET_BYTES = 8 * 1024;
  * search/list-only. */
 export const NOTES_PER_TOPIC = 5;
 
+/** Per-topic cap on the FADED subsection. Faded ≈ archived; without a cap
+ * a topic with many faded entries renders an unbounded summary list every
+ * time it's loaded. Beyond this, render the newest-N faded summaries + a
+ * "(+M older)" count; the rest are list_memory / find_memory only. */
+export const FADED_PER_TOPIC = 5;
+
+/** GLOBAL byte ceiling on a single `load_memory` render's FULL-text
+ * sections (orphaned watchers + due reminders + pinned + declared-topic
+ * durable bodies + delivered handoffs). Bounds the total so an oversized
+ * boot render never gets spilled by the MCP-client harness to a flat
+ * tool-results file (the on-disk artifact a subagent could read). The
+ * cross-topic FULL accumulation is the dominant unbounded driver — N
+ * loaded topics could each contribute TOPIC_FULL_BUDGET_BYTES — so the
+ * ceiling is shared across those sections, demoting oldest-first to
+ * summary under pressure (render-time only; never mutates status). FULL
+ * bodies that don't fit collapse to summary + a loud warning; per-entry
+ * full text stays reachable via `recall_memory(id)`.
+ *
+ * Default 24 KB sits comfortably under typical harness inline caps with
+ * headroom for the always-summary band + per-topic notes/faded summaries
+ * (each independently bounded). Tunable via `PANTHEON_RENDER_MAX_BYTES`.
+ * A non-positive / unparseable value disables the ceiling (Infinity). */
+export const RENDER_TOTAL_BUDGET_BYTES = resolveRenderBudget();
+
+function resolveRenderBudget(): number {
+  const raw = process.env.PANTHEON_RENDER_MAX_BYTES;
+  if (raw === undefined || raw.trim() === "") return 24 * 1024;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return Number.POSITIVE_INFINITY;
+  return n;
+}
+
 export function byteLen(s: string): number {
   return Buffer.byteLength(s, "utf8");
 }

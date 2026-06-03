@@ -8,6 +8,8 @@ import {
   PIN_FULL_BUDGET_BYTES,
   ALWAYS_SUMMARY_BUDGET_BYTES,
   TOPIC_FULL_BUDGET_BYTES,
+  FADED_PER_TOPIC,
+  RENDER_TOTAL_BUDGET_BYTES,
 } from "../budgets.ts";
 import type { MemoryEntry, MemoryStore } from "../types.ts";
 
@@ -195,12 +197,61 @@ test("declared topic over full budget collapses oldest durable to summary", () =
   expect(r.text).toMatch(/\[chat\/a\][\s\S]*?collapsed/); // oldest collapsed
 });
 
+// --- global render ceiling (spill-fix) ---
+
+test("global ceiling collapses cross-topic full bodies once the shared budget is spent, and warns", () => {
+  // Five topics each holding one 6 KB durable body. Each fits its own
+  // 8 KB per-topic cap, so WITHOUT a global ceiling all five would render
+  // full (~30 KB) — the multi-topic accumulation that spilled in the
+  // incident. The shared 24 KB ceiling fills the earliest-budgeted topics
+  // and forces the last one to summary.
+  const body = "z".repeat(6000);
+  const topics = ["t1", "t2", "t3", "t4", "t5"];
+  const entries = topics.map((t, i) =>
+    entry({ id: `${t}/e`, date: day(i + 1), text: body, topic: t, kind: "rule" }),
+  );
+  const r = renderStore(store(entries), { loaded_topics: topics });
+
+  expect(r.warning).toContain("full-text ceiling");
+  // earliest-budgeted topics render full…
+  expect(r.text).toMatch(/\[t1\/e\][\s\S]*?zzzz/);
+  // …the one past the ceiling collapses to summary (recoverable via recall).
+  expect(r.text).toMatch(/\[t5\/e\][\s\S]*?collapsed/);
+});
+
+test("no global warning when the render fits under the ceiling", () => {
+  const a = entry({ id: "chat/a", date: day(1), text: "small body", topic: "chat", kind: "rule" });
+  const r = renderStore(store([a]), { loaded_topics: ["chat"] });
+  expect(r.text).toContain("small body");
+  expect(r.warning ?? "").not.toContain("full-text ceiling");
+});
+
+// --- faded subsection cap ---
+
+test("faded subsection caps to newest-N per topic with a count of the rest", () => {
+  const entries: MemoryEntry[] = [];
+  for (let i = 1; i <= 8; i++) {
+    entries.push(
+      entry({ id: `chat/f${i}`, date: day(i), text: `faded ${i}`, topic: "chat", kind: "note", status: "faded" }),
+    );
+  }
+  const r = renderStore(store(entries), { loaded_topics: ["chat"] });
+  // newest FADED_PER_TOPIC shown (f8…f4), oldest hidden behind a count.
+  expect(r.text).toContain("[chat/f8]");
+  expect(r.text).toContain("[chat/f4]");
+  expect(r.text).not.toContain("[chat/f3]");
+  expect(r.text).toContain(`+${8 - FADED_PER_TOPIC} older faded`);
+});
+
 // --- constants ---
 
 test("v2 budgets exported", () => {
   expect(PIN_FULL_BUDGET_BYTES).toBe(10240);
   expect(ALWAYS_SUMMARY_BUDGET_BYTES).toBe(8192);
   expect(TOPIC_FULL_BUDGET_BYTES).toBe(8192);
+  expect(FADED_PER_TOPIC).toBe(5);
+  // Default ceiling (no PANTHEON_RENDER_MAX_BYTES override in test env).
+  expect(RENDER_TOTAL_BUDGET_BYTES).toBe(24 * 1024);
   // legacy aliases still resolve.
   expect(ACTIVE_BUDGET_BYTES).toBe(TOPIC_FULL_BUDGET_BYTES);
   expect(CORE_BUDGET_BYTES).toBe(PIN_FULL_BUDGET_BYTES);

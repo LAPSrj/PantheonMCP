@@ -93,10 +93,23 @@ Memory is topic-scoped + lazy (`docs/memory-redesign/5-proposal-v2.md`;
 - **Render (`src/memory/render.ts`):** load × detail ladder — due
   reminders (top), pinned FULL (byte-budgeted; legacy `core` still
   honored as a pin), `always` SUMMARY, declared topics FULL (oldest →
-  summary under budget), notes last-5/topic, delivered handoffs (A∩H≠∅),
-  unloaded topics as menu counts. **Status never auto-mutates from
-  rendering** — collapse is render-time only; `recall_memory(id)` returns
-  full text.
+  summary under budget), notes last-5/topic, faded last-`FADED_PER_TOPIC`
+  + a count, delivered handoffs (A∩H≠∅), unloaded topics as menu counts.
+  **Status never auto-mutates from rendering** — collapse is render-time
+  only; `recall_memory(id)` returns full text.
+- **Global render ceiling (`RENDER_TOTAL_BUDGET_BYTES`, env
+  `PANTHEON_RENDER_MAX_BYTES`, default 24 KB):** a single shared FULL-text
+  budget across the render's full sections (orphaned watchers → due
+  reminders → pinned → declared-topic durable → delivered handoffs),
+  spent in that priority order via `selectFullGlobal` in `render.ts`. The
+  per-section budgets (PIN 10 KB, TOPIC_FULL 8 KB/topic) still apply; the
+  ceiling additionally bounds the cross-topic accumulation (N loaded
+  topics each contributing up to 8 KB) so an oversized boot render can't
+  be spilled by the MCP-client harness to a flat, unisolated
+  `tool-results/*.txt` a subagent could read. Pins are sacrosanct (never
+  globally demoted, but their bytes draw down the shared budget); bodies
+  past the ceiling collapse to summary + a loud `RenderResult.warning`.
+  A non-positive / unparseable env value disables the ceiling (Infinity).
 - **Decay (`src/memory/decay.ts`)** runs at the `load_memory` session
   boundary: handoff matching-session fade (§8), next-session reminder
   consumption, superseded → forgotten. Date-reminder delivery is on the

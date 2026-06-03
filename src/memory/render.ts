@@ -2,8 +2,10 @@ import type { Paths } from "../storage/index.ts";
 import { loadStore } from "./store.ts";
 import {
   ALWAYS_SUMMARY_BUDGET_BYTES,
+  FADED_PER_TOPIC,
   NOTES_PER_TOPIC,
   PIN_FULL_BUDGET_BYTES,
+  RENDER_TOTAL_BUDGET_BYTES,
   TOPIC_FULL_BUDGET_BYTES,
   byteLen,
 } from "./budgets.ts";
@@ -97,6 +99,17 @@ export function renderStore(
   const sections: string[] = [];
   const warnings: string[] = [];
 
+  // §spill-fix — one shared FULL-text ceiling for the whole render, so an
+  // oversized boot payload can't get spilled by the MCP-client harness to
+  // a flat, unisolated tool-results file. Spent in priority order:
+  // orphaned watchers → due reminders → pinned → declared-topic durable →
+  // delivered handoffs. `only_core` peer peeks (pinned + always only) are
+  // already individually bounded, so they skip the shared ceiling.
+  const budget: RenderBudget = {
+    remaining: RENDER_TOTAL_BUDGET_BYTES,
+    globalDemoted: false,
+  };
+
   // A pin (or legacy core) renders FULL every session, regardless of
   // topic. `core` is still honored until the core→pin migration lands.
   const isPinned = (e: MemoryEntry) => Boolean(e.pin) || Boolean(e.core);
@@ -118,8 +131,16 @@ export function renderStore(
       )
       .sort((a, b) => (a.date < b.date ? -1 : 1));
     if (orphaned.length > 0) {
+      // Highest-priority FULL section: gated only by the global ceiling.
+      // A collapsed orphan loses its re-arm payload, so under pressure the
+      // newest still wins the budget first; the rest fall to a summary the
+      // successor can `recall_memory(id)` + `claim_watcher(id)` from.
+      const { summaryIds } = selectFullGlobal(orphaned, Number.POSITIVE_INFINITY, budget);
       sections.push("═══ ORPHANED WATCHERS — re-arm now ═══");
-      for (const e of orphaned) sections.push(formatOrphanedWatcher(e));
+      for (const e of orphaned)
+        sections.push(
+          summaryIds.has(e.id) ? formatSummary(e) : formatOrphanedWatcher(e),
+        );
       sections.push("");
     }
   }
@@ -135,8 +156,10 @@ export function renderStore(
       )
       .sort((a, b) => (a.date < b.date ? -1 : 1));
     if (due.length > 0) {
+      const { summaryIds } = selectFullGlobal(due, Number.POSITIVE_INFINITY, budget);
       sections.push("═══ DUE REMINDERS ═══");
-      for (const e of due) sections.push(formatFull(e));
+      for (const e of due)
+        sections.push(formatFull(e, { collapsed: summaryIds.has(e.id) }));
       sections.push("");
     }
   }
@@ -146,6 +169,13 @@ export function renderStore(
   if (pinned.length > 0) {
     const sorted = sortAscByDate(pinned);
     const { summaryIds, over } = budgetFullNewestFirst(sorted, PIN_FULL_BUDGET_BYTES);
+    // Pins are sacrosanct — the global ceiling never demotes them — but
+    // their full bytes DO draw down the shared budget so the lower-
+    // priority topic/handoff sections see only what's left.
+    const pinnedFullBytes = sorted
+      .filter((e) => !summaryIds.has(e.id))
+      .reduce((s, e) => s + byteLen(e.text), 0);
+    budget.remaining = Math.max(0, budget.remaining - pinnedFullBytes);
     const totalKb = (sumBytes(sorted, (e) => e.text) / 1024).toFixed(1);
     sections.push(
       `═══ PINNED (full text) — ${sorted.length} entries, ${totalKb} KB / ${(
@@ -195,7 +225,7 @@ export function renderStore(
     .sort((a, b) => (a === UNTOPICED ? 1 : b === UNTOPICED ? -1 : a < b ? -1 : 1));
 
   for (const topic of loadedTopicNames) {
-    renderTopic(sections, warnings, topic, byTopic.get(topic)!);
+    renderTopic(sections, warnings, topic, byTopic.get(topic)!, budget);
   }
 
   // --- DELIVERED HANDOFFS (A ∩ H ≠ ∅) ---
@@ -207,8 +237,11 @@ export function renderStore(
     return t !== null && loaded.has(t);
   });
   if (delivered.length > 0) {
+    const deliveredAsc = sortAscByDate(delivered);
+    const { summaryIds } = selectFullGlobal(deliveredAsc, Number.POSITIVE_INFINITY, budget);
     sections.push("═══ DELIVERED HANDOFFS (fade if not needed) ═══");
-    for (const e of sortDescByDate(delivered)) sections.push(formatFull(e));
+    for (const e of sortDescByDate(delivered))
+      sections.push(formatFull(e, { collapsed: summaryIds.has(e.id) }));
     sections.push("");
   }
 
@@ -231,6 +264,16 @@ export function renderStore(
       for (const e of sortDescByDate(forgotten)) sections.push(formatSummary(e));
       sections.push("");
     }
+  }
+
+  // Loud, render-time-only warning when the shared ceiling (not just a
+  // per-section cap) forced FULL bodies down to summaries.
+  if (budget.globalDemoted && Number.isFinite(RENDER_TOTAL_BUDGET_BYTES)) {
+    warnings.push(
+      `Boot render hit the ${(RENDER_TOTAL_BUDGET_BYTES / 1024).toFixed(0)} KB full-text ceiling ` +
+        `(PANTHEON_RENDER_MAX_BYTES) — older full bodies collapsed to summary. ` +
+        `recall_memory(id) for any one in full, or load fewer topics.`,
+    );
   }
 
   return finalize(sections, warnings);
@@ -272,6 +315,7 @@ function renderTopic(
   warnings: string[],
   topic: string,
   entries: MemoryEntry[],
+  budget: RenderBudget,
 ): void {
   const active = entries.filter((e) => e.status === "active");
   const faded = entries.filter((e) => e.status === "faded");
@@ -286,15 +330,16 @@ function renderTopic(
   sections.push(`═══ TOPIC: ${topic} ═══`);
 
   if (durable.length > 0) {
-    const { summaryIds } = budgetFullNewestFirst(durable, TOPIC_FULL_BUDGET_BYTES);
+    // Per-topic 8 KB cap AND the shared global ceiling: a body that the
+    // per-topic budget would keep full but the global ceiling can't fit
+    // collapses to summary (and flips budget.globalDemoted for the warn).
+    const { summaryIds } = selectFullGlobal(durable, TOPIC_FULL_BUDGET_BYTES, budget);
     for (const e of durable.slice().reverse()) {
       sections.push(formatFull(e, { collapsed: summaryIds.has(e.id) }));
     }
     if (summaryIds.size > 0) {
       warnings.push(
-        `topic '${topic}': ${summaryIds.size} entr${summaryIds.size === 1 ? "y" : "ies"} collapsed to summary (over ${(
-          TOPIC_FULL_BUDGET_BYTES / 1024
-        ).toFixed(0)} KB) — recall_memory(id) for full text.`,
+        `topic '${topic}': ${summaryIds.size} entr${summaryIds.size === 1 ? "y" : "ies"} collapsed to summary — recall_memory(id) for full text.`,
       );
     }
   }
@@ -305,14 +350,69 @@ function renderTopic(
   }
 
   if (faded.length > 0) {
+    // Faded ≈ archived: cap to the newest-N summaries + a count of the
+    // rest so a topic with a large faded pile can't render an unbounded
+    // list every session. The older ones stay reachable via list_memory /
+    // find_memory.
+    const fadedDesc = sortDescByDate(faded);
+    const shown = fadedDesc.slice(0, FADED_PER_TOPIC);
+    const hidden = fadedDesc.length - shown.length;
     sections.push("— faded —");
-    for (const e of sortDescByDate(faded)) sections.push(formatSummary(e));
+    for (const e of shown) sections.push(formatSummary(e));
+    if (hidden > 0) {
+      sections.push(`  (+${hidden} older faded — list_memory / find_memory to see)`);
+    }
   }
 
   sections.push("");
 }
 
 // --- budget helpers --------------------------------------------------------
+
+/** Mutable global-ceiling accumulator threaded through every FULL-text
+ * section of one render (orphaned watchers → due reminders → pinned →
+ * declared-topic durable → delivered handoffs). `remaining` is the bytes
+ * still spendable on FULL bodies; once it's exhausted, further bodies
+ * collapse to summary and `globalDemoted` flips so `finalize` can warn. */
+interface RenderBudget {
+  remaining: number;
+  globalDemoted: boolean;
+}
+
+/** Select which entries render FULL under BOTH a per-section cap and the
+ * shared global ceiling, newest-first. An entry that the per-section cap
+ * would have kept full but the GLOBAL ceiling cannot fit sets
+ * `budget.globalDemoted` (drives the loud render warning). Decrements the
+ * shared budget by every FULL body's bytes. Pure w.r.t. entry status —
+ * collapse is render-time only. `perCap === Infinity` means "global
+ * ceiling is the only gate" (used for the otherwise-uncapped watcher /
+ * reminder / handoff sections). */
+function selectFullGlobal(
+  sortedAsc: MemoryEntry[],
+  perCap: number,
+  budget: RenderBudget,
+): { summaryIds: Set<string>; sectionOver: boolean } {
+  const full = new Set<string>();
+  let sectionRunning = 0;
+  for (let i = sortedAsc.length - 1; i >= 0; i--) {
+    const e = sortedAsc[i]!;
+    const cost = byteLen(e.text);
+    const fitsSection = sectionRunning + cost <= perCap || full.size === 0;
+    const fitsGlobal = cost <= budget.remaining;
+    if (fitsSection && fitsGlobal) {
+      full.add(e.id);
+      sectionRunning += cost;
+      budget.remaining -= cost;
+    } else if (fitsSection) {
+      // The per-section cap would have kept this full; the GLOBAL ceiling
+      // is what forced it down. Record it so the render warns loudly.
+      budget.globalDemoted = true;
+    }
+  }
+  const summaryIds = new Set<string>();
+  for (const e of sortedAsc) if (!full.has(e.id)) summaryIds.add(e.id);
+  return { summaryIds, sectionOver: sectionRunning > perCap };
+}
 
 /** Accumulate FULL text newest-first until `budget` is crossed; older
  * entries collapse to summary. Always keeps at least the newest full. */
