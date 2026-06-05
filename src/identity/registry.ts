@@ -251,6 +251,7 @@ export function createPersona(
     ...(input.remote_control !== undefined ? { remote_control: input.remote_control } : {}),
     ...(input.permission_mode !== undefined ? { permission_mode: input.permission_mode } : {}),
     ...(input.model !== undefined ? { model: input.model } : {}),
+    ...(input.effort !== undefined ? { effort: input.effort } : {}),
     ...(input.wt_profile !== undefined ? { wt_profile: input.wt_profile } : {}),
   };
   writePersona(paths, entry);

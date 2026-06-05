@@ -11,7 +11,12 @@ export interface Persona {
   project: string;
   cwd: string;
   platform: Platform;
-  wsl_distro?: string;
+  /** WSL distro to spawn into (`wsl.exe -d <distro>`), platform="wsl"
+   * only. Absent / `null` → summons inherit the summoner's running
+   * distro (`$WSL_DISTRO_NAME`) at spawn time. A pinned value is
+   * validated against the machine's installed distros at write time and
+   * re-checked (with self-healing fallback) at spawn time. */
+  wsl_distro?: string | null;
   launch_command: string;
   launch_args: string[];
   description: string;
@@ -61,6 +66,10 @@ export interface Persona {
    * `--model <value>` to the spawned `claude`. Omitted means the
    * machine default. Cascade: per-call arg > this field > no flag. */
   model?: string | null;
+  /** Default reasoning effort for spawns of this persona. Forwarded as
+   * `--effort <value>` to the spawned `claude`. Omitted means the
+   * model/machine default. Cascade: per-call arg > this field > no flag. */
+  effort?: Effort | null;
   /** Windows Terminal profile name to pin when wt is the spawn
    * adapter. When set, the wt adapter emits `--profile <value>` so
    * the new tab opens in the named WT profile (icon, color scheme,
@@ -90,7 +99,12 @@ export interface PersonaPatch {
   remote_control?: boolean;
   permission_mode?: PermissionMode | null;
   model?: string | null;
+  effort?: Effort | null;
   wt_profile?: string | null;
+  /** Correct or clear the persona's WSL spawn distro. A string must
+   * name an installed distro (validated); `null` clears the field so
+   * summons inherit the summoner's running distro. */
+  wsl_distro?: string | null;
 }
 
 export type Platform = "wsl" | "windows" | "mac" | "linux";
@@ -124,6 +138,19 @@ export const PERMISSION_MODES: ReadonlyArray<PermissionMode> = [
   "bypassPermissions",
 ];
 
+/** Claude Code's `--effort` levels — the reasoning-effort knob for the
+ * spawned session. Forwarded verbatim; no pantheon-side default (omit
+ * the flag → the model/machine default applies). */
+export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+
+export const EFFORTS: ReadonlyArray<Effort> = [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+
 /** Cascade floor — what summoned agents land on when nothing else
  * overrides. `acceptEdits` makes the prompt bar show "accept edits
  * on" from the first turn. */
@@ -137,7 +164,7 @@ export interface PersonaCreate {
   project: string;
   cwd: string;
   platform: Platform;
-  wsl_distro?: string;
+  wsl_distro?: string | null;
   launch_command?: string;
   launch_args?: string[];
   description?: string;
@@ -152,6 +179,7 @@ export interface PersonaCreate {
   remote_control?: boolean;
   permission_mode?: PermissionMode | null;
   model?: string | null;
+  effort?: Effort | null;
   wt_profile?: string;
 }
 

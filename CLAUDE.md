@@ -221,6 +221,33 @@ sessions — not a fleet). Flag lives at `projects/<project>/config.json`
   and stashed on `ctx.single_agent`. The dispatcher also rejects hidden
   tools (`tool_unavailable_single_agent`) so hiding is authoritative.
 
+### WSL spawn distro (`wsl_distro`)
+
+A `platform: "wsl"` persona launches via `wsl.exe -d <distro>` (the wt
+adapter, `src/launcher/adapters/wt.ts`). `wsl_distro` is the distro name;
+a value that isn't installed makes wsl.exe die with
+`WSL_E_DISTRO_NOT_FOUND` (a tab that opens then immediately fails).
+Resolution + validation live in `src/launcher/wsl.ts`:
+
+- **Source.** `wsl_distro` is caller-supplied at `register` / `conjure`
+  (never auto-detected). OMIT it to inherit the summoner's running distro
+  (`$WSL_DISTRO_NAME`) at spawn — the portable default. Pin it only to
+  force a specific distro.
+- **Write guard (`assertWslDistroInstalled`, `src/mcp/handlers/wsl-validate.ts`).**
+  `register` / `conjure` / `update_profile` reject a pinned distro that
+  isn't installed (`wsl_distro_not_found`, with the installed list).
+- **Spawn guard (`resolveSpawnWslDistro`, the B1 guard in `spawnPersona`).**
+  Re-validates before any side effect: a pinned-but-missing distro
+  self-heals to the summoner's running distro when that's valid (surfaced
+  in `stamp_warnings`), else fails loudly. Unpinned → inherit env distro.
+- **Editable post-register.** `update_profile({ wsl_distro })` corrects it;
+  `wsl_distro: null` clears it (back to env inheritance). `wt_profile` is
+  unrelated — it only sets the WT tab's look, NOT the launch distro.
+- **Enumeration seam.** `installedWslDistros(env)` shells out to
+  `wsl.exe -l -q` (UTF-16LE output); `PANTHEON_WSL_DISTROS` (comma list)
+  overrides it for tests. `null` return (non-WSL host) → can't verify →
+  never blocks.
+
 ### Storage atomicity
 
 Every JSON write goes through `writeJsonAtomic` (`src/storage/json.ts`):

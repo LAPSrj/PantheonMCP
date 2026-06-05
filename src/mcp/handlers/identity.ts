@@ -1,6 +1,7 @@
 import {
   IdentityError,
   PERMISSION_MODES,
+  EFFORTS,
   forkPersona,
   mergePersona,
   listPersonas,
@@ -25,9 +26,14 @@ import {
   asStringArray,
   asStringRequired,
 } from "../types.ts";
+import { assertWslDistroInstalled } from "./wsl-validate.ts";
 
 function isPermissionModeArg(v: unknown): v is PermissionMode {
   return typeof v === "string" && (PERMISSION_MODES as readonly string[]).includes(v);
+}
+
+function isEffortArg(v: unknown): boolean {
+  return typeof v === "string" && (EFFORTS as readonly string[]).includes(v);
 }
 
 export const whoami: Handler = async (args, ctx) => {
@@ -62,6 +68,10 @@ export const register: Handler = async (args, ctx) => {
   const username = asStringRequired(args.username, "username");
   const project = asStringRequired(args.project, "project");
   const cwd = asString(args.cwd) ?? process.cwd();
+  const platform = (asString(args.platform) as never) ?? ctx.platform;
+  // B2 write-time guard: reject a registration pinned to a non-existent
+  // WSL distro (no-op for non-wsl / omitted / unverifiable).
+  assertWslDistroInstalled(asString(args.wsl_distro), platform, ctx.spawn_env);
   const result = transitionRegister(
     ctx.paths,
     ctx.session,
@@ -69,7 +79,7 @@ export const register: Handler = async (args, ctx) => {
       username,
       project,
       cwd,
-      platform: (asString(args.platform) as never) ?? ctx.platform,
+      platform,
       ...(asString(args.wsl_distro) !== undefined ? { wsl_distro: asString(args.wsl_distro)! } : {}),
       ...(asString(args.launch_command) !== undefined
         ? { launch_command: asString(args.launch_command)! }
@@ -225,11 +235,34 @@ export const update_profile: Handler = async (args, ctx) => {
       patch.permission_mode = args.permission_mode;
     }
   }
+  if ("effort" in args) {
+    if (args.effort === null) {
+      patch.effort = null;
+    } else if (isEffortArg(args.effort)) {
+      patch.effort = args.effort as never;
+    }
+  }
   if ("wt_profile" in args) {
     if (args.wt_profile === null) {
       patch.wt_profile = null;
     } else if (typeof args.wt_profile === "string") {
       patch.wt_profile = args.wt_profile;
+    }
+  }
+  if ("wsl_distro" in args) {
+    if (args.wsl_distro === null) {
+      // Clear → future summons inherit the summoner's running distro.
+      patch.wsl_distro = null;
+    } else if (typeof args.wsl_distro === "string") {
+      // Validate against the target persona's platform (not the caller's
+      // session platform) — only wsl personas use the field.
+      const target = readPersona(ctx.paths, username);
+      assertWslDistroInstalled(
+        args.wsl_distro,
+        target?.platform ?? ctx.platform,
+        ctx.spawn_env,
+      );
+      patch.wsl_distro = args.wsl_distro;
     }
   }
   const updated = patchPersona(ctx.paths, username, patch);

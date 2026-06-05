@@ -210,6 +210,42 @@ test("update_profile permission_mode: null clears the field", async () => {
   expect(r.payload.permission_mode).toBeNull();
 });
 
+test("update_profile persists effort and round-trips; null clears it", async () => {
+  createPersona(ctx.paths, {
+    username: "moth-whistle", project: "pantheon", cwd: "/work", platform: "linux",
+    description: "x", expertise: ["x"], owns: ["/x"],
+  });
+  await call("claim", { username: "moth-whistle" });
+  const set = await call("update_profile", { effort: "high" });
+  expect(set.ok).toBe(true);
+  expect(set.payload.effort).toBe("high");
+  const { readPersona } = await import("../../identity/index.ts");
+  expect(readPersona(ctx.paths, "moth-whistle")?.effort).toBe("high");
+
+  const cleared = await call("update_profile", { effort: null });
+  expect(cleared.ok).toBe(true);
+  expect(cleared.payload.effort).toBeNull();
+});
+
+test("update_profile silently ignores an out-of-enum effort (mirrors permission_mode)", async () => {
+  // The update_profile field is `oneOf: [enum, null]`; the dispatcher's
+  // JSON-Schema subset doesn't deep-validate oneOf branches, so the
+  // handler is the guard — it only persists a recognized level, making a
+  // bad value a no-op rather than a hard reject. Same contract as
+  // permission_mode. (A per-call summon effort IS hard-rejected — that
+  // field is a bare enum, not oneOf — see spawn.test.ts.)
+  createPersona(ctx.paths, {
+    username: "moth-whistle", project: "pantheon", cwd: "/work", platform: "linux",
+    description: "x", expertise: ["x"], owns: ["/x"], effort: "low",
+  });
+  await call("claim", { username: "moth-whistle" });
+  const r = await call("update_profile", { effort: "ludicrous" });
+  expect(r.ok).toBe(true);
+  const { readPersona } = await import("../../identity/index.ts");
+  // Unchanged — the bad value was ignored, the prior default preserved.
+  expect(readPersona(ctx.paths, "moth-whistle")?.effort).toBe("low");
+});
+
 test("session_info reports current state", async () => {
   const r = await call("session_info");
   expect(r.ok).toBe(true);
@@ -899,4 +935,107 @@ test("context-pressure: a memory save resets the counter; the next call surfaces
     if (prev === undefined) delete process.env.PANTHEON_PRESSURE_SOFT_TOOLS;
     else process.env.PANTHEON_PRESSURE_SOFT_TOOLS = prev;
   }
+});
+
+// --- WSL distro write-time validation (register / conjure / update_profile) ---
+
+/** A ctx whose spawn_env declares the installed WSL distros via the
+ * `PANTHEON_WSL_DISTROS` seam, so validation is deterministic and never
+ * shells out to the host's real `wsl.exe`. */
+function wslSeamCtx(installed: string): HandlerContext {
+  return createContext({
+    paths: ctx.paths,
+    session: ctx.session,
+    watchdog: ctx.watchdog,
+    parent_pid: 99999,
+    platform: "wsl",
+    spawn_env: { PANTHEON_WSL_DISTROS: installed } as NodeJS.ProcessEnv,
+  });
+}
+
+test("register: a pinned wsl_distro that isn't installed is rejected", async () => {
+  const c = wslSeamCtx("Ubuntu-22.04,Debian");
+  const r = await dispatch(
+    "register",
+    { username: "wslpike", project: "pantheon", cwd: "/w", platform: "wsl", wsl_distro: "Ubuntu" },
+    c,
+  );
+  const payload = JSON.parse(r.content[0]!.text) as Record<string, unknown>;
+  expect(r.isError).toBe(true);
+  expect(payload.error).toBe("wsl_distro_not_found");
+  expect((payload.installed as string[])).toEqual(["Ubuntu-22.04", "Debian"]);
+  const { readPersona } = await import("../../identity/index.ts");
+  expect(readPersona(ctx.paths, "wslpike")).toBeNull();
+});
+
+test("register: an installed wsl_distro is accepted; omitting it is allowed (no longer required)", async () => {
+  const c = wslSeamCtx("Ubuntu-22.04,Debian");
+  const ok = await dispatch(
+    "register",
+    { username: "wslpike", project: "pantheon", cwd: "/w", platform: "wsl", wsl_distro: "Ubuntu-22.04" },
+    c,
+  );
+  expect(ok.isError).toBeFalsy();
+
+  const omitted = await dispatch(
+    "register",
+    { username: "barepike", project: "pantheon", cwd: "/w2", platform: "wsl" },
+    c,
+  );
+  expect(omitted.isError).toBeFalsy();
+  const { readPersona } = await import("../../identity/index.ts");
+  expect(readPersona(ctx.paths, "barepike")?.wsl_distro).toBeUndefined();
+});
+
+test("update_profile: corrects a bad wsl_distro to an installed one", async () => {
+  // Seed a persona carrying the bad value directly (as a hand-edit / legacy
+  // entry would), then fix it through the supported API.
+  createPersona(ctx.paths, {
+    username: "fixpike", project: "pantheon", cwd: "/w", platform: "wsl",
+    wsl_distro: "Ubuntu", description: "d", expertise: ["x"], owns: ["/w"],
+  });
+  const c = wslSeamCtx("Ubuntu-22.04,Debian");
+  const r = await dispatch(
+    "update_profile",
+    { username: "fixpike", wsl_distro: "Ubuntu-22.04" },
+    c,
+  );
+  expect(r.isError).toBeFalsy();
+  const { readPersona } = await import("../../identity/index.ts");
+  expect(readPersona(ctx.paths, "fixpike")?.wsl_distro).toBe("Ubuntu-22.04");
+});
+
+test("update_profile: rejects setting wsl_distro to a non-existent distro", async () => {
+  createPersona(ctx.paths, {
+    username: "fixpike", project: "pantheon", cwd: "/w", platform: "wsl",
+    wsl_distro: "Ubuntu-22.04", description: "d", expertise: ["x"], owns: ["/w"],
+  });
+  const c = wslSeamCtx("Ubuntu-22.04,Debian");
+  const r = await dispatch(
+    "update_profile",
+    { username: "fixpike", wsl_distro: "Mint" },
+    c,
+  );
+  const payload = JSON.parse(r.content[0]!.text) as Record<string, unknown>;
+  expect(r.isError).toBe(true);
+  expect(payload.error).toBe("wsl_distro_not_found");
+  // Unchanged.
+  const { readPersona } = await import("../../identity/index.ts");
+  expect(readPersona(ctx.paths, "fixpike")?.wsl_distro).toBe("Ubuntu-22.04");
+});
+
+test("update_profile: wsl_distro:null clears the field (revert to env inheritance)", async () => {
+  createPersona(ctx.paths, {
+    username: "fixpike", project: "pantheon", cwd: "/w", platform: "wsl",
+    wsl_distro: "Ubuntu-22.04", description: "d", expertise: ["x"], owns: ["/w"],
+  });
+  const c = wslSeamCtx("Ubuntu-22.04,Debian");
+  const r = await dispatch(
+    "update_profile",
+    { username: "fixpike", wsl_distro: null },
+    c,
+  );
+  expect(r.isError).toBeFalsy();
+  const { readPersona } = await import("../../identity/index.ts");
+  expect(readPersona(ctx.paths, "fixpike")?.wsl_distro).toBeNull();
 });

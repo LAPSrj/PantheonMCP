@@ -345,6 +345,56 @@ test("permission_mode: --permission-mode flag is always present in argv", async 
   expect(args).toContain("--permission-mode");
 });
 
+// --- effort cascade ---
+
+function effortFromArgs(args: string[]): string | null {
+  const i = args.indexOf("--effort");
+  return i >= 0 && i + 1 < args.length ? args[i + 1]! : null;
+}
+
+test("effort: no --effort flag when nothing sets it", async () => {
+  fixturePersona();
+  await call("summon", { username: "moth-whistle" });
+  expect(lastSpawnArgs()).not.toContain("--effort");
+});
+
+test("effort: per-call arg forwards --effort <level>", async () => {
+  fixturePersona();
+  await call("summon", { username: "moth-whistle", effort: "medium" });
+  expect(effortFromArgs(lastSpawnArgs())).toBe("medium");
+});
+
+test("effort: persona.effort default forwards when no per-call arg", async () => {
+  fixturePersona({ effort: "high" });
+  await call("summon", { username: "moth-whistle" });
+  expect(effortFromArgs(lastSpawnArgs())).toBe("high");
+});
+
+test("effort: per-call arg beats persona.effort", async () => {
+  fixturePersona({ effort: "low" });
+  await call("summon", { username: "moth-whistle", effort: "max" });
+  expect(effortFromArgs(lastSpawnArgs())).toBe("max");
+});
+
+test("effort: invalid per-call value rejected at dispatch (no spawn)", async () => {
+  fixturePersona();
+  const r = await call("summon", { username: "moth-whistle", effort: "turbo" });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("invalid_args");
+  expect(recorder.length).toBe(0);
+});
+
+test("effort: conjure forwards the per-call effort to the first spawn", async () => {
+  await call("conjure", {
+    username: "effortfern",
+    cwd: "/work/effort",
+    project: "pantheon",
+    prompt: "x",
+    effort: "xhigh",
+  });
+  expect(effortFromArgs(lastSpawnArgs())).toBe("xhigh");
+});
+
 // --- summon project gate ---
 
 test("summon errors cross_project_blocked when caller's persona is in another project", async () => {
@@ -847,6 +897,111 @@ test("summon: writes hasTrustDialogAccepted=true to claude_config_path before sp
   const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8")) as Record<string, unknown>;
   const projects = cfg.projects as Record<string, Record<string, unknown>>;
   expect(projects["/work/moth"]?.hasTrustDialogAccepted).toBe(true);
+});
+
+// --- WSL distro guard (B1) ---
+
+/** Build a ctx whose spawn_env declares the installed WSL distros (the
+ * `PANTHEON_WSL_DISTROS` test seam) plus the summoner's running distro,
+ * and detects the wt adapter so the distro lands in the recorded argv. */
+function wslCtx(over: NodeJS.ProcessEnv) {
+  return createContext({
+    paths: ctx.paths,
+    session: ctx.session,
+    watchdog: ctx.watchdog,
+    parent_pid: ctx.parent_pid,
+    platform: "wsl",
+    spawn_executor: makeMockExecutor(() => mockStderr),
+    stderr_probe_ms: 5,
+    spawn_env: { WT_SESSION: "test", ...over } as NodeJS.ProcessEnv,
+  });
+}
+
+/** Distro that follows `wsl.exe -d` in a wt-adapter argv. */
+function wslDistroFromArgs(args: string[]): string | null {
+  const i = args.indexOf("wsl.exe");
+  return i >= 0 && args[i + 1] === "-d" ? (args[i + 2] ?? null) : null;
+}
+
+test("summon: pinned wsl_distro that IS installed lands in the wt argv", async () => {
+  const prev = process.env.PANTHEON_WT_SCRIPT_DIR;
+  process.env.PANTHEON_WT_SCRIPT_DIR = tmpDir;
+  try {
+    fixturePersona({ platform: "wsl", wsl_distro: "Ubuntu-24.04" });
+    const c = wslCtx({ PANTHEON_WSL_DISTROS: "Ubuntu-22.04,Ubuntu-24.04,Debian", WSL_DISTRO_NAME: "Ubuntu-22.04" });
+    const r = await dispatch("summon", { username: "moth-whistle" }, c);
+    expect(r.isError).toBeFalsy();
+    expect(wslDistroFromArgs(recorder[recorder.length - 1]!.args)).toBe("Ubuntu-24.04");
+  } finally {
+    if (prev === undefined) delete process.env.PANTHEON_WT_SCRIPT_DIR;
+    else process.env.PANTHEON_WT_SCRIPT_DIR = prev;
+  }
+});
+
+test("summon: pinned-but-missing wsl_distro self-heals to the running distro + warns", async () => {
+  const prev = process.env.PANTHEON_WT_SCRIPT_DIR;
+  process.env.PANTHEON_WT_SCRIPT_DIR = tmpDir;
+  try {
+    // The Underwright case: pinned "Ubuntu", machine only has Ubuntu-22.04.
+    fixturePersona({ platform: "wsl", wsl_distro: "Ubuntu" });
+    const c = wslCtx({ PANTHEON_WSL_DISTROS: "Ubuntu-22.04,Debian", WSL_DISTRO_NAME: "Ubuntu-22.04" });
+    const r = await dispatch("summon", { username: "moth-whistle" }, c);
+    const payload = JSON.parse(r.content[0]!.text) as Record<string, unknown>;
+    expect(r.isError).toBeFalsy();
+    // Spawned into the running distro, not the bad pinned one.
+    expect(wslDistroFromArgs(recorder[recorder.length - 1]!.args)).toBe("Ubuntu-22.04");
+    // And surfaced a non-fatal warning so the operator can fix the persona.
+    const warnings = (payload.stamp_warnings as string[]) ?? [];
+    expect(warnings.some((w) => w.includes("Ubuntu") && w.includes("not installed"))).toBe(true);
+  } finally {
+    if (prev === undefined) delete process.env.PANTHEON_WT_SCRIPT_DIR;
+    else process.env.PANTHEON_WT_SCRIPT_DIR = prev;
+  }
+});
+
+test("summon: pinned-missing wsl_distro with NO valid fallback fails loudly (no spawn)", async () => {
+  fixturePersona({ platform: "wsl", wsl_distro: "Ubuntu" });
+  // Running distro is also absent from the installed set → no fallback.
+  const c = wslCtx({ PANTHEON_WSL_DISTROS: "Debian,docker-desktop", WSL_DISTRO_NAME: "Ubuntu" });
+  const r = await dispatch("summon", { username: "moth-whistle" }, c);
+  const payload = JSON.parse(r.content[0]!.text) as Record<string, unknown>;
+  expect(r.isError).toBe(true);
+  expect(payload.error).toBe("wsl_distro_not_found");
+  // The installed list is surfaced for the operator.
+  expect((payload.installed as string[])).toEqual(["Debian", "docker-desktop"]);
+  // No doomed tab opened.
+  expect(recorder.length).toBe(0);
+});
+
+test("summon: unpinned wsl persona inherits the summoner's running distro", async () => {
+  const prev = process.env.PANTHEON_WT_SCRIPT_DIR;
+  process.env.PANTHEON_WT_SCRIPT_DIR = tmpDir;
+  try {
+    fixturePersona({ platform: "wsl" }); // no wsl_distro
+    const c = wslCtx({ PANTHEON_WSL_DISTROS: "Ubuntu-22.04,Debian", WSL_DISTRO_NAME: "Ubuntu-22.04" });
+    const r = await dispatch("summon", { username: "moth-whistle" }, c);
+    expect(r.isError).toBeFalsy();
+    expect(wslDistroFromArgs(recorder[recorder.length - 1]!.args)).toBe("Ubuntu-22.04");
+  } finally {
+    if (prev === undefined) delete process.env.PANTHEON_WT_SCRIPT_DIR;
+    else process.env.PANTHEON_WT_SCRIPT_DIR = prev;
+  }
+});
+
+test("conjure: rejects a new persona pinned to a non-existent wsl_distro (not registered)", async () => {
+  const c = wslCtx({ PANTHEON_WSL_DISTROS: "Ubuntu-22.04,Debian" });
+  const r = await dispatch(
+    "conjure",
+    { username: "wslfern", cwd: "/work/wslfern", project: "pantheon", prompt: "x", platform: "wsl", wsl_distro: "Ubuntu" },
+    c,
+  );
+  const payload = JSON.parse(r.content[0]!.text) as Record<string, unknown>;
+  expect(r.isError).toBe(true);
+  expect(payload.error).toBe("wsl_distro_not_found");
+  // Guard fired BEFORE createPersona — nothing persisted.
+  const { readPersona } = await import("../../identity/index.ts");
+  expect(readPersona(ctx.paths, "wslfern")).toBeNull();
+  expect(recorder.length).toBe(0);
 });
 
 test("summon: trust call is idempotent on a second summon to the same cwd", async () => {

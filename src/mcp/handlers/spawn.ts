@@ -3,11 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import {
   DEFAULT_PERMISSION_MODE,
+  EFFORTS,
   IdentityError,
   PERMISSION_MODES,
   createPersona,
   readPersona,
   stampSummoned,
+  type Effort,
   type PermissionMode,
 } from "../../identity/index.ts";
 import {
@@ -17,15 +19,18 @@ import {
   freshTab,
   getTabGeometry,
   getWindowState,
+  installedWslDistros,
   paneCount,
   predictNextTabIndex,
   recordSpawn,
   resolveSpawnPlan,
+  resolveSpawnWslDistro,
   type SpawnArgs,
   type SpawnTarget,
   type SplitDecision,
   type TabGeometry,
 } from "../../launcher/index.ts";
+import { assertWslDistroInstalled } from "./wsl-validate.ts";
 import { buildSummonBootstrap } from "../../responses/bootstrap.ts";
 import { DEFAULT_REST_TIMEOUT_SECONDS } from "../../watchdog/index.ts";
 import {
@@ -133,6 +138,43 @@ export async function spawnPersona(
   // so a dead supervisor can't pin a target forever.
   const restTimeout: number | "never" = parseRestTimeout(restTimeoutRaw, blockSelfExit);
 
+  // WSL distro pre-flight (B1 guard). Resolve + validate the spawn distro
+  // BEFORE any verification-row insert or spawn side effect, so a persona
+  // pinned to a non-existent distro fails loudly here instead of opening a
+  // doomed tab that dies with WSL_E_DISTRO_NOT_FOUND. Enumeration is
+  // best-effort (null → can't verify → passthrough); an unpinned persona
+  // inherits the summoner's running distro unchanged; a pinned-but-missing
+  // distro self-heals to the summoner's running distro when that's valid.
+  let wslDistro: string | undefined;
+  let wslDistroWarning: string | null = null;
+  if (persona.platform === "wsl") {
+    const resolution = resolveSpawnWslDistro({
+      configured: persona.wsl_distro,
+      envDistro: ctx.spawn_env.WSL_DISTRO_NAME,
+      installed: installedWslDistros(ctx.spawn_env),
+    });
+    if (resolution.unresolved) {
+      throw new ToolError(
+        "wsl_distro_not_found",
+        `Cannot summon '${persona.username}': its pinned wsl_distro ` +
+          `'${resolution.unresolved.configured}' is not installed on this ` +
+          `machine, and the summoner's running distro is not a valid ` +
+          `fallback. Installed distros: ` +
+          `${resolution.unresolved.installed.join(", ") || "(none)"}. ` +
+          `Fix it with update_profile({ username: '${persona.username}', ` +
+          `wsl_distro: '<installed name>' }), or clear it (wsl_distro: null) ` +
+          `to inherit the summoner's running distro automatically.`,
+        {
+          persona: persona.username,
+          configured: resolution.unresolved.configured,
+          installed: resolution.unresolved.installed,
+        },
+      );
+    }
+    wslDistro = resolution.distro;
+    wslDistroWarning = resolution.warning ?? null;
+  }
+
   // Build the exec command from the persona profile.
   const launchCommand = persona.launch_command || "claude";
   const launchArgs = [...(persona.launch_args ?? [])];
@@ -179,6 +221,12 @@ export async function spawnPersona(
   // Model cascade: per-call arg > persona.model > no flag (machine default).
   const model = resolveModel(args.model, persona);
   if (model) launchArgs.push("--model", model);
+
+  // Effort cascade: per-call arg > persona.effort > no flag (model default).
+  // Forwarded as `--effort <level>` so the spawned `claude` boots at the
+  // requested reasoning effort (low | medium | high | xhigh | max).
+  const effort = resolveEffort(args.effort, persona);
+  if (effort) launchArgs.push("--effort", effort);
 
   if (resume && persona.resume_session_id) {
     launchArgs.push("--resume", persona.resume_session_id);
@@ -353,12 +401,10 @@ export async function spawnPersona(
   // silently relaunches under the default ~/.claude account.
   if (profile) execEnv.PANTHEON_PROFILE = profile;
 
-  // WSL targets need the wt adapter to wrap exec in `wsl.exe -d
-  // <distro> -- bash -lc 'cd <cwd> && exec ...'` (see wt.ts notes
-  // for the wt.exe error 0x8007010b background). Detect: persona
-  // platform == "wsl" with a wsl_distro field set.
-  const wslDistro =
-    persona.platform === "wsl" ? (persona.wsl_distro ?? ctx.spawn_env.WSL_DISTRO_NAME) : undefined;
+  // WSL distro for the wt adapter (`wsl.exe -d <distro> -- bash ...`,
+  // see wt.ts notes for the wt.exe error 0x8007010b background) was
+  // resolved + validated in the B1 guard near the top of this function;
+  // `wslDistro` holds the effective value (undefined for non-wsl).
 
   // Pane-geometry policy. For split-pane spawns we read the per-tab
   // geometry, decide where the next pane lands (direction +
@@ -436,6 +482,7 @@ export async function spawnPersona(
   // spawn — the user already has a tab open. Surface the error in the
   // response if it actually trips.
   const stampWarnings: string[] = [];
+  if (wslDistroWarning) stampWarnings.push(wslDistroWarning);
   if (trustResult.warning) stampWarnings.push(trustResult.warning);
   try {
     recordSpawn(ctx.paths, windowName, {
@@ -665,6 +712,21 @@ function resolveModel(raw: unknown, persona: Persona): string | null {
   return null;
 }
 
+function isEffort(v: unknown): v is Effort {
+  return typeof v === "string" && (EFFORTS as readonly string[]).includes(v);
+}
+
+/** Resolve the effective reasoning effort for a spawn:
+ *   1. caller-supplied `args.effort`
+ *   2. `persona.effort`
+ *   3. none (no `--effort` flag → model/machine default)
+ * Invalid values fall through to the next layer. */
+function resolveEffort(raw: unknown, persona: Persona): Effort | null {
+  if (isEffort(raw)) return raw;
+  if (persona.effort != null && isEffort(persona.effort)) return persona.effort;
+  return null;
+}
+
 export const summon: Handler = (args, ctx) => performSummon(args, ctx, { any_project: false });
 export const summon_any: Handler = (args, ctx) => performSummon(args, ctx, { any_project: true });
 
@@ -682,6 +744,12 @@ async function performConjure(
   const project = asStringRequired(args.project, "project");
   const prompt = asStringRequired(args.prompt, "prompt");
   const platform = (asString(args.platform) as never) ?? ctx.platform;
+
+  // B2 write-time guard: reject a new persona pinned to a non-existent
+  // WSL distro BEFORE registering it, so we never persist a doomed
+  // persona. No-op when platform isn't wsl, no distro given, or
+  // enumeration is unavailable.
+  assertWslDistroInstalled(asString(args.wsl_distro), platform, ctx.spawn_env);
 
   if (!opts.any_project) {
     const claimed = ctx.session.claimedUsername;
@@ -735,6 +803,7 @@ async function performConjure(
       target: args.target,
       rest_timeout: args.rest_timeout,
       ...(asString(args.model) !== undefined ? { model: asString(args.model) } : {}),
+      ...(asString(args.effort) !== undefined ? { effort: asString(args.effort) } : {}),
       ...(asString(args.profile) !== undefined ? { profile: asString(args.profile) } : {}),
       ...(asBoolean(args.confirm_new_profile) !== undefined ? { confirm_new_profile: asBoolean(args.confirm_new_profile) } : {}),
       ...(asBoolean(args.block_self_exit) !== undefined ? { block_self_exit: asBoolean(args.block_self_exit) } : {}),

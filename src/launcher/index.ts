@@ -57,3 +57,11 @@ export {
 } from "./spawn.ts";
 
 export { ensureCwdTrusted, type TrustResult } from "./trust.ts";
+
+export {
+  parseWslDistroList,
+  installedWslDistros,
+  isWslDistroInstalled,
+  resolveSpawnWslDistro,
+  type WslDistroResolution,
+} from "./wsl.ts";

@@ -32,6 +32,15 @@ const MODEL_SCHEMA = {
     "Claude model codename forwarded as `--model` to the spawned `claude` (e.g. `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5-20251001`). Omit to use the machine default.",
 } as const;
 
+const EFFORT_ENUM = ["low", "medium", "high", "xhigh", "max"] as const;
+
+const EFFORT_SCHEMA = {
+  type: "string",
+  enum: EFFORT_ENUM as unknown as string[],
+  description:
+    "Reasoning effort forwarded as `--effort <level>` to the spawned `claude` (low | medium | high | xhigh | max). Omit to use the model/machine default. Cascade: per-call arg > persona.effort > no flag.",
+} as const;
+
 const PROFILE_SCHEMA = {
   type: "string",
   description:
@@ -138,7 +147,11 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
         project: { type: "string" },
         cwd: { type: "string", description: "Absolute path. Defaults to process.cwd()." },
         platform: { type: "string", enum: PLATFORM_ENUM as unknown as string[] },
-        wsl_distro: { type: "string", description: "Required when platform='wsl'." },
+        wsl_distro: {
+          type: "string",
+          description:
+            "WSL distro to spawn into (`wsl.exe -d <distro>`), platform='wsl' only. OPTIONAL: omit to inherit the summoner's running distro ($WSL_DISTRO_NAME) at spawn time — the portable, recommended default. Set it only to PIN a specific distro; a name that isn't installed on this machine is rejected at write (and re-validated, with self-healing fallback, at summon). Correct or clear it later via update_profile.",
+        },
         launch_command: { type: "string", description: "Default 'claude'." },
         launch_args: { type: "array", items: { type: "string" } },
         description: { type: "string" },
@@ -210,7 +223,7 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
   {
     name: "update_profile",
     description:
-      "Patch your persona's metadata (description, expertise, owns, mode, color, launch_command, launch_args). Defaults to your claimed persona; pass `username` to target someone else (rare). Pass `color: null` to clear.",
+      "Patch your persona's metadata (description, expertise, owns, mode, color, launch_command, launch_args, channels, remote_control, permission_mode, model, effort, wt_profile, wsl_distro). Defaults to your claimed persona; pass `username` to target someone else (rare). Pass `color: null` / `wsl_distro: null` etc. to clear a nullable field.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -240,10 +253,20 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
           description:
             "Default model for spawns of this persona. `null` clears the field (cascade falls back to machine default).",
         },
+        effort: {
+          oneOf: [EFFORT_SCHEMA, { type: "null" }],
+          description:
+            "Default reasoning effort for spawns of this persona, forwarded as `--effort <level>`. `null` clears the field (cascade falls back to the model/machine default).",
+        },
         wt_profile: {
           oneOf: [{ type: "string" }, { type: "null" }],
           description:
-            "Windows Terminal profile name to pin for spawns of this persona (e.g. 'Ubuntu-22.04', 'Ubuntu Dev'). When set, the wt adapter emits `--profile <value>` so the new tab opens in the named WT profile rather than the user's default. Other adapters ignore. `null` clears the field.",
+            "Windows Terminal profile name to pin for spawns of this persona (e.g. 'Ubuntu-22.04', 'Ubuntu Dev'). When set, the wt adapter emits `--profile <value>` so the new tab opens in the named WT profile rather than the user's default. NOTE: this only sets the WT tab profile (icon/scheme/shell) — it does NOT change which WSL distro the agent launches into. For that, use `wsl_distro`. Other adapters ignore. `null` clears the field.",
+        },
+        wsl_distro: {
+          oneOf: [{ type: "string" }, { type: "null" }],
+          description:
+            "Correct (or clear) the persona's WSL spawn distro — the `wsl.exe -d <distro>` launch arg for platform='wsl' personas. A string MUST name a distro installed on this machine (validated against `wsl.exe -l -q`) or the call is rejected `wsl_distro_not_found` with the installed list. `null` clears it so summons inherit the summoner's running distro. This is the supported way to fix a persona spawning into a non-existent distro WITHOUT hand-editing its JSON. Distinct from `wt_profile`, which only sets the terminal tab's look.",
         },
       },
     },
@@ -910,6 +933,7 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
         },
         permission_mode: PERMISSION_MODE_SCHEMA,
         model: MODEL_SCHEMA,
+        effort: EFFORT_SCHEMA,
         profile: PROFILE_SCHEMA,
         confirm_new_profile: CONFIRM_NEW_PROFILE_SCHEMA,
         block_self_exit: BLOCK_SELF_EXIT_SCHEMA,
@@ -951,6 +975,7 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
         },
         permission_mode: PERMISSION_MODE_SCHEMA,
         model: MODEL_SCHEMA,
+        effort: EFFORT_SCHEMA,
         profile: PROFILE_SCHEMA,
         confirm_new_profile: CONFIRM_NEW_PROFILE_SCHEMA,
         block_self_exit: BLOCK_SELF_EXIT_SCHEMA,
@@ -976,7 +1001,11 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
         project: { type: "string" },
         prompt: { type: "string" },
         platform: { type: "string", enum: PLATFORM_ENUM as unknown as string[] },
-        wsl_distro: { type: "string" },
+        wsl_distro: {
+          type: "string",
+          description:
+            "WSL distro for the new persona (`wsl.exe -d <distro>`, platform='wsl'). OPTIONAL — omit to inherit the summoner's running distro at spawn; a pinned name is validated against the installed distros and rejected `wsl_distro_not_found` if absent.",
+        },
         launch_command: { type: "string" },
         launch_args: { type: "array", items: { type: "string" } },
         color: { type: "string", enum: COLOR_ENUM as unknown as string[] },
@@ -997,6 +1026,10 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
         model: {
           ...MODEL_SCHEMA,
           description: "Initial model persisted on the new persona (also used for this first spawn).",
+        },
+        effort: {
+          ...EFFORT_SCHEMA,
+          description: "Reasoning effort for this first spawn, forwarded as `--effort <level>` (low | medium | high | xhigh | max). Set a persistent default later via update_profile.",
         },
         profile: PROFILE_SCHEMA,
         confirm_new_profile: CONFIRM_NEW_PROFILE_SCHEMA,
@@ -1025,7 +1058,11 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
         project: { type: "string" },
         prompt: { type: "string" },
         platform: { type: "string", enum: PLATFORM_ENUM as unknown as string[] },
-        wsl_distro: { type: "string" },
+        wsl_distro: {
+          type: "string",
+          description:
+            "WSL distro for the new persona (`wsl.exe -d <distro>`, platform='wsl'). OPTIONAL — omit to inherit the summoner's running distro at spawn; a pinned name is validated against the installed distros and rejected `wsl_distro_not_found` if absent.",
+        },
         launch_command: { type: "string" },
         launch_args: { type: "array", items: { type: "string" } },
         color: { type: "string", enum: COLOR_ENUM as unknown as string[] },
@@ -1046,6 +1083,10 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
         model: {
           ...MODEL_SCHEMA,
           description: "Initial model persisted on the new persona (also used for this first spawn).",
+        },
+        effort: {
+          ...EFFORT_SCHEMA,
+          description: "Reasoning effort for this first spawn, forwarded as `--effort <level>` (low | medium | high | xhigh | max). Set a persistent default later via update_profile.",
         },
         profile: PROFILE_SCHEMA,
         confirm_new_profile: CONFIRM_NEW_PROFILE_SCHEMA,
