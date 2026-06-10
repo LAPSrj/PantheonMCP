@@ -400,6 +400,18 @@ export async function spawnPersona(
   // a remanifest then drops `--profile`, loses CLAUDE_CONFIG_DIR, and
   // silently relaunches under the default ~/.claude account.
   if (profile) execEnv.PANTHEON_PROFILE = profile;
+  // Launch-param preservation — persist the spawn-time-resolved model /
+  // effort / permission_mode so a later `remanifest` of this agent can
+  // inherit the SAME params it was launched under (with per-call
+  // overrides), rather than silently falling back to the persona
+  // defaults. Mirrors PANTHEON_PROFILE above. Forward-only: agents
+  // summoned before this shipped carry none of these, so their
+  // remanifest still falls through to the persona cascade. NOTE: these
+  // capture LAUNCH-time params — a runtime `/model` (or effort) change
+  // made inside CC is invisible to the MCP server and is not reflected.
+  if (model) execEnv.PANTHEON_MODEL = model;
+  if (effort) execEnv.PANTHEON_EFFORT = effort;
+  execEnv.PANTHEON_PERMISSION_MODE = permissionMode;
 
   // WSL distro for the wt adapter (`wsl.exe -d <distro> -- bash ...`,
   // see wt.ts notes for the wt.exe error 0x8007010b background) was

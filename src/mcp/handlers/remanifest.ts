@@ -117,6 +117,24 @@ export const remanifest: Handler = async (args, ctx) => {
   // remanifest still can't recover the profile; this is forward-only.
   const inheritedProfile = asString(ctx.spawn_env.PANTHEON_PROFILE);
 
+  // Launch-param inheritance + override. The new incarnation runs with
+  // the SAME launch params as this session (model / effort /
+  // permission_mode), recovered from the env spawnPersona persisted
+  // (PANTHEON_MODEL / PANTHEON_EFFORT / PANTHEON_PERMISSION_MODE),
+  // UNLESS the caller passes an explicit override. Resolution: per-call
+  // arg > this session's inherited launch param > omit (spawnPersona's
+  // cascade then falls to the persona default). Inherited values are
+  // LAUNCH-time — a runtime `/model` change inside CC is invisible to
+  // pantheon and is not carried across. Invalid override values are
+  // rejected by the tool's inputSchema enum before reaching here.
+  const model =
+    asString(args.model) ?? asString(ctx.spawn_env.PANTHEON_MODEL);
+  const effort =
+    asString(args.effort) ?? asString(ctx.spawn_env.PANTHEON_EFFORT);
+  const permissionMode =
+    asString(args.permission_mode) ??
+    asString(ctx.spawn_env.PANTHEON_PERMISSION_MODE);
+
   const spawnArgs: Record<string, unknown> = {
     username: persona.username,
     remanifest_of: ctx.chat_agent_id,
@@ -129,8 +147,13 @@ export const remanifest: Handler = async (args, ctx) => {
     // Preserve the calling agent's profile (account identity). Omitted
     // when unknown so spawnPersona's cascade still applies cleanly.
     ...(inheritedProfile ? { profile: inheritedProfile } : {}),
-    // Use the same model + permission_mode the calling persona had,
-    // by virtue of falling through spawnPersona's cascade.
+    // Inherit this session's launch params, with per-call overrides
+    // already folded in above. Omitted when neither an override nor an
+    // inherited value is present, so spawnPersona's cascade falls to
+    // the persona default (the pre-existing behavior for legacy agents).
+    ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
+    ...(permissionMode ? { permission_mode: permissionMode } : {}),
   };
 
   // No boot-verification: this session self-evicts (below) the instant
@@ -204,6 +227,13 @@ export const remanifest: Handler = async (args, ctx) => {
       resolved_mode: result.resolved_mode ?? null,
       adapter: result.adapter ?? null,
       tab_title: result.tab_title ?? null,
+      // The launch params the new incarnation was spawned with —
+      // inherited from this session unless overridden per-call. `null`
+      // means "no flag" (spawnPersona fell to the persona/machine
+      // default for that param).
+      model: model ?? null,
+      effort: effort ?? null,
+      permission_mode: permissionMode ?? null,
     },
     self_evicted,
     note: "New incarnation is spawning. As soon as it logs into chat it will signal me (the old session) to exit. You can stop interacting now — the new session takes over.",

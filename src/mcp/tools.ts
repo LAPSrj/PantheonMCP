@@ -1948,6 +1948,21 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
           description: "What the new incarnation needs to know to pick up cleanly. Rendered verbatim above the bootstrap.",
         },
         reason: { type: "string", description: "Optional human-readable reason (logged in the response)." },
+        model: {
+          ...MODEL_SCHEMA,
+          description:
+            "Override the model the new incarnation launches with. Omit to inherit THIS session's launch model (PANTHEON_MODEL); if neither is set, spawnPersona's cascade falls to the persona/machine default.",
+        },
+        effort: {
+          ...EFFORT_SCHEMA,
+          description:
+            "Override the reasoning effort the new incarnation launches with (low | medium | high | xhigh | max). Omit to inherit THIS session's launch effort (PANTHEON_EFFORT); if neither is set, falls to the persona/model default.",
+        },
+        permission_mode: {
+          ...PERMISSION_MODE_SCHEMA,
+          description:
+            "Override the Claude Code permission mode the new incarnation launches with. Omit to inherit THIS session's launch permission_mode (PANTHEON_PERMISSION_MODE).",
+        },
       },
     },
   },
