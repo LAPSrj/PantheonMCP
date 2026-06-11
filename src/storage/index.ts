@@ -6,6 +6,8 @@ export {
   projectMemoryFilePath,
   projectMemoryDir,
   projectConfigFilePath,
+  projectsRootDir,
+  listProjectDirNames,
   ensureProjectMemoryDir,
   ensureDataDirs,
   ensureStateDirs,
@@ -32,5 +34,8 @@ export {
   writeProjectConfig,
   isProjectSingleAgent,
   setProjectSingleAgent,
+  setProjectDescription,
+  assertValidProjectName,
+  MAX_PROJECT_DESCRIPTION,
   type ProjectConfig,
 } from "./project-config.ts";

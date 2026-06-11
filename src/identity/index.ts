@@ -27,6 +27,7 @@ export {
   stampRested,
   personasForCwd,
   personasForProject,
+  assertSingleAgentLockable,
 } from "./registry.ts";
 
 export { Session, type SessionState } from "./session-state.ts";

@@ -105,6 +105,13 @@ export function projectMemoryDir(paths: Paths, project: string): string {
   return path.join(paths.root, "projects", project);
 }
 
+/** Parent of all per-project directories — `<root>/projects`. Each
+ * subdirectory is one project (holding `memory.json` + `config.json`).
+ * Used to enumerate projects that have on-disk state. */
+export function projectsRootDir(paths: Paths): string {
+  return path.join(paths.root, "projects");
+}
+
 /** Per-project config file path — `<root>/projects/<project>/config.json`.
  * Sits alongside the project's shared memory. Holds project-level policy
  * (e.g. `single_agent`). The project name is used verbatim as a directory
@@ -115,6 +122,23 @@ export function projectConfigFilePath(paths: Paths, project: string): string {
 
 export function ensureProjectMemoryDir(paths: Paths, project: string): void {
   fs.mkdirSync(projectMemoryDir(paths, project), { recursive: true });
+}
+
+/** Names of every project with an on-disk directory under
+ * `<root>/projects`. Returns `[]` when the dir doesn't exist (no
+ * project has written memory or config yet). Non-directory entries are
+ * skipped. Does NOT include projects that exist only as persona
+ * `project` fields with no on-disk state — callers that want the full
+ * set union this with the registry. */
+export function listProjectDirNames(paths: Paths): string[] {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(projectsRootDir(paths), { withFileTypes: true });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw err;
+  }
+  return entries.filter((e) => e.isDirectory()).map((e) => e.name);
 }
 
 export function ensureDataDirs(paths: Paths): void {

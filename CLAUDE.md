@@ -59,6 +59,15 @@ and points `PANTHEON_HOME` at it.
    `invalid_args`. No need to re-validate inside the handler.
 4. Add tests under `src/mcp/__tests__/` — mirror the pattern in an
    adjacent test file.
+5. **Operator/config tools need a CLI counterpart.** If the tool mutates
+   or reads per-project / per-system POLICY (anything an operator should
+   be able to drive from a shell without an agent session — e.g. the
+   `project` config: `single_agent`, `description`), add or extend the
+   matching `pantheon <area>` subcommand (`src/cli/`) in the SAME change,
+   and put the shared logic in one place both call (storage helper or a
+   guard like `assertSingleAgentLockable`) so the two paths can't drift.
+   Agent-only surfaces (chat, memory, lifecycle) are exempt — this rule
+   is about policy/config reachable outside a session.
 
 ### Memory writes (v2 — topic-scoped)
 
@@ -203,7 +212,8 @@ your sessions apart.
 A project can be locked to ONE persona (one persona, many concurrent
 sessions — not a fleet). Flag lives at `projects/<project>/config.json`
 (`{ "single_agent": true }`, `src/storage/project-config.ts`); toggle via
-`pantheon project single-agent <project> [--off]`. Two enforcement points:
+`pantheon project single-agent <project> [--off]` (CLI) OR the in-band
+`edit_project` / `edit_project_any` tools. Two enforcement points:
 
 - **Registry gate** — `createPersona` (`src/identity/registry.ts`) refuses
   a SECOND distinct persona in a single-agent project (`project_single_agent`
@@ -212,6 +222,12 @@ sessions — not a fleet). Flag lives at `projects/<project>/config.json`
   all. Re-registering the SAME handle (idempotent update, or force-overwrite
   from a new cwd) is allowed; the lock wins over `force`. `merge` reduces the
   count so it's never blocked.
+- **Lock-enable guard** — turning the lock ON requires the project to
+  already hold ≤1 persona. `assertSingleAgentLockable` (`registry.ts`,
+  shared by the CLI + the `edit_project` tools) throws
+  `project_single_agent_conflict` (naming the registered personas) when
+  2+ exist — the operator must unregister the extras first. Disable is
+  never count-gated.
 - **Tool surface** — sessions in a single-agent project get a trimmed
   `tools/list` (no persona-creation, no shared project-memory, no
   cross-persona `*_any` reads; chat + `force_*` stay). The hidden set is
@@ -220,6 +236,34 @@ sessions — not a fleet). Flag lives at `projects/<project>/config.json`
   from the env-named persona or cwd — BEFORE the chat `login` tool call —
   and stashed on `ctx.single_agent`. The dispatcher also rejects hidden
   tools (`tool_unavailable_single_agent`) so hiding is authoritative.
+
+**Project policy tools (`src/mcp/handlers/project.ts`).** Per-project
+config (`single_agent` + an optional ≤160-char `description`) is also
+editable in-band, not just via the CLI:
+
+Every project-policy knob is reachable from BOTH the `pantheon project`
+CLI (`single-agent` / `describe` / `show`, `src/cli/project.ts`) and the
+in-band tools — keep the two in sync (see the convention note under
+"Adding a new MCP tool").
+
+- `list_projects_any` — enumerate projects (union of registered-persona
+  projects + on-disk `projects/<name>/` dirs) with `agent_count`,
+  `single_agent`, and `description` (when set). Read-only. Listing is
+  inherently cross-project, so there's NO bare variant — only `_any`,
+  which the single-agent trim hides like the other `_any` reads.
+- `edit_project` (caller's current project, resolved from chat login) /
+  `edit_project_any` (explicit `project`) — set `description`
+  (null/"" clears) and/or `single_agent`. The bare `edit_project` stays
+  VISIBLE in single-agent projects so a locked session can still adjust
+  its own policy (e.g. unlock) — `edit_project_any` is hidden.
+- **`single_agent` is a guarded knob:** the tool descriptions state it
+  must be flipped ONLY with the user's express authorization. Timing is
+  asymmetric and reflected in the `single_agent_effect` response field:
+  ENABLE is effective immediately (the registry gate reads the flag live,
+  so the next register/summon/fork is refused at once); DISABLE takes
+  effect for NEW sessions only (sessions already booted under the lock
+  keep their boot-time-trimmed `tools/list` + `ctx.single_agent` dispatch
+  guard until they restart — the handler does NOT mutate live `ctx`).
 
 ### WSL spawn distro (`wsl_distro`)
 

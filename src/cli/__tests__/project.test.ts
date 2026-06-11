@@ -3,8 +3,22 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { runProject } from "../project.ts";
-import { isProjectSingleAgent, resolvePaths } from "../../storage/index.ts";
+import {
+  isProjectSingleAgent,
+  readProjectConfig,
+  resolvePaths,
+} from "../../storage/index.ts";
+import { createPersona } from "../../identity/index.ts";
 import { EXIT_CODES } from "../exit-codes.ts";
+
+function seed(username: string, project: string) {
+  createPersona(resolvePaths({ PANTHEON_HOME: tmpDir } as NodeJS.ProcessEnv), {
+    username,
+    project,
+    cwd: `/tmp/${project}`,
+    platform: "linux",
+  });
+}
 
 let tmpDir: string;
 let prevHome: string | undefined;
@@ -59,6 +73,44 @@ test("project show reflects the stored flag", async () => {
   const code = await runProject({ args: ["show", "solo"] });
   expect(code).toBe(EXIT_CODES.SUCCESS);
   expect(out.join("")).toContain("single_agent: true");
+});
+
+test("single-agent enable is refused with 2+ personas in the project", async () => {
+  seed("alpha", "crowded");
+  seed("beta", "crowded");
+  const code = await runProject({ args: ["single-agent", "crowded"] });
+  expect(code).toBe(EXIT_CODES.USER_ERROR);
+  const paths = resolvePaths({ PANTHEON_HOME: tmpDir } as NodeJS.ProcessEnv);
+  expect(isProjectSingleAgent(paths, "crowded")).toBe(false);
+});
+
+test("single-agent enable is allowed with one persona", async () => {
+  seed("alpha", "lonely");
+  const code = await runProject({ args: ["single-agent", "lonely"] });
+  expect(code).toBe(EXIT_CODES.SUCCESS);
+  const paths = resolvePaths({ PANTHEON_HOME: tmpDir } as NodeJS.ProcessEnv);
+  expect(isProjectSingleAgent(paths, "lonely")).toBe(true);
+});
+
+test("project describe sets and clears the description", async () => {
+  let code = await runProject({ args: ["describe", "solo", "the", "solo", "project"] });
+  expect(code).toBe(EXIT_CODES.SUCCESS);
+  const paths = resolvePaths({ PANTHEON_HOME: tmpDir } as NodeJS.ProcessEnv);
+  expect(readProjectConfig(paths, "solo").description).toBe("the solo project");
+
+  code = await runProject({ args: ["describe", "solo", "--clear"] });
+  expect(code).toBe(EXIT_CODES.SUCCESS);
+  expect(readProjectConfig(paths, "solo").description).toBeUndefined();
+});
+
+test("project describe without text is a user error", async () => {
+  const code = await runProject({ args: ["describe", "solo"] });
+  expect(code).toBe(EXIT_CODES.USER_ERROR);
+});
+
+test("project describe rejects an over-long description", async () => {
+  const code = await runProject({ args: ["describe", "solo", "x".repeat(161)] });
+  expect(code).toBe(EXIT_CODES.USER_ERROR);
 });
 
 test("unknown action is a user error", async () => {

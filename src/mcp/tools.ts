@@ -1907,6 +1907,66 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
     },
   },
 
+  // --- Project policy (enumerate + edit per-project config) ---
+  // Listing is inherently cross-project, so the only variant is `_any`
+  // (hidden from single-agent sessions like the other `_any` reads).
+  // `edit_project` (bare) edits the caller's CURRENT project so a
+  // single-agent session can still adjust its own policy with user
+  // authorization; `edit_project_any` takes an explicit `project`.
+  {
+    name: "list_projects_any",
+    description:
+      "Enumerate every known project — the union of projects with registered personas and projects with on-disk state under `projects/`. Each row: `name`, `agent_count`, `single_agent`, and `description` (when set). Read-only.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+    },
+  },
+  {
+    name: "edit_project",
+    description:
+      "Edit the CALLER's current project (resolved from chat login). Set `description` (≤160 chars; null/\"\" to clear) and/or `single_agent`. " +
+      "`single_agent` locks the project to ONE persona (many sessions, not a fleet) — CHANGE IT ONLY WITH THE USER'S EXPRESS AUTHORIZATION; it governs who can exist in the project and must never be flipped on the agent's own initiative. Enabling requires the project to already hold ≤1 persona (else `project_single_agent_conflict`). " +
+      "Timing is asymmetric: ENABLING is effective immediately (the persona-creation lock is read live, so the next register/summon/fork is refused at once); DISABLING takes effect for NEW sessions only (sessions already running under the lock keep the trimmed tool surface until they restart). " +
+      "Pass at least one of `description` / `single_agent`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        description: {
+          description: "≤160-char project blurb (string). Pass null to clear.",
+        },
+        single_agent: {
+          type: "boolean",
+          description:
+            "Lock (true) / unlock (false) the project to a single persona. EXPRESS USER AUTHORIZATION REQUIRED. Enabling requires the project to already hold ≤1 persona (errors `project_single_agent_conflict` otherwise — unregister the extras first). Enable = immediate; disable = new sessions only.",
+        },
+      },
+    },
+  },
+  {
+    name: "edit_project_any",
+    description:
+      "Same as edit_project but targets an explicit `project` instead of the caller's current one. Requires `project`. Same single_agent guardrail — express user authorization only.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["project"],
+      properties: {
+        project: { type: "string" },
+        description: {
+          description: "≤160-char project blurb (string). Pass null to clear.",
+        },
+        single_agent: {
+          type: "boolean",
+          description:
+            "Lock (true) / unlock (false) the project to a single persona. EXPRESS USER AUTHORIZATION REQUIRED. Enabling requires the project to already hold ≤1 persona (errors `project_single_agent_conflict` otherwise — unregister the extras first). Enable = immediate; disable = new sessions only.",
+        },
+      },
+    },
+  },
+
   // --- Dream (librarian-driven memory cleanup) ---
   {
     name: "dream",

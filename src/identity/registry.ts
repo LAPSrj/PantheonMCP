@@ -307,6 +307,26 @@ export function personasForProject(paths: Paths, project: string): Persona[] {
   return listPersonas(paths).filter((p) => p.project === project);
 }
 
+/** Guard for ENABLING a project's single-agent lock: the lock means
+ * "exactly one persona", so it can only be turned on when the project
+ * already holds at most one persona. With 2+ registered, refuse and name
+ * them — the operator must unregister the extras first. Throws
+ * `project_single_agent_conflict`. No-op on disable (count never blocks
+ * unlocking). Used by BOTH the `pantheon project single-agent` CLI and
+ * the `edit_project` MCP tools so the rule has one home. */
+export function assertSingleAgentLockable(paths: Paths, project: string): void {
+  const personas = personasForProject(paths, project);
+  if (personas.length > 1) {
+    const names = personas.map((p) => p.username).sort();
+    throw new IdentityError(
+      "project_single_agent_conflict",
+      `Cannot lock project '${project}' to a single agent: ${personas.length} personas are registered ` +
+        `(${names.join(", ")}). A single-agent project allows exactly one — unregister all but one first.`,
+      { project, count: personas.length, personas: names },
+    );
+  }
+}
+
 function stripUndefined<T extends object>(obj: T): Partial<T> {
   const out: Partial<T> = {};
   for (const [k, v] of Object.entries(obj)) {

@@ -10,6 +10,7 @@ import * as history from "./history.ts";
 import * as remanifestMod from "./remanifest.ts";
 import * as dreamMod from "./dream.ts";
 import * as watcher from "./watcher.ts";
+import * as project from "./project.ts";
 
 /** Single registry of every implemented handler keyed by tool name.
  * Tools with no handler entry surface as `unknown_tool` from dispatch. */
@@ -133,4 +134,9 @@ export const HANDLERS: Record<string, Handler> = {
   arm_watcher: watcher.arm_watcher,
   claim_watcher: watcher.claim_watcher,
   close_watcher: watcher.close_watcher,
+
+  // Project policy (list / edit description + single-agent lock)
+  list_projects_any: project.list_projects_any,
+  edit_project: project.edit_project,
+  edit_project_any: project.edit_project_any,
 };
