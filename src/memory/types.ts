@@ -1,5 +1,7 @@
 /** Memory subsystem types. Mirrors §4 of the brainstorm doc. */
 
+import type { MemoryRevision } from "./history.ts";
+
 export type MemoryStatus = "active" | "faded" | "forgotten";
 
 /** Three-tier entry body per §4 / §11b:
@@ -94,6 +96,15 @@ export interface MemoryEntry {
    * Each ref keeps the snapshot text AND the coordinates the existing
    * read tools consume, so an agent can re-verify live. See `MemorySource`. */
   sources?: MemorySource[];
+
+  /** Per-entry update history (`src/memory/history.ts`). Append-only,
+   * chronological FULL snapshots of every prior content state — the first
+   * element is the original (creation) state, each later one is the state
+   * an edit replaced; the live entry is the current tip. Recorded by
+   * `updateEntry` / `amendEntry` on any tracked-field change. NEVER
+   * rendered or auto-returned (stripped from `recall_memory`, which flags
+   * `has_history`); fetched via `get_memory_history(id)`. */
+  revisions?: MemoryRevision[];
 }
 
 /** One provenance reference on a memory entry. At least one resolution

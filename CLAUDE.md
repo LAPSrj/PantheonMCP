@@ -183,6 +183,36 @@ Memory is topic-scoped + lazy (`docs/memory-redesign/5-proposal-v2.md`;
   `recall_memory` (which adds a `has_source` flag); fetched via
   `get_memory_source(id)` / `get_memory_source_any` — the
   `has_details`/`get_memory_details` pattern. Not mandatory on any kind.
+- **Update history — `revisions[]` (`src/memory/history.ts`):** every
+  content-changing `update_memory` / `amend_memory` (and `fade`/`forget`,
+  which route through `updateEntry`) records a FULL snapshot of the entry's
+  prior content into `revisions[]` before applying the edit. Append-only,
+  chronological: `revisions[0]` is the original (creation) state, each later
+  element is the state an edit replaced, and the live entry is the tip — so
+  the timeline is `[...revisions, tip]`. Tracked fields:
+  text/summary/status/kind/topic/pin/pin_reason/due (the heavy `details`
+  payload is NOT snapshotted). A no-op edit records nothing
+  (`changedFields` gate). Edit attribution (`session_seq` + `summoner`) is
+  threaded from the live session via `revisionMeta(ctx)`. Storage keeps full
+  snapshots so any revision's full text is retrievable; the DIFF view is
+  computed at read time (`buildHistory` — first revision full, each later one
+  a line-diff vs. the previous). NEVER rendered at boot and STRIPPED from
+  `recall_memory` / verbose update returns (which add a `has_history` flag),
+  same pattern as `sources`/`details`. Fetched via `get_memory_history(id)`
+  (full diff timeline; byte-capped to stay inline via `capHistory`, keeping
+  the rev-0 baseline + newest, eliding the middle) or
+  `get_memory_history(id, revision)` (one revision's full content; 0 =
+  original, tip index = current). `_any` cross-persona variant is hidden in
+  single-agent projects like the other `_any` reads. Capture is ON by
+  default; opt out with env `PANTHEON_MEMORY_HISTORY` set to a disabling
+  value (`0`/`false`/`off`/`no`, read live via `historyEnabled()`) — edits
+  still apply, only new revisions are skipped; existing `revisions[]` stay
+  readable.
+- **`amend_memory`:** splice text into an entry's body server-side and
+  atomically (no read-modify-write round-trip, no sibling clobber) —
+  `{ id, add, position?: end|start, separator?, stamp? }`. `stamp: true`
+  prefixes `- <date>: `. Records a revision like any content edit. Returns a
+  compact ack `{ id, status, text_chars }` (`verbose` for the full entry).
 
 ### Chat scopes
 

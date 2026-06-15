@@ -10,11 +10,27 @@ export {
 } from "./types.ts";
 
 export {
+  buildHistory,
+  revisionContent,
+  tipRev,
+  lineDiff,
+  historyEnabled,
+  type MemoryRevision,
+  type ContentSnapshot,
+  type HistoryItem,
+  type HistoryDiff,
+  type RevisionMeta,
+} from "./history.ts";
+
+export {
   appendEntry,
   importEntries,
   beginSession,
   getEntry,
   updateEntry,
+  amendEntry,
+  getHistory,
+  getHistoryRevision,
   fadeEntry,
   forgetEntry,
   recallEntry,
@@ -28,6 +44,7 @@ export {
   SUMMARY_MAX_CHARS,
   type AppendInput,
   type UpdateInput,
+  type AmendInput,
   type ListIndexFilter,
   type FindMemoryFilter,
   type FindMemoryHit,

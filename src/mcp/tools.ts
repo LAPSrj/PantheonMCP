@@ -607,6 +607,37 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
     },
   },
   {
+    name: "amend_memory",
+    description:
+      "Append (or prepend) text to one of YOUR OWN entries' body WITHOUT re-sending the whole text — the splice happens server-side and atomically (no sibling-clobber). Use for running-log / accreting entries instead of recall_memory + update_memory. `add` is the chunk; `position` 'end' (default) or 'start'; `separator` between old and new text (default a blank line); `stamp: true` prefixes the chunk with \"- <date>: \". Like any content edit, this records a revision (see `get_memory_history`). Returns a compact ack ({ id, status, text_chars }).",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "add"],
+      properties: {
+        id: { type: "string" },
+        add: { type: "string", description: "Text to splice into the body." },
+        position: {
+          type: "string",
+          enum: ["end", "start"],
+          description: "Where to splice. Default 'end'.",
+        },
+        separator: {
+          type: "string",
+          description: "Separator between existing text and the added chunk. Default a blank line (\\n\\n).",
+        },
+        stamp: {
+          type: "boolean",
+          description: "Prefix the added chunk with \"- <ISO date>: \" for dated running logs. Default false.",
+        },
+        verbose: {
+          type: "boolean",
+          description: "Return the full updated entry instead of the compact ack. Default false.",
+        },
+      },
+    },
+  },
+  {
     name: "recall_memory",
     description:
       "Retrieve the full text of one of YOUR OWN memory entries by id, regardless of render tier. Flips faded → active in the same call. Self-only — for another persona's entry use `recall_memory_any` (read-only). Use when you see a collapsed entry's summary and want the body.",
@@ -841,6 +872,38 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
       properties: {
         username: { type: "string", description: "Persona that owns the entry." },
         id: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "get_memory_history",
+    description:
+      "Return the update history of one of YOUR OWN entries — every prior content state, recorded automatically on each update_memory / amend_memory. Without `revision`: the full timeline, with the first (original) revision shown in full and each later one as a line-diff (text) + before→after (other fields) vs. the previous; long timelines elide the middle (still fetchable individually). With `revision: <n>`: the FULL content of that one revision (0 = original, the highest index = current tip). History is never auto-returned — recall_memory only flags `has_history`; this is the fetch path. Self-only — for a peer use `get_memory_history_any`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id"],
+      properties: {
+        id: { type: "string" },
+        revision: {
+          type: "number",
+          description: "Optional revision index (0 = original … tip = current). Returns that revision's full content instead of the diff timeline.",
+        },
+      },
+    },
+  },
+  {
+    name: "get_memory_history_any",
+    description:
+      "Cross-persona history read: the update history of another persona's entry (full diff timeline, or one revision's full content via `revision`). The `_any` suffix marks this as the elevated, separately-deniable variant of self-only `get_memory_history`. Errors `entry_not_found` if no entry.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "id"],
+      properties: {
+        username: { type: "string", description: "Persona that owns the entry." },
+        id: { type: "string" },
+        revision: { type: "number", description: "Optional revision index." },
       },
     },
   },

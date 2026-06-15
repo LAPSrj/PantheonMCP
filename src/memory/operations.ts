@@ -2,6 +2,15 @@ import type { Paths } from "../storage/index.ts";
 import { loadStore, mutateStore } from "./store.ts";
 import { deriveSummary, slugify, SUMMARY_MAX_CHARS } from "./derive.ts";
 import {
+  buildHistory,
+  recordRevision,
+  revisionContent,
+  tipRev,
+  type ContentSnapshot,
+  type HistoryItem,
+  type RevisionMeta,
+} from "./history.ts";
+import {
   MemoryError,
   type HandoffMeta,
   type MemoryEntry,
@@ -298,6 +307,7 @@ export function updateEntry(
   username: string,
   id: string,
   patch: UpdateInput,
+  meta: RevisionMeta = {},
 ): MemoryEntry {
   if (patch.text !== undefined && patch.text.length === 0) {
     throw new MemoryError("missing_text", "Entry text must be non-empty.");
@@ -397,12 +407,100 @@ export function updateEntry(
       if (patch.sources.length > 0) next.sources = patch.sources;
       else delete next.sources;
     }
+    // Record a revision when the edit changed a tracked content field
+    // (text/summary/status/kind/topic/pin/pin_reason/due). No change → no
+    // revision churn. The snapshot captured is `current`'s prior content.
+    const withHistory = recordRevision(current, next, meta);
     const entries = store.entries.slice();
-    entries[idx] = next;
-    updated = next;
+    entries[idx] = withHistory;
+    updated = withHistory;
     return { ...store, entries };
   });
   return updated;
+}
+
+export interface AmendInput {
+  /** Text to splice into the entry's existing body. */
+  add: string;
+  /** Where to splice. Default "end". */
+  position?: "end" | "start";
+  /** Separator between existing text and the added chunk. Default "\n\n". */
+  separator?: string;
+  /** Prefix the added chunk with "- <ISO date>: " for running-log entries. */
+  stamp?: boolean;
+}
+
+/** Append (or prepend) text to an entry's body atomically, server-side —
+ * the caller never round-trips the full body. Records a revision like any
+ * other content edit. Returns the updated entry. */
+export function amendEntry(
+  paths: Paths,
+  username: string,
+  id: string,
+  input: AmendInput,
+  meta: RevisionMeta = {},
+): MemoryEntry {
+  if (!input.add || input.add.length === 0) {
+    throw new MemoryError("missing_text", "amend `add` text must be non-empty.");
+  }
+  const separator = input.separator ?? "\n\n";
+  const position = input.position ?? "end";
+
+  let updated!: MemoryEntry;
+  mutateStore(paths, username, (store) => {
+    const idx = store.entries.findIndex((e) => e.id === id);
+    if (idx === -1) {
+      throw new MemoryError("entry_not_found", `No memory entry with id '${id}'.`);
+    }
+    const current = store.entries[idx]!;
+    const chunk = input.stamp
+      ? `- ${new Date().toISOString().slice(0, 10)}: ${input.add}`
+      : input.add;
+    const newText =
+      position === "start"
+        ? `${chunk}${separator}${current.text}`
+        : `${current.text}${separator}${chunk}`;
+    const next: MemoryEntry = { ...current, text: newText };
+    const withHistory = recordRevision(current, next, meta);
+    const entries = store.entries.slice();
+    entries[idx] = withHistory;
+    updated = withHistory;
+    return { ...store, entries };
+  });
+  return updated;
+}
+
+/** `get_memory_history` data path — the full diff timeline for an entry,
+ * or (when `rev` is given) the full content of one specific revision.
+ * Returns null when the entry is missing; `revision_not_found` when `rev`
+ * is out of range. */
+export function getHistory(
+  paths: Paths,
+  username: string,
+  id: string,
+): { entry: MemoryEntry; timeline: HistoryItem[]; tip: number } | null {
+  const entry = getEntry(paths, username, id);
+  if (!entry) return null;
+  return { entry, timeline: buildHistory(entry), tip: tipRev(entry) };
+}
+
+export function getHistoryRevision(
+  paths: Paths,
+  username: string,
+  id: string,
+  rev: number,
+): { entry: MemoryEntry; rev: number; content: ContentSnapshot } | null {
+  const entry = getEntry(paths, username, id);
+  if (!entry) return null;
+  const content = revisionContent(entry, rev);
+  if (content === null) {
+    throw new MemoryError(
+      "entry_not_found",
+      `Revision ${rev} out of range for entry '${id}' (valid 0..${tipRev(entry)}).`,
+      { rev, tip: tipRev(entry) },
+    );
+  }
+  return { entry, rev, content };
 }
 
 /** §13 explicit user calls only — sets status to faded. Status NEVER

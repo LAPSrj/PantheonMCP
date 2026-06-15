@@ -7,11 +7,14 @@ import {
   decayOnLoad,
   deleteSnapshot,
   defaultHandoffExpiresAt,
+  amendEntry,
   fadeEntry,
   findMemory,
   forgetEntryWithLifecycleCoercion,
   getDetails,
   getEntry,
+  getHistory,
+  getHistoryRevision,
   HANDOFF_KIND,
   listIndex,
   listSnapshots,
@@ -182,8 +185,23 @@ function resolveQuote(
  * auto-returned, per the design) and surface a `has_source` flag instead.
  * The full source set is fetched on demand via `get_memory_source`. */
 function withSourceFlag(entry: MemoryEntry): Record<string, unknown> {
-  const { sources, ...rest } = entry;
-  return { ...rest, has_source: (sources?.length ?? 0) > 0 };
+  const { sources, revisions, ...rest } = entry;
+  return {
+    ...rest,
+    has_source: (sources?.length ?? 0) > 0,
+    has_history: (revisions?.length ?? 0) > 0,
+  };
+}
+
+/** Edit attribution for the revision log, from the live session. */
+function revisionMeta(ctx: HandlerContext): {
+  session_seq?: number;
+  summoner?: string;
+} {
+  return {
+    ...(ctx.session_seq !== null ? { session_seq: ctx.session_seq } : {}),
+    ...(ctx.summoner_username ? { summoner: ctx.summoner_username } : {}),
+  };
 }
 
 /** Shared render path for `get_memory` (self) and `get_memory_any`
@@ -524,13 +542,17 @@ export const update_memory: Handler = async (args, ctx) => {
     patch.sources = args.sources === null ? null : resolveSources(ctx, claimed, args.sources);
   }
   const before = getEntry(ctx.paths, claimed, id);
-  const updated = updateEntry(ctx.paths, claimed, id, patch);
+  const updated = updateEntry(ctx.paths, claimed, id, patch, revisionMeta(ctx));
 
   // §16: compact response — report which patch fields actually changed,
   // which were no-ops, and any value the store coerced away from what was
   // requested (e.g. forget→fade, a core-strip), WITHOUT echoing bodies.
-  // `verbose: true` returns the full updated entry.
-  if (asBoolean(args.verbose) === true) return updated;
+  // `verbose: true` returns the full updated entry (history stripped — it's
+  // fetched via get_memory_history, never inlined).
+  if (asBoolean(args.verbose) === true) {
+    const { revisions, ...rest } = updated;
+    return { ...rest, has_history: (revisions?.length ?? 0) > 0 };
+  }
 
   const eq = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   const u = updated as unknown as Record<string, unknown>;
@@ -618,6 +640,112 @@ export const forget_memory: Handler = async (args, ctx) => {
   }
   const id = asStringRequired(args.id, "id");
   return forgetEntryWithLifecycleCoercion(ctx.paths, claimed, id);
+};
+
+/** Append (or prepend) text to an entry's body server-side — no need to
+ * read + re-send the whole body. Records a revision like any other edit. */
+export const amend_memory: Handler = async (args, ctx) => {
+  const claimed = ctx.session.claimedUsername;
+  if (!claimed) {
+    throw new ToolError("no_persona", "amend_memory requires a claimed persona.");
+  }
+  const id = asStringRequired(args.id, "id");
+  const add = asStringRequired(args.add, "add");
+  const position = asString(args.position) === "start" ? "start" : "end";
+  const separator = asString(args.separator);
+  const stamp = asBoolean(args.stamp) ?? false;
+  const updated = amendEntry(
+    ctx.paths,
+    claimed,
+    id,
+    {
+      add,
+      position,
+      ...(separator !== undefined ? { separator } : {}),
+      stamp,
+    },
+    revisionMeta(ctx),
+  );
+  if (asBoolean(args.verbose) === true) {
+    const { revisions, ...rest } = updated;
+    return { ...rest, has_history: (revisions?.length ?? 0) > 0 };
+  }
+  return { id: updated.id, status: updated.status, text_chars: updated.text.length };
+};
+
+/** Byte-cap the history timeline so a long edit log can't spill past the
+ * inline tool-result ceiling. Always keeps the full baseline (rev 0) plus
+ * as many of the NEWEST revisions as fit; elides the middle with a note
+ * (each elided rev is still fetchable via `revision`). */
+function capHistory<T>(
+  timeline: T[],
+  ceilingBytes: number,
+): { kept: T[]; elided: number } {
+  if (!Number.isFinite(ceilingBytes) || timeline.length <= 2) {
+    return { kept: timeline, elided: 0 };
+  }
+  const cost = (x: T) => Buffer.byteLength(JSON.stringify(x, null, 2), "utf8") + 6;
+  const first = timeline[0]!;
+  let running = cost(first);
+  const tail: T[] = [];
+  // Walk newest → oldest (excluding the baseline), keeping what fits.
+  for (let k = timeline.length - 1; k >= 1; k--) {
+    const c = cost(timeline[k]!);
+    if (running + c > ceilingBytes && tail.length > 0) break;
+    tail.push(timeline[k]!);
+    running += c;
+  }
+  tail.reverse();
+  const kept = [first, ...tail];
+  return { kept, elided: timeline.length - kept.length };
+}
+
+function historyFor(
+  ctx: HandlerContext,
+  username: string,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const id = asStringRequired(args.id, "id");
+  // A specific revision → full content of just that revision.
+  if (args.revision !== undefined) {
+    const rev = asNumber(args.revision);
+    if (rev === undefined) {
+      throw new ToolError("invalid_args", "`revision` must be a number.");
+    }
+    const res = getHistoryRevision(ctx.paths, username, id, rev);
+    if (!res) throw new ToolError("entry_not_found", `No memory entry '${id}' for '${username}'.`);
+    return { id, username, rev: res.rev, content: res.content };
+  }
+  const res = getHistory(ctx.paths, username, id);
+  if (!res) throw new ToolError("entry_not_found", `No memory entry '${id}' for '${username}'.`);
+  const { kept, elided } = capHistory(res.timeline, LIST_RESULT_CEILING_BYTES);
+  return {
+    id,
+    username,
+    tip: res.tip,
+    count: res.timeline.length,
+    revisions: kept,
+    ...(elided > 0
+      ? {
+          elided,
+          note:
+            `Elided ${elided} middle revision(s) to stay inline. ` +
+            `Fetch any by passing \`revision: <n>\` (0..${res.tip}).`,
+        }
+      : {}),
+  };
+}
+
+/** §history — the full diff timeline of one of YOUR OWN entries (first
+ * revision full, each later one a diff), or one revision's full content.
+ * Never auto-returned; this is the fetch path (recall flags `has_history`). */
+export const get_memory_history: Handler = async (args, ctx) => {
+  return historyFor(ctx, selfUsername(ctx.session.claimedUsername), args);
+};
+
+/** Cross-persona history read (deniable by tool name). */
+export const get_memory_history_any: Handler = async (args, ctx) => {
+  return historyFor(ctx, asStringRequired(args.username, "username"), args);
 };
 
 function listMemoryFor(
