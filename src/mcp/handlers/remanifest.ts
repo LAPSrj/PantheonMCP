@@ -119,14 +119,16 @@ export const remanifest: Handler = async (args, ctx) => {
 
   // Launch-param inheritance + override. The new incarnation runs with
   // the SAME launch params as this session (model / effort /
-  // permission_mode), recovered from the env spawnPersona persisted
-  // (PANTHEON_MODEL / PANTHEON_EFFORT / PANTHEON_PERMISSION_MODE),
-  // UNLESS the caller passes an explicit override. Resolution: per-call
-  // arg > this session's inherited launch param > omit (spawnPersona's
-  // cascade then falls to the persona default). Inherited values are
-  // LAUNCH-time — a runtime `/model` change inside CC is invisible to
-  // pantheon and is not carried across. Invalid override values are
-  // rejected by the tool's inputSchema enum before reaching here.
+  // permission_mode / profile), recovered from the env spawnPersona
+  // persisted (PANTHEON_MODEL / PANTHEON_EFFORT / PANTHEON_PERMISSION_MODE
+  // / PANTHEON_PROFILE), UNLESS the caller passes an explicit override.
+  // Resolution: per-call arg > this session's inherited launch param >
+  // omit (spawnPersona's cascade then falls to the persona default).
+  // Inherited values are LAUNCH-time — a runtime `/model` change inside
+  // CC is invisible to pantheon and is not carried across. Invalid
+  // override values are rejected by the tool's inputSchema enum before
+  // reaching here. The `profile` override is a PER-CALL knob only — it is
+  // never written back to the persona (which has no profile field).
   const model =
     asString(args.model) ?? asString(ctx.spawn_env.PANTHEON_MODEL);
   const effort =
@@ -134,6 +136,7 @@ export const remanifest: Handler = async (args, ctx) => {
   const permissionMode =
     asString(args.permission_mode) ??
     asString(ctx.spawn_env.PANTHEON_PERMISSION_MODE);
+  const profile = asString(args.profile) ?? inheritedProfile;
 
   const spawnArgs: Record<string, unknown> = {
     username: persona.username,
@@ -144,9 +147,10 @@ export const remanifest: Handler = async (args, ctx) => {
     // process — block_self_exit defaults to off here regardless of
     // whether the calling agent was launched with the block.
     block_self_exit: false,
-    // Preserve the calling agent's profile (account identity). Omitted
-    // when unknown so spawnPersona's cascade still applies cleanly.
-    ...(inheritedProfile ? { profile: inheritedProfile } : {}),
+    // Preserve the calling agent's profile (account identity), or the
+    // per-call override when the caller passed one. Omitted when neither
+    // is known so spawnPersona's cascade still applies cleanly.
+    ...(profile ? { profile } : {}),
     // Inherit this session's launch params, with per-call overrides
     // already folded in above. Omitted when neither an override nor an
     // inherited value is present, so spawnPersona's cascade falls to

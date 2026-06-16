@@ -2086,6 +2086,11 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
           description:
             "Override the Claude Code permission mode the new incarnation launches with. Omit to inherit THIS session's launch permission_mode (PANTHEON_PERMISSION_MODE).",
         },
+        profile: {
+          ...PROFILE_SCHEMA,
+          description:
+            "Override the credential profile the new incarnation launches under (forwarded as `--profile=<value>`). Omit to inherit THIS session's launch profile (PANTHEON_PROFILE). This is a PER-CALL override only — it is NOT saved to the persona. Consequential: it switches the credentials file / billing account and the daemon the new session runs under.",
+        },
       },
     },
   },

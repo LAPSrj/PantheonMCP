@@ -133,6 +133,55 @@ test("remanifest re-persists PANTHEON_PROFILE so the NEXT remanifest also preser
   expect(captured!.env.PANTHEON_PROFILE).toBe("work-digital");
 });
 
+test("per-call profile override wins over the inherited env profile", async () => {
+  // env has work-digital; the caller asks to switch the new incarnation
+  // to a different credential profile for this spawn only.
+  makePersona();
+  await call("claim", { username: "wraith" });
+  await call("login", { username: "wraith", project: "pantheon", transient: false });
+  const r = await call("remanifest", {
+    handoff: "switching accounts for the new incarnation",
+    profile: "personal",
+  });
+  expect(r.ok).toBe(true);
+  expect(captured!.args).toContain("--profile=personal");
+  expect(captured!.args).not.toContain("--profile=work-digital");
+  // The override carries forward so a later remanifest inherits it.
+  expect(captured!.env.PANTHEON_PROFILE).toBe("personal");
+});
+
+test("per-call profile applies even when no profile is in env (legacy session)", async () => {
+  db.close();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+  setup({} as NodeJS.ProcessEnv);
+  makePersona();
+  await call("claim", { username: "wraith" });
+  await call("login", { username: "wraith", project: "pantheon", transient: false });
+  const r = await call("remanifest", {
+    handoff: "pick an account on remanifest",
+    profile: "work-digital",
+  });
+  expect(r.ok).toBe(true);
+  expect(captured!.args).toContain("--profile=work-digital");
+});
+
+test("the profile override is NOT written back to the persona", async () => {
+  makePersona();
+  await call("claim", { username: "wraith" });
+  await call("login", { username: "wraith", project: "pantheon", transient: false });
+  await call("remanifest", {
+    handoff: "switch account, persona unchanged",
+    profile: "personal",
+  });
+  // The persona registration has no profile field and must be untouched
+  // by a per-call override — re-read it and confirm nothing leaked in.
+  const reread = JSON.parse(
+    fs.readFileSync(path.join(ctx.paths.personasDir, "wraith.json"), "utf8"),
+  ) as Record<string, unknown>;
+  expect(reread.profile).toBeUndefined();
+  expect(reread.claude_profile).toBeUndefined();
+});
+
 test("remanifest without a profile in env omits --profile (no spurious flag)", async () => {
   // Pre-fix agents (summoned before PANTHEON_PROFILE was persisted)
   // have no profile to recover — the remanifest must not invent one.
