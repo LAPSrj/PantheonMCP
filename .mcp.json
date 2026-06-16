@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "pantheon": {
+      "command": "bun",
+      "args": [
+        "run",
+        "/home/leandro/repos/pantheon/bin/pantheon.ts",
+        "serve"
+      ],
+      "env": {
+        "PANTHEON_CONTEXT_CHECK": "off",
+        "PANTHEON_CROSS_AGENT": "1"
+      }
+    }
+  }
+}
