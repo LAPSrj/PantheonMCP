@@ -2319,3 +2319,18 @@ function computeSingleAgentHidden(names: readonly string[]): Set<string> {
 export const SINGLE_AGENT_HIDDEN: ReadonlySet<string> = computeSingleAgentHidden(
   ALL_TOOL_DEFS.map((t) => t.name),
 );
+
+/** Tools hidden when cross-agent reach is disabled — every `_any` tool
+ * (the cross-persona / cross-project variants, including `force_*_any`).
+ * Cross-agent reach is OFF by default so a general install advertises only
+ * the single-persona surface and spends less of the harness's tool-list
+ * context; set `PANTHEON_CROSS_AGENT=1` on the MCP registration (e.g. a
+ * project-scoped `.mcp.json`) to re-enable `_any` for projects that drive
+ * other agents. Computed from tool names so new `_any` tools are covered
+ * automatically. Enforced at both seams like `SINGLE_AGENT_HIDDEN`:
+ * `tools/list` omits these and the dispatcher rejects them with
+ * `tool_unavailable_cross_agent`. Orthogonal to the single-agent trim —
+ * either gate hiding a tool is sufficient. */
+export const CROSS_AGENT_HIDDEN: ReadonlySet<string> = new Set(
+  ALL_TOOL_DEFS.map((t) => t.name).filter((name) => name.endsWith("_any")),
+);

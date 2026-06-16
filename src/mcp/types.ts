@@ -113,6 +113,12 @@ export interface HandlerContext {
    * `tools/list` response omits the single-agent-hidden tools and the
    * dispatcher rejects them with `tool_unavailable_single_agent`. */
   single_agent: boolean;
+  /** True when cross-agent (`_any`) tools are available. Resolved once at
+   * MCP boot from `PANTHEON_CROSS_AGENT`; OFF by default so a general
+   * install advertises only the single-persona surface. When false the
+   * `tools/list` response omits every `_any` tool and the dispatcher
+   * rejects them with `tool_unavailable_cross_agent`. */
+  cross_agent_enabled: boolean;
 }
 
 export interface SpawnMetadata {

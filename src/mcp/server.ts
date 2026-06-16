@@ -34,7 +34,7 @@ import {
 import { createContext } from "./context.ts";
 import { dispatch } from "./dispatch.ts";
 import { HookPoller, sweepStaleSessionDirs } from "./hook-poller.ts";
-import { SINGLE_AGENT_HIDDEN, TOOLS } from "./tools.ts";
+import { CROSS_AGENT_HIDDEN, SINGLE_AGENT_HIDDEN, TOOLS } from "./tools.ts";
 
 export interface ServerOptions {
   /** Override at boot for tests or sandboxed runs. */
@@ -128,6 +128,11 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
       chat: router,
       claude_session_id: claudeSessionAtBoot,
       single_agent: singleAgent,
+      // Cross-agent (`_any`) reach is OFF by default — a general install
+      // advertises only the single-persona surface. Set PANTHEON_CROSS_AGENT=1
+      // on the MCP registration (e.g. a project-scoped `.mcp.json`) to
+      // re-enable the cross-persona tools for projects that drive other agents.
+      cross_agent_enabled: process.env.PANTHEON_CROSS_AGENT === "1",
       // §9 load gate: real boot requires `load_memory` before chat. A
       // fresh / empty persona is auto-skipped inside the dispatcher.
       memory_gate_enabled: true,
@@ -214,9 +219,16 @@ export async function runMcpServer(options: ServerOptions = {}): Promise<void> {
     // config is global (one server entry for every project), so the
     // filter is per-conversation — it keys off this session's project,
     // resolved at boot. Normal projects see the full list.
-    const advertised = ctx.single_agent
-      ? TOOLS.filter((t) => !SINGLE_AGENT_HIDDEN.has(t.name))
-      : TOOLS;
+    // Two independent trims, either sufficient to hide a tool:
+    //  - single-agent project → SINGLE_AGENT_HIDDEN (creation / project-
+    //    memory / cross-persona reads, keeping force_*_any).
+    //  - cross-agent reach off (the default) → CROSS_AGENT_HIDDEN (every
+    //    `_any` tool). Both key off boot-resolved ctx state.
+    const advertised = TOOLS.filter(
+      (t) =>
+        !(ctx.single_agent && SINGLE_AGENT_HIDDEN.has(t.name)) &&
+        !(!ctx.cross_agent_enabled && CROSS_AGENT_HIDDEN.has(t.name)),
+    );
     return { tools: advertised as unknown as Array<(typeof TOOLS)[number]> };
   });
 

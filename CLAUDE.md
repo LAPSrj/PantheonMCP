@@ -295,6 +295,35 @@ in-band tools — keep the two in sync (see the convention note under
   keep their boot-time-trimmed `tools/list` + `ctx.single_agent` dispatch
   guard until they restart — the handler does NOT mutate live `ctx`).
 
+### Cross-agent reach (`PANTHEON_CROSS_AGENT`)
+
+The `_any` tools — every cross-persona / cross-project variant
+(`get_memory_any`, `find_memory_any`, `summon_any`, `force_rest_any`,
+`search_history_any`, `*_project_memory_any`, `edit_project_any`, …) — are
+hidden by DEFAULT so a general install advertises only the single-persona
+surface and spends less of the harness's tool-list context. Enable them per
+project by setting `PANTHEON_CROSS_AGENT=1` on the pantheon MCP registration
+(e.g. a project-scoped `.mcp.json` in the repos that drive other agents);
+re-registering / restarting the MCP server picks up the env.
+
+- **Hidden set (`CROSS_AGENT_HIDDEN`, `src/mcp/tools.ts`):** computed from
+  tool names — exactly the tools whose name ends in `_any` (INCLUDING
+  `force_rest_any`/`force_exit_any`). New `_any` tools are covered
+  automatically. Orthogonal to `SINGLE_AGENT_HIDDEN`: either gate hiding a
+  tool is sufficient, and the single-agent trim still keeps `force_*_any`
+  while this one hides them.
+- **Boot resolution (`src/mcp/server.ts`):** `cross_agent_enabled =
+  process.env.PANTHEON_CROSS_AGENT === "1"`, stashed on `ctx` BEFORE the
+  `tools/list` handshake (same timing as `ctx.single_agent`). `createContext`
+  defaults the field to `true` so test / e2e contexts that drive `_any`
+  handlers directly aren't gated — only the real server boot turns it off.
+- **Two enforcement points (mirrors single-agent):** `tools/list` omits the
+  hidden set, and the dispatcher rejects a remembered name with
+  `tool_unavailable_cross_agent` so hiding is authoritative, not cosmetic.
+- **Default flip caveat:** because cross-agent reach is OFF by default, any
+  multi-agent home that relies on `summon_any` / `_any` reads must set
+  `PANTHEON_CROSS_AGENT=1` on its registration, or those tools go dark.
+
 ### WSL spawn distro (`wsl_distro`)
 
 A `platform: "wsl"` persona launches via `wsl.exe -d <distro>` (the wt

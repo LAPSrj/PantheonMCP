@@ -5,7 +5,7 @@ import { ChatError } from "../chat/index.ts";
 import { validatePayload, type JsonSchema } from "../schemas/index.ts";
 import { computePressure, isSaveTool, pressureHint } from "./context-pressure.ts";
 import { HANDLERS } from "./handlers/index.ts";
-import { SINGLE_AGENT_HIDDEN, TOOLS } from "./tools.ts";
+import { CROSS_AGENT_HIDDEN, SINGLE_AGENT_HIDDEN, TOOLS } from "./tools.ts";
 import { ToolError, type HandlerContext, type MCPCallResult } from "./types.ts";
 
 const TOOL_SCHEMAS: Record<string, JsonSchema> = Object.fromEntries(
@@ -84,6 +84,20 @@ export async function dispatch(
         `Tool '${toolName}' is unavailable: this is a single-agent project ` +
         `(one persona shared across sessions). Persona-creation, shared ` +
         `project-memory, and cross-persona reads are disabled here.`,
+    });
+  }
+  // Cross-agent reach off (the default): the `_any` tools are omitted from
+  // `tools/list`, but a model that "remembers" the name could still call
+  // one. Reject here so hiding is authoritative, not cosmetic.
+  if (!ctx.cross_agent_enabled && CROSS_AGENT_HIDDEN.has(toolName)) {
+    return errorResult({
+      error: "tool_unavailable_cross_agent",
+      message:
+        `Tool '${toolName}' is unavailable: cross-agent reach is disabled ` +
+        `(the default). The '_any' tools that read or act on OTHER personas ` +
+        `are hidden to keep the tool surface small. An operator can enable ` +
+        `them per project by setting PANTHEON_CROSS_AGENT=1 on the pantheon ` +
+        `MCP registration.`,
     });
   }
   // Reject unknown args + missing required fields against the tool's

@@ -44,6 +44,11 @@ export interface CreateContextOptions {
   /** True when this session's project is `single_agent`. Resolved at
    * MCP boot from the project config; defaults false. */
   single_agent?: boolean;
+  /** True when cross-agent (`_any`) tools are available. The real MCP
+   * boot resolves this from `PANTHEON_CROSS_AGENT` (off by default).
+   * Defaults TRUE here so test / e2e contexts that drive `_any` handlers
+   * directly aren't gated. */
+  cross_agent_enabled?: boolean;
 }
 
 /** Build a runtime context around the four foundation layers. The MCP
@@ -134,6 +139,7 @@ export function createContext(options: CreateContextOptions = {}): HandlerContex
       sessionSeq = seq;
     },
     single_agent: options.single_agent ?? false,
+    cross_agent_enabled: options.cross_agent_enabled ?? true,
   } as HandlerContext;
 }
 
