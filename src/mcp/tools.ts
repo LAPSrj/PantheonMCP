@@ -2097,6 +2097,43 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
 
   // --- Conversation-history search (CC JSONLs) ---
   {
+    name: "list_conversations",
+    description:
+      "List this persona's recent CC conversations (JSONL files under ~/.claude/projects/<cwd>/), most-recently-active first — a recency index for FINDING which transcript to read when you don't have a search term. Each entry has `session_id` (feed to `get_history_conversation` to read it), `last_user_message` + `last_agent_message` (each `{ text (~200 chars), at }`, the tail of each side) plus `last_speaker` (role of the final turn — tells you which of the two came last), `turn_count` / `user_turn_count`, and `started_at` / `last_active_at`. Use `search_history` instead when you know WHAT was said and want to find WHERE. WARNING: not durable storage — CC may compact / delete / evict these files at any time. Save anything you want to keep with `append_memory`.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        limit: {
+          type: "number",
+          description: "Max conversations returned, newest-active first. Default 5.",
+        },
+        since: {
+          type: "string",
+          description: "ISO lower bound on a conversation's last-active time.",
+        },
+      },
+    },
+  },
+  {
+    name: "list_conversations_any",
+    description:
+      "List another persona's recent conversations, or every persona's in a project. Provide EXACTLY one of `target_username` (one peer) or `project` (every persona in that project). Entries carry `persona_username`. Same projection and NOT-durable-storage warning as `list_conversations`; `limit` is global across all listed personas (newest-active first).",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        target_username: { type: "string", description: "One specific peer to list." },
+        project: {
+          type: "string",
+          description: "All personas in this project. Mutually exclusive with target_username.",
+        },
+        limit: { type: "number" },
+        since: { type: "string" },
+      },
+    },
+  },
+  {
     name: "search_history",
     description:
       "Search this persona's past CC conversations (JSONL files under ~/.claude/projects/<cwd>/). WARNING: not durable storage — CC may compact / delete / evict these files at any time. Save anything you want to keep with `append_memory`. scope: 'current' = this conversation only; 'previous' = every OTHER session; 'all' = both (default). Supports regex via `regex: true`. Also covers mid-turn messages the user typed while the agent was busy (CC logs these as `queue-operation` enqueues, sometimes with no `role: \"user\"` record) — surfaced under `role: \"user\"`. As a DISCOVERY tool it does NOT filter system/notification injections (task-notifications, sentinels remain findable); contrast `validate_user_quote`, which is an AUDIT and excludes them.",

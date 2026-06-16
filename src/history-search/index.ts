@@ -738,6 +738,183 @@ export function searchHistory(
   return hits;
 }
 
+// ---- list_conversations ---------------------------------------------- //
+//
+// Enumerate a persona's recent CC conversations so a caller can pick which
+// transcript to read (with get_history_conversation) WITHOUT first having to
+// know a search term. Pairs the other way around from search_history: search
+// finds a conversation by content; this lists them by recency.
+
+export interface ListConversationsOptions {
+  cwd: string;
+  /** Cap on conversations returned, most-recently-active first. Default 20. */
+  limit?: number;
+  /** ISO lower bound on a conversation's last-active time (file mtime). */
+  since?: string;
+  claudeProjectsRoot?: string;
+  /** CC session UUID for the calling pantheon session — marks the
+   * `is_current_session` flag. Null when launched outside a CC session. */
+  currentSessionId?: string | null;
+}
+
+/** One end-of-conversation message excerpt. `text` is whitespace-
+ * normalized and capped to CONVERSATION_PREVIEW_MAX_CHARS; `at` is the
+ * turn's timestamp (null when the record carried none). */
+export interface ConversationTail {
+  text: string;
+  at: string | null;
+}
+
+export interface ConversationSummary {
+  session_id: string;
+  is_current_session: boolean;
+  /** Timestamp of the first real conversational turn, or null when the
+   * transcript carries none. */
+  started_at: string | null;
+  /** Timestamp of the last real conversational turn; falls back to the
+   * file's modification time when no turn carries a timestamp. */
+  last_active_at: string | null;
+  /** Real user/agent/subagent turns (same projection as
+   * get_history_conversation, ungrouped). */
+  turn_count: number;
+  /** Subset of `turn_count` that are human turns. */
+  user_turn_count: number;
+  /** The last human turn in the conversation, or null when there is none. */
+  last_user_message: ConversationTail | null;
+  /** The last main-agent turn in the conversation, or null when there is
+   * none. (Subagent turns are excluded.) */
+  last_agent_message: ConversationTail | null;
+  /** Role of the conversation's FINAL turn — `"user"`, `"agent"`, or
+   * `"subagent"` — so the caller knows which of the two `last_*` messages
+   * came last (the other came first). Null for an empty transcript. */
+  last_speaker: ConversationRole | null;
+  /** Persona this conversation belonged to. Only stamped by the `_any`
+   * variant (`listConversationsMulti`). */
+  persona_username?: string;
+}
+
+export interface ListConversationsResult {
+  conversations: ConversationSummary[];
+  /** Total jsonl files in the persona's dir, before `limit`/`since`. */
+  total: number;
+  /** True when conversations existed beyond those returned. */
+  truncated: boolean;
+}
+
+export const DEFAULT_LIST_CONVERSATIONS_LIMIT = 5;
+export const CONVERSATION_PREVIEW_MAX_CHARS = 200;
+
+function tailFor(
+  flat: FlatTurn[],
+  role: ConversationRole,
+): ConversationTail | null {
+  for (let i = flat.length - 1; i >= 0; i--) {
+    const t = flat[i]!;
+    if (t.role !== role) continue;
+    return {
+      text: t.text.replace(/\s+/g, " ").trim().slice(0, CONVERSATION_PREVIEW_MAX_CHARS),
+      at: t.time,
+    };
+  }
+  return null;
+}
+
+function summarizeConversation(
+  session_id: string,
+  filePath: string,
+  mtime: number,
+  currentId: string | null,
+): ConversationSummary {
+  const flat = flattenConversation(readJsonlSafely(filePath));
+  const firstTime = flat.find((t) => t.time !== null)?.time ?? null;
+  let lastTime: string | null = null;
+  for (let i = flat.length - 1; i >= 0; i--) {
+    if (flat[i]!.time !== null) {
+      lastTime = flat[i]!.time;
+      break;
+    }
+  }
+  return {
+    session_id,
+    is_current_session: session_id === currentId,
+    started_at: firstTime,
+    last_active_at: lastTime ?? (mtime > 0 ? new Date(mtime).toISOString() : null),
+    turn_count: flat.length,
+    user_turn_count: flat.reduce((n, t) => n + (t.role === "user" ? 1 : 0), 0),
+    last_user_message: tailFor(flat, "user"),
+    last_agent_message: tailFor(flat, "agent"),
+    last_speaker: flat.length > 0 ? flat[flat.length - 1]!.role : null,
+  };
+}
+
+/** List a persona's CC conversations, most-recently-active first. */
+export function listConversations(
+  options: ListConversationsOptions,
+): ListConversationsResult {
+  const limit = Math.max(1, Math.floor(options.limit ?? DEFAULT_LIST_CONVERSATIONS_LIMIT));
+  const currentId = options.currentSessionId ?? null;
+  const sinceMs = options.since ? Date.parse(options.since) : null;
+
+  const projectsRoot =
+    options.claudeProjectsRoot ?? path.join(os.homedir(), ".claude", "projects");
+  const dir = path.join(projectsRoot, encodeCwdForClaudeProject(options.cwd));
+  if (!fs.existsSync(dir)) {
+    return { conversations: [], total: 0, truncated: false };
+  }
+
+  const ordered = fs
+    .readdirSync(dir)
+    .filter((f) => f.endsWith(".jsonl"))
+    .map((f) => ({
+      session_id: f.replace(/\.jsonl$/, ""),
+      filePath: path.join(dir, f),
+      mtime: safeMtime(path.join(dir, f)),
+    }))
+    .filter((e) => sinceMs === null || !Number.isFinite(sinceMs) || e.mtime >= sinceMs)
+    .sort((a, b) => b.mtime - a.mtime);
+
+  const slice = ordered.slice(0, limit);
+  const conversations = slice.map((e) =>
+    summarizeConversation(e.session_id, e.filePath, e.mtime, currentId),
+  );
+  return {
+    conversations,
+    total: ordered.length,
+    truncated: ordered.length > slice.length,
+  };
+}
+
+/** Multi-persona variant. Lists each persona's conversations, stamping
+ * `persona_username`, and returns the globally most-recent `limit` across
+ * all of them. */
+export function listConversationsMulti(
+  personas: PersonaTarget[],
+  options: Omit<ListConversationsOptions, "cwd"> = {},
+): ListConversationsResult {
+  const limit = Math.max(1, Math.floor(options.limit ?? DEFAULT_LIST_CONVERSATIONS_LIMIT));
+  let total = 0;
+  const all: Array<ConversationSummary & { _sortKey: number }> = [];
+  for (const persona of personas) {
+    const res = listConversations({ ...options, cwd: persona.cwd, limit });
+    total += res.total;
+    for (const c of res.conversations) {
+      const t = c.last_active_at ? Date.parse(c.last_active_at) : 0;
+      all.push({
+        ...c,
+        persona_username: persona.username,
+        _sortKey: Number.isFinite(t) ? t : 0,
+      });
+    }
+  }
+  all.sort((a, b) => b._sortKey - a._sortKey);
+  const conversations = all.slice(0, limit).map(({ _sortKey, ...c }) => c);
+  return {
+    conversations,
+    total,
+    truncated: total > conversations.length,
+  };
+}
+
 /** CC encodes a cwd into a project-folder name by replacing every '/'
  * with '-'. The leading '/' becomes a leading '-'. */
 export function encodeCwdForClaudeProject(cwd: string): string {

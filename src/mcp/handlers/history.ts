@@ -10,6 +10,8 @@ import { listPersonas, readPersona } from "../../identity/index.ts";
 import {
   extractConversation,
   fetchHistoryMessage,
+  listConversations,
+  listConversationsMulti,
   searchHistory,
   searchHistoryMulti,
   validateUserQuote,
@@ -191,6 +193,99 @@ export const search_history_any: Handler = async (args, ctx) => {
       err instanceof Error ? err.message : String(err),
     );
   }
+};
+
+/** List the persona's recent CC conversations, most-recently-active
+ * first — a recency index so the caller can pick which transcript to
+ * read with `get_history_conversation` without first knowing a search
+ * term. Each entry carries a `preview` (the conversation's first human
+ * turn) plus turn counts and timestamps. */
+export const list_conversations: Handler = async (args, ctx) => {
+  const limit = asNumber(args.limit);
+  const since = asString(args.since);
+
+  const username =
+    ctx.session.claimedUsername ?? ctx.session.guestUsername ?? null;
+  if (!username) {
+    throw new ToolError(
+      "no_persona",
+      "list_conversations needs a claimed persona — claim one (or wait for the bootstrap claim) before calling.",
+    );
+  }
+  const persona = readPersona(ctx.paths, username);
+  if (!persona) {
+    throw new ToolError(
+      "not_registered",
+      `Persona '${username}' is not in the registry; can't resolve its cwd.`,
+    );
+  }
+
+  const result = listConversations({
+    cwd: persona.cwd,
+    currentSessionId: ctx.claude_session_id,
+    ...(limit !== undefined ? { limit } : {}),
+    ...(since !== undefined ? { since } : {}),
+  });
+  return {
+    ok: true,
+    current_session_id: ctx.claude_session_id,
+    count: result.conversations.length,
+    ...result,
+    warning: HISTORY_WARNING,
+  };
+};
+
+/** Cross-persona / cross-project variant. Provide EXACTLY one of
+ * `target_username` (one peer) or `project` (every persona in that
+ * project). Entries carry `persona_username`. */
+export const list_conversations_any: Handler = async (args, ctx) => {
+  const limit = asNumber(args.limit);
+  const since = asString(args.since);
+  const target_username = asString(args.target_username);
+  const project = asString(args.project);
+  if (!target_username && !project) {
+    throw new ToolError(
+      "invalid_argument",
+      "list_conversations_any requires either `target_username` (one persona) or `project` (all personas in that project).",
+    );
+  }
+
+  let personas: PersonaTarget[];
+  if (target_username) {
+    const persona = readPersona(ctx.paths, target_username);
+    if (!persona) {
+      throw new ToolError(
+        "not_registered",
+        `Persona '${target_username}' is not in the registry.`,
+      );
+    }
+    if (project !== undefined && persona.project !== project) {
+      throw new ToolError(
+        "invalid_argument",
+        `Persona '${target_username}' is in project '${persona.project}', not '${project}'.`,
+      );
+    }
+    personas = [{ username: persona.username, cwd: persona.cwd }];
+  } else {
+    const all = listPersonas(ctx.paths).filter((p) => p.project === project);
+    personas = all.map((p) => ({ username: p.username, cwd: p.cwd }));
+  }
+
+  const result = listConversationsMulti(personas, {
+    currentSessionId: ctx.claude_session_id,
+    ...(limit !== undefined ? { limit } : {}),
+    ...(since !== undefined ? { since } : {}),
+  });
+  return {
+    ok: true,
+    ...(target_username !== undefined ? { target_username } : {}),
+    ...(project !== undefined ? { project } : {}),
+    current_session_id: ctx.claude_session_id,
+    count: result.conversations.length,
+    ...result,
+    personas_searched: personas.map((p) => p.username),
+    warning: HISTORY_WARNING,
+  };
 };
 
 interface FetchArgs {

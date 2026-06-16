@@ -119,6 +119,8 @@ export const HANDLERS: Record<string, Handler> = {
   get_project_memory_details_any: projectMemory.get_project_memory_details_any,
 
   // Conversation-history search (CC JSONLs — NOT durable storage)
+  list_conversations: history.list_conversations,
+  list_conversations_any: history.list_conversations_any,
   search_history: history.search_history,
   search_history_any: history.search_history_any,
   get_history_message: history.get_history_message,
