@@ -126,6 +126,24 @@ test("get_instructions returns a section by topic + the menu without one", async
   expect(bad.error).toBe("unknown_topic");
 });
 
+test("get_instructions: memory topic carries the concision norm + rationale", async () => {
+  const mem = parse(await dispatch("get_instructions", { topic: "memory" }, ctx));
+  const content = mem.content as string;
+  expect(content).toContain("CONCISELY");
+  // The incentive framing — shared budget + self-eviction — must be stated,
+  // not just a bare "be brief".
+  expect(content).toContain("budget");
+  expect(content).toContain("self-evict");
+});
+
+test("get_instructions: chat topic carries the relay-cap concision norm", async () => {
+  const chat = parse(await dispatch("get_instructions", { topic: "chat" }, ctx));
+  const content = chat.content as string;
+  expect(content).toContain("SHORT");
+  expect(content).toContain("relay");
+  expect(content).toContain("get_message");
+});
+
 // --- P6 decay via the handler surface ---
 
 test("load_memory starts the session ordinal; appends stamp session_seq", async () => {

@@ -88,6 +88,7 @@ export {
   isVisibleRow,
   isDeliverableRow,
   formatBatch,
+  watcherTruncateThreshold,
   tailOnce,
   tailLoop,
   readMaxSeq,

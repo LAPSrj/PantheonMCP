@@ -4,6 +4,7 @@ import {
   getMessageBySeq,
   incarnationBase,
   promoteInPlace,
+  watcherTruncateThreshold,
   type ChatErrorCode,
   type PromoteFields,
 } from "../../chat/index.ts";
@@ -961,6 +962,19 @@ export const send_message: Handler = async (args, ctx) => {
   // siblings delivered to the canonical, but flag the siblings.
   const cloneHint = cloneAddressingHint(router, scope, target);
   if (cloneHint) hints.push(cloneHint);
+  // Relay-truncation cost (concision incentive): the watcher relays the
+  // WHOLE message only when it's within the truncate threshold; past it,
+  // peers receive an oversized STUB and must call get_message to read the
+  // body — i.e. a long message is NOT read inline. Surface that cost at
+  // send time so the sender feels it now, not silently downstream.
+  const relayCap = watcherTruncateThreshold();
+  if (text.length > relayCap) {
+    hints.push(
+      `This message is ${text.length} chars (> ${relayCap}-char relay cap). ` +
+        `Peers won't see the body inline — the watcher relays an oversized stub ` +
+        `and they must call get_message to read it. Tighten to land it inline.`,
+    );
+  }
   return {
     ok: true,
     message_id: msg.id,

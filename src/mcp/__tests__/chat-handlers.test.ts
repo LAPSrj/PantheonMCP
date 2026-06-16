@@ -898,6 +898,28 @@ test("send_message: project broadcast with exactly one @mention surfaces single-
   expect(hints!.some((h) => h.includes("addressed to exactly one peer (@beta)"))).toBe(true);
 });
 
+test("send_message: an over-length message surfaces the relay-truncation hint", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  ctx.chat!.add({ username: "beta", project: "X", transient: false });
+  const longText = "x".repeat(450); // > the 400-char default relay cap
+  const r = await call("send_message", { text: longText, scope: "project" });
+  expect(r.ok).toBe(true);
+  const hints = (r.payload.hints as string[]) ?? [];
+  const relay = hints.find((h) => h.includes("relay cap"));
+  expect(relay).toBeDefined();
+  expect(relay).toContain("get_message");
+  expect(relay).toContain("450");
+});
+
+test("send_message: a short message does NOT surface the relay-truncation hint", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  ctx.chat!.add({ username: "beta", project: "X", transient: false });
+  const r = await call("send_message", { text: "all good", scope: "project" });
+  expect(r.ok).toBe(true);
+  const hints = (r.payload.hints as string[]) ?? [];
+  expect(hints.some((h) => h.includes("relay cap"))).toBe(false);
+});
+
 test("send_message: project broadcast with two @mentions does NOT surface single-mention warning", async () => {
   await call("login", { username: "alpha", project: "X", transient: false });
   ctx.chat!.add({ username: "beta", project: "X", transient: false });

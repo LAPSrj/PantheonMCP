@@ -415,7 +415,7 @@ function priorityTagForRow(
  * `PANTHEON_WATCHER_TRUNCATE_AT`. */
 const DEFAULT_WATCHER_TRUNCATE_AT = 400;
 
-function watcherTruncateThreshold(): number {
+export function watcherTruncateThreshold(): number {
   const raw = process.env.PANTHEON_WATCHER_TRUNCATE_AT;
   if (raw === undefined) return DEFAULT_WATCHER_TRUNCATE_AT;
   const n = Number(raw);
