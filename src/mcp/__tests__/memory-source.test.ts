@@ -164,9 +164,9 @@ test("recall_memory reports has_source:false for an entry with no provenance", a
   expect(payload.has_source).toBe(false);
 });
 
-// --- get_memory_source ------------------------------------------------- //
+// --- recall_memory(include: ['source']) -------------------------------- //
 
-test("get_memory_source returns the snapshot + coordinates; empty array when none", async () => {
+test("recall(include:['source']) returns the snapshot + coordinates; empty array when none", async () => {
   await claimAlpha();
   seedChatMessage("msg-7", "quoted text");
   const withSrc = await call("append_memory", {
@@ -176,7 +176,7 @@ test("get_memory_source returns the snapshot + coordinates; empty array when non
     topic: "conventions",
     sources: [{ message_id: "msg-7", label: "tag" }],
   });
-  const got = await call("get_memory_source", { id: withSrc.payload.id });
+  const got = await call("recall_memory", { id: withSrc.payload.id, include: ["source"] });
   expect(got.ok).toBe(true);
   expect(got.payload.sources).toHaveLength(1);
   expect((got.payload.sources as unknown[])[0]).toMatchObject({
@@ -192,7 +192,7 @@ test("get_memory_source returns the snapshot + coordinates; empty array when non
     kind: "note",
     topic: "t",
   });
-  const gotEmpty = await call("get_memory_source", { id: noSrc.payload.id });
+  const gotEmpty = await call("recall_memory", { id: noSrc.payload.id, include: ["source"] });
   expect(gotEmpty.payload.sources).toEqual([]);
 });
 
@@ -207,6 +207,6 @@ test("update_memory can clear sources via null", async () => {
     sources: [{ message_id: "msg-1" }],
   });
   await call("update_memory", { id: appended.payload.id, sources: null });
-  const got = await call("get_memory_source", { id: appended.payload.id });
+  const got = await call("recall_memory", { id: appended.payload.id, include: ["source"] });
   expect(got.payload.sources).toEqual([]);
 });

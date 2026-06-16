@@ -502,7 +502,7 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
         sources: {
           type: "array",
           description:
-            "v2 provenance (opt-in, one or more). Each item cites ONE origin; the system SNAPSHOTS its text at write (durable against chat/transcript pruning) and keeps the coordinates for later re-verification. Pass exactly one of: { message_id } (a chat message), { session_id, message_at } (a transcript turn), or { quote } (verbatim user-typed text). `label` is an optional human tag (e.g. \"Leandro 2026-06-01\"). NEVER returned by default — recall_memory only flags `has_source`; fetch the full set via `get_memory_source(id)`.",
+            "v2 provenance (opt-in, one or more). Each item cites ONE origin; the system SNAPSHOTS its text at write (durable against chat/transcript pruning) and keeps the coordinates for later re-verification. Pass exactly one of: { message_id } (a chat message), { session_id, message_at } (a transcript turn), or { quote } (verbatim user-typed text). `label` is an optional human tag (e.g. \"Leandro 2026-06-01\"). NEVER returned by default — recall_memory only flags `has_source`; fetch the full set via `recall_memory(id, include: [\"source\"])`.",
           items: {
             type: "object",
             additionalProperties: false,
@@ -609,7 +609,7 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
   {
     name: "amend_memory",
     description:
-      "Append (or prepend) text to one of YOUR OWN entries' body WITHOUT re-sending the whole text — the splice happens server-side and atomically (no sibling-clobber). Use for running-log / accreting entries instead of recall_memory + update_memory. `add` is the chunk; `position` 'end' (default) or 'start'; `separator` between old and new text (default a blank line); `stamp: true` prefixes the chunk with \"- <date>: \". Like any content edit, this records a revision (see `get_memory_history`). Returns a compact ack ({ id, status, text_chars }).",
+      "Append (or prepend) text to one of YOUR OWN entries' body WITHOUT re-sending the whole text — the splice happens server-side and atomically (no sibling-clobber). Use for running-log / accreting entries instead of recall_memory + update_memory. `add` is the chunk; `position` 'end' (default) or 'start'; `separator` between old and new text (default a blank line); `stamp: true` prefixes the chunk with \"- <date>: \". Like any content edit, this records a revision (see `recall_memory(id, include: [\"history\"])`). Returns a compact ack ({ id, status, text_chars }).",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -640,20 +640,31 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
   {
     name: "recall_memory",
     description:
-      "Retrieve the full text of one of YOUR OWN memory entries by id, regardless of render tier. Flips faded → active in the same call. Self-only — for another persona's entry use `recall_memory_any` (read-only). Use when you see a collapsed entry's summary and want the body.",
+      "Retrieve the full text of one of YOUR OWN memory entries by id, regardless of render tier. Flips faded → active in the same call. Self-only — for another persona's entry use `recall_memory_any` (read-only). Use when you see a collapsed entry's summary and want the body. The heavy/optional fields are never auto-returned — `has_source` / `has_history` flag their presence; pass `include` to inline them: `\"details\"` (legacy details payload), `\"source\"` (provenance snapshots + re-verify coordinates: message_id → get_message, session_id+message_at → get_history_message, quote → validate_user_quote), `\"history\"` (the update timeline; first revision full, each later one a diff, byte-capped). With `include: [\"history\"]`, `revision: <n>` returns that one revision's full content instead (0 = original … tip = current).",
     inputSchema: {
       type: "object",
       additionalProperties: false,
       required: ["id"],
       properties: {
         id: { type: "string" },
+        include: {
+          type: "array",
+          items: { type: "string", enum: ["details", "source", "history"] },
+          description:
+            "Opt-in heavy fields to inline: 'details', 'source' (provenance), 'history' (update timeline). Omit for just the body + flags.",
+        },
+        revision: {
+          type: "number",
+          description:
+            "With include: ['history'] — return this one revision's full content instead of the diff timeline (0 = original, tip = current).",
+        },
       },
     },
   },
   {
     name: "recall_memory_any",
     description:
-      "Cross-persona full-text read: return another persona's memory entry by id (any tier/status). READ-ONLY — unlike self-`recall_memory` it does NOT flip the peer's faded entry to active. The `_any` suffix marks this as the elevated, separately-deniable variant. Errors `entry_not_found` if no such entry.",
+      "Cross-persona full-text read: return another persona's memory entry by id (any tier/status). READ-ONLY — unlike self-`recall_memory` it does NOT flip the peer's faded entry to active. The `_any` suffix marks this as the elevated, separately-deniable variant. Errors `entry_not_found` if no such entry. Same `include` (details / source / history) + `revision` opt-ins as `recall_memory` — the audit path for verifying where a peer's memory came from.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -661,6 +672,17 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
       properties: {
         username: { type: "string", description: "Persona that owns the entry." },
         id: { type: "string" },
+        include: {
+          type: "array",
+          items: { type: "string", enum: ["details", "source", "history"] },
+          description:
+            "Opt-in heavy fields to inline: 'details', 'source' (provenance), 'history' (update timeline).",
+        },
+        revision: {
+          type: "number",
+          description:
+            "With include: ['history'] — return this one revision's full content instead of the diff timeline.",
+        },
       },
     },
   },
@@ -806,7 +828,7 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
   {
     name: "find_memory_any",
     description:
-      "Cross-persona search: walk EVERY registered persona's memory for entries matching `query`. Hits carry `username` so follow-ups route via `recall_memory_any` / `get_memory_details_any`. The `_any` suffix marks this as the elevated, separately-deniable variant of self-only `find_memory`. Sorted newest-first; capped at `limit` (default 50).",
+      "Cross-persona search: walk EVERY registered persona's memory for entries matching `query`. Hits carry `username` so follow-ups route via `recall_memory_any` (with `include` for details / source / history). The `_any` suffix marks this as the elevated, separately-deniable variant of self-only `find_memory`. Sorted newest-first; capped at `limit` (default 50).",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -818,92 +840,6 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
         status: { type: "string", enum: ["active", "faded", "forgotten", "all"] },
         core: { type: "boolean" },
         limit: { type: "number", description: "Default 50." },
-      },
-    },
-  },
-  {
-    name: "get_memory_details",
-    description:
-      "Return ONLY the `details` field of one of YOUR OWN entries (not summary or text — caller already has those from get_memory). Self-only — for another persona use `get_memory_details_any`. Errors `entry_not_found` if no entry. Returns `details: null` when the entry has no details.",
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      required: ["id"],
-      properties: {
-        id: { type: "string" },
-      },
-    },
-  },
-  {
-    name: "get_memory_details_any",
-    description:
-      "Cross-persona details read: return ONLY the `details` field of another persona's entry. The `_any` suffix marks this as the elevated, separately-deniable variant of self-only `get_memory_details`. Errors `entry_not_found` if no entry.",
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      required: ["username", "id"],
-      properties: {
-        username: { type: "string", description: "Persona that owns the entry." },
-        id: { type: "string" },
-      },
-    },
-  },
-  {
-    name: "get_memory_source",
-    description:
-      "Return the `sources` (provenance) of one of YOUR OWN entries — the write-time snapshots plus the coordinates to re-verify each origin live (`message_id` → get_message; `session_id`+`message_at` → get_history_message; `quote` → validate_user_quote, with username = you). Provenance is never auto-returned — recall_memory only flags `has_source`; this is the fetch path. Returns `sources: []` when the entry has none. Self-only — for a peer use `get_memory_source_any`.",
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      required: ["id"],
-      properties: {
-        id: { type: "string" },
-      },
-    },
-  },
-  {
-    name: "get_memory_source_any",
-    description:
-      "Cross-persona provenance read: return the `sources` of another persona's entry — the audit path for verifying where a peer's memory came from. The `_any` suffix marks this as the elevated, separately-deniable variant of self-only `get_memory_source`. Errors `entry_not_found` if no entry.",
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      required: ["username", "id"],
-      properties: {
-        username: { type: "string", description: "Persona that owns the entry." },
-        id: { type: "string" },
-      },
-    },
-  },
-  {
-    name: "get_memory_history",
-    description:
-      "Return the update history of one of YOUR OWN entries — every prior content state, recorded automatically on each update_memory / amend_memory. Without `revision`: the full timeline, with the first (original) revision shown in full and each later one as a line-diff (text) + before→after (other fields) vs. the previous; long timelines elide the middle (still fetchable individually). With `revision: <n>`: the FULL content of that one revision (0 = original, the highest index = current tip). History is never auto-returned — recall_memory only flags `has_history`; this is the fetch path. Self-only — for a peer use `get_memory_history_any`.",
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      required: ["id"],
-      properties: {
-        id: { type: "string" },
-        revision: {
-          type: "number",
-          description: "Optional revision index (0 = original … tip = current). Returns that revision's full content instead of the diff timeline.",
-        },
-      },
-    },
-  },
-  {
-    name: "get_memory_history_any",
-    description:
-      "Cross-persona history read: the update history of another persona's entry (full diff timeline, or one revision's full content via `revision`). The `_any` suffix marks this as the elevated, separately-deniable variant of self-only `get_memory_history`. Errors `entry_not_found` if no entry.",
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      required: ["username", "id"],
-      properties: {
-        username: { type: "string", description: "Persona that owns the entry." },
-        id: { type: "string" },
-        revision: { type: "number", description: "Optional revision index." },
       },
     },
   },
@@ -1380,38 +1316,6 @@ const ALL_TOOL_DEFS: readonly ToolDef[] = [
         target_agent_id: { type: "string" },
         reason: { type: "string" },
       },
-    },
-  },
-
-  // Legacy aliases (deprecated; one-release window).
-  {
-    name: "allow_idle",
-    description:
-      "DEPRECATED: use `allow_rest`. Retained for one release; surfaces a `deprecation` field in the response.",
-    inputSchema: { type: "object", additionalProperties: false, properties: {} },
-  },
-  {
-    name: "idle",
-    description:
-      "DEPRECATED: use `rest`. Retained for one release; surfaces a `deprecation` field in the response.",
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        reason: { type: "string" },
-        session_id: { type: "string" },
-      },
-    },
-  },
-  {
-    name: "extend_idle",
-    description:
-      "DEPRECATED: use `extend_rest`. Retained for one release; surfaces a `deprecation` field in the response.",
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      required: ["minutes"],
-      properties: { minutes: { type: "number" } },
     },
   },
 

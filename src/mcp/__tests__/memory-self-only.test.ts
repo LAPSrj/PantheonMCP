@@ -35,7 +35,6 @@ const SELF_ONLY_TOOLS = [
   "get_memory",
   "list_memory",
   "recall_memory",
-  "get_memory_details",
   "list_topics",
   "load_memory",
   "find_memory",
@@ -47,7 +46,6 @@ const ANY_READ_TOOLS = [
   "get_memory_any",
   "list_memory_any",
   "recall_memory_any",
-  "get_memory_details_any",
 ];
 
 test("bare personal-memory tools expose no cross-persona `username`", () => {

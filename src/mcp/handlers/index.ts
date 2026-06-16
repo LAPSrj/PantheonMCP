@@ -46,12 +46,6 @@ export const HANDLERS: Record<string, Handler> = {
   list_memory_any: memory.list_memory_any,
   find_memory: memory.find_memory,
   find_memory_any: memory.find_memory_any,
-  get_memory_details: memory.get_memory_details,
-  get_memory_details_any: memory.get_memory_details_any,
-  get_memory_source: memory.get_memory_source,
-  get_memory_source_any: memory.get_memory_source_any,
-  get_memory_history: memory.get_memory_history,
-  get_memory_history_any: memory.get_memory_history_any,
   snapshot_memory: memory.snapshot_memory,
   restore_memory: memory.restore_memory,
   list_snapshots: memory.list_snapshots,
@@ -67,10 +61,6 @@ export const HANDLERS: Record<string, Handler> = {
   force_exit: lifecycle.force_exit,
   force_rest_any: lifecycle.force_rest_any,
   force_exit_any: lifecycle.force_exit_any,
-  // Legacy aliases (deprecated; one-release migration window).
-  allow_idle: lifecycle.allow_idle,
-  idle: lifecycle.idle,
-  extend_idle: lifecycle.extend_idle,
 
   // Spawn (§11a)
   summon: spawn.summon,

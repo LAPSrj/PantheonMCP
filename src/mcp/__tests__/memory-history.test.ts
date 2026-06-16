@@ -60,30 +60,31 @@ test("recall flags has_history but never returns revisions", async () => {
   expect(recalled.payload.revisions).toBeUndefined();
 });
 
-test("get_memory_history returns first-full + diff timeline", async () => {
+test("recall(include:['history']) returns first-full + diff timeline", async () => {
   await claimAlpha();
   const a = await call("append_memory", { text: "line a\nline b", topic: "t", kind: "note" });
   const id = a.payload.id as string;
   await call("update_memory", { id, text: "line a\nline B" });
 
-  const h = await call("get_memory_history", { id });
-  expect(h.payload.tip).toBe(1);
-  const revs = h.payload.revisions as Array<Record<string, unknown>>;
+  const h = await call("recall_memory", { id, include: ["history"] });
+  const hist = h.payload.history as Record<string, unknown>;
+  expect(hist.tip).toBe(1);
+  const revs = hist.revisions as Array<Record<string, unknown>>;
   expect(revs.length).toBe(2);
   expect((revs[0]!.full as Record<string, unknown>).text).toBe("line a\nline b");
   expect((revs[1]!.diff as Record<string, unknown>).text).toContain("+ line B");
 });
 
-test("get_memory_history with revision returns that revision's full content", async () => {
+test("recall(include:['history'], revision) returns that revision's full content", async () => {
   await claimAlpha();
   const a = await call("append_memory", { text: "v0", topic: "t", kind: "note" });
   const id = a.payload.id as string;
   await call("update_memory", { id, text: "v1" });
 
-  const r0 = await call("get_memory_history", { id, revision: 0 });
-  expect((r0.payload.content as Record<string, unknown>).text).toBe("v0");
-  const r1 = await call("get_memory_history", { id, revision: 1 });
-  expect((r1.payload.content as Record<string, unknown>).text).toBe("v1");
+  const r0 = await call("recall_memory", { id, include: ["history"], revision: 0 });
+  expect(((r0.payload.history as Record<string, unknown>).content as Record<string, unknown>).text).toBe("v0");
+  const r1 = await call("recall_memory", { id, include: ["history"], revision: 1 });
+  expect(((r1.payload.history as Record<string, unknown>).content as Record<string, unknown>).text).toBe("v1");
 });
 
 test("amend_memory appends server-side and is in history", async () => {

@@ -382,7 +382,7 @@ test("append_memory rejects the removed `details` input (v2 §16 hard-cut)", asy
   expect(r.payload.error).toBe("invalid_args");
 });
 
-test("get_memory_details returns ONLY the details field", async () => {
+test("recall_memory(include: ['details']) inlines the details field", async () => {
   await call("register", {
     username: "vellumpike",
     project: "pantheon",
@@ -395,11 +395,16 @@ test("get_memory_details returns ONLY the details field", async () => {
     text: "body",
     details: "verbatim quote",
   });
-  const r = await call("get_memory_details", { id: append.id });
+  // Without include: just the body, no details.
+  const bare = await call("recall_memory", { id: append.id });
+  expect(bare.ok).toBe(true);
+  expect(bare.payload).not.toHaveProperty("details");
+  expect(bare.payload.text).toBe("body");
+  // Opt in via include.
+  const r = await call("recall_memory", { id: append.id, include: ["details"] });
   expect(r.ok).toBe(true);
   expect(r.payload.details).toBe("verbatim quote");
-  expect(r.payload).not.toHaveProperty("text");
-  expect(r.payload).not.toHaveProperty("summary");
+  expect(r.payload.text).toBe("body");
 });
 
 // --- lifecycle ---
@@ -672,17 +677,18 @@ test("extend_rest rejects other string values", async () => {
   expect(r.payload.error).toBe("invalid_argument");
 });
 
-test("legacy idle aliases delegate and surface a deprecation note", async () => {
+test("removed legacy idle aliases are unknown tools", async () => {
   await call("register", {
     username: "vellumpike",
     project: "pantheon",
     cwd: "/work",
     claim_after: true,
   });
-  await call("allow_idle");
-  const r = await call("idle", { reason: "test" });
-  expect(r.ok).toBe(true);
-  expect(r.payload.deprecation).toContain("rest");
+  for (const name of ["allow_idle", "idle", "extend_idle"]) {
+    const r = await call(name, {});
+    expect(r.ok).toBe(false);
+    expect(r.payload.error).toBe("unknown_tool");
+  }
 });
 
 test("exit schedules SIGTERM with the requested delay", async () => {

@@ -662,32 +662,3 @@ export function consumeForceLifecycleRequests(ctx: HandlerContext): {
   }
   return result;
 }
-
-// --- Legacy `idle` aliases (deprecated; one-release migration window) ---
-
-export const allow_idle: Handler = async (_args, ctx) => {
-  const result = await allow_rest(_args, ctx);
-  return {
-    ...(result as object),
-    deprecation:
-      "`allow_idle` is deprecated; the canonical name is `allow_rest`. This alias is retained for one release.",
-  };
-};
-
-export const idle: Handler = async (args, ctx) => {
-  const result = await rest(args, ctx);
-  return {
-    ...(result as object),
-    deprecation:
-      "`idle` is deprecated; the canonical name is `rest`. This alias is retained for one release.",
-  };
-};
-
-export const extend_idle: Handler = async (args, ctx) => {
-  const result = await extend_rest(args, ctx);
-  return {
-    ...(result as object),
-    deprecation:
-      "`extend_idle` is deprecated; the canonical name is `extend_rest`. This alias is retained for one release.",
-  };
-};

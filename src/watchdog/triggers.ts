@@ -24,7 +24,6 @@ export const RESET_TRIGGER_TOOLS: ReadonlySet<string> = new Set([
   "fade_memory",
   "forget_memory",
   "recall_memory",
-  "get_memory_details",
   "set_memory",
   // Identity
   "claim",

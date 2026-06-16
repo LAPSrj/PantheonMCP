@@ -23,7 +23,6 @@ test("TOOLS includes the full surface (no missing names from §11b)", () => {
     "fade_memory",
     "forget_memory",
     "list_memory",
-    "get_memory_details",
     // spawn
     "summon",
     "summon_any",
@@ -34,10 +33,6 @@ test("TOOLS includes the full surface (no missing names from §11b)", () => {
     "rest",
     "extend_rest",
     "exit",
-    // legacy aliases
-    "allow_idle",
-    "idle",
-    "extend_idle",
     // chat
     "login",
     "logout",
@@ -63,16 +58,10 @@ test("every tool has a non-empty description and an inputSchema object", () => {
   }
 });
 
-test("renamed tools' descriptions point at the canonical name", () => {
-  const idle = TOOLS.find((t) => t.name === "idle")!;
-  expect(idle.description).toContain("DEPRECATED");
-  expect(idle.description).toContain("rest");
-  const allowIdle = TOOLS.find((t) => t.name === "allow_idle")!;
-  expect(allowIdle.description).toContain("DEPRECATED");
-  expect(allowIdle.description).toContain("allow_rest");
-  const extendIdle = TOOLS.find((t) => t.name === "extend_idle")!;
-  expect(extendIdle.description).toContain("DEPRECATED");
-  expect(extendIdle.description).toContain("extend_rest");
+test("the deprecated idle aliases are fully removed", () => {
+  for (const name of ["allow_idle", "idle", "extend_idle"]) {
+    expect(TOOLS.find((t) => t.name === name)).toBeUndefined();
+  }
 });
 
 test("register schema notes claim_after defaults FALSE (identity-leak fix)", () => {

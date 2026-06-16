@@ -155,8 +155,8 @@ Memory is topic-scoped + lazy (`docs/memory-redesign/5-proposal-v2.md`;
 - **Removed inputs (§16 hard-cut):** `core` and `details` are no longer
   accepted by `append_memory` / `update_memory` — passing either returns
   `invalid_args`. Use `pin` + `pin_reason` instead of `core`; put payload
-  in `text`. The stored `details` field + the `get_memory_details` read
-  path remain for legacy entries.
+  in `text`. The stored `details` field + its read path
+  (`recall_memory(id, include: ["details"])`) remain for legacy entries.
 - **Write field `summary_max240`:** the agent-facing summary input on
   `append`/`update`/`set_memory` (+ the project-memory write tools) is
   named `summary_max240` (the ≤240 cap is in the name). Storage and all
@@ -180,9 +180,10 @@ Memory is topic-scoped + lazy (`docs/memory-redesign/5-proposal-v2.md`;
   coordinate stores `resolved: false` rather than failing the write. The
   stored ref keeps both the snapshot text (durable vs pruning) and the
   coordinates for live re-verification. Never rendered and STRIPPED from
-  `recall_memory` (which adds a `has_source` flag); fetched via
-  `get_memory_source(id)` / `get_memory_source_any` — the
-  `has_details`/`get_memory_details` pattern. Not mandatory on any kind.
+  `recall_memory` (which adds a `has_source` flag); inlined on demand via
+  `recall_memory(id, include: ["source"])` / `recall_memory_any` — the same
+  opt-in `include` pattern as `details` / `history` (see below). Not
+  mandatory on any kind.
 - **Update history — `revisions[]` (`src/memory/history.ts`):** every
   content-changing `update_memory` / `amend_memory` (and `fade`/`forget`,
   which route through `updateEntry`) records a FULL snapshot of the entry's
@@ -198,12 +199,14 @@ Memory is topic-scoped + lazy (`docs/memory-redesign/5-proposal-v2.md`;
   computed at read time (`buildHistory` — first revision full, each later one
   a line-diff vs. the previous). NEVER rendered at boot and STRIPPED from
   `recall_memory` / verbose update returns (which add a `has_history` flag),
-  same pattern as `sources`/`details`. Fetched via `get_memory_history(id)`
-  (full diff timeline; byte-capped to stay inline via `capHistory`, keeping
-  the rev-0 baseline + newest, eliding the middle) or
-  `get_memory_history(id, revision)` (one revision's full content; 0 =
-  original, tip index = current). `_any` cross-persona variant is hidden in
-  single-agent projects like the other `_any` reads. Capture is ON by
+  same pattern as `sources`/`details`. Inlined on demand via
+  `recall_memory(id, include: ["history"])` (full diff timeline; byte-capped
+  to stay inline via `capHistory`, keeping the rev-0 baseline + newest,
+  eliding the middle) or `recall_memory(id, include: ["history"], revision)`
+  (one revision's full content; 0 = original, tip index = current), nested
+  under a `history` key in the recall result. The `recall_memory_any`
+  cross-persona variant is hidden in single-agent projects like the other
+  `_any` reads. Capture is ON by
   default; opt out with env `PANTHEON_MEMORY_HISTORY` set to a disabling
   value (`0`/`false`/`off`/`no`, read live via `historyEnabled()`) — edits
   still apply, only new revisions are skipped; existing `revisions[]` stay

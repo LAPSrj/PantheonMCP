@@ -27,7 +27,6 @@
       "mcp__pantheon__get_memory",
       "mcp__pantheon__list_memory",
       "mcp__pantheon__recall_memory",
-      "mcp__pantheon__get_memory_details",
       "mcp__pantheon__rest",
       "mcp__pantheon__exit"
     ]

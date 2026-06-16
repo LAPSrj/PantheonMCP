@@ -390,7 +390,6 @@ test("RESET_TRIGGER_TOOLS includes the §14 explicit reset list", () => {
     "fade_memory",
     "forget_memory",
     "recall_memory",
-    "get_memory_details",
     "update_profile",
     "become",
     "claim",

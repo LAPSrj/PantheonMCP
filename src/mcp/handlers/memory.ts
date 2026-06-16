@@ -181,15 +181,18 @@ function resolveQuote(
   return base;
 }
 
-/** Project an entry for a default read path: strip `sources` (never
- * auto-returned, per the design) and surface a `has_source` flag instead.
- * The full source set is fetched on demand via `get_memory_source`. */
+/** Project an entry for a default read path: strip the heavy/optional
+ * fields `sources` / `revisions` / `details` (never auto-returned, per the
+ * design) and surface `has_source` / `has_history` / `has_details` flags
+ * instead. The full sets are fetched on demand via
+ * `recall_memory(id, include: ["source"|"history"|"details"])`. */
 function withSourceFlag(entry: MemoryEntry): Record<string, unknown> {
-  const { sources, revisions, ...rest } = entry;
+  const { sources, revisions, details, ...rest } = entry;
   return {
     ...rest,
     has_source: (sources?.length ?? 0) > 0,
     has_history: (revisions?.length ?? 0) > 0,
+    has_details: details != null && details !== "",
   };
 }
 
@@ -595,27 +598,127 @@ export const set_memory: Handler = async (args, ctx) => {
   });
 };
 
+/** The heavy/optional per-entry attachments — `details`, `sources`
+ * (provenance), and update `history`. Never auto-returned by `recall_memory`
+ * (it flags `has_source` / `has_history`); the caller opts in via
+ * `include: [...]`. Folded into recall so a single read tool covers the whole
+ * entry surface instead of three separate fetch tools. */
+const INCLUDE_KINDS = ["details", "source", "history"] as const;
+type IncludeKind = (typeof INCLUDE_KINDS)[number];
+
+function parseInclude(args: Record<string, unknown>): IncludeKind[] {
+  const raw = args.include;
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    throw new ToolError(
+      "invalid_args",
+      "`include` must be an array of any of: details, source, history.",
+    );
+  }
+  const out: IncludeKind[] = [];
+  for (const v of raw) {
+    if (v === "details" || v === "source" || v === "history") {
+      if (!out.includes(v)) out.push(v);
+    } else {
+      throw new ToolError(
+        "invalid_args",
+        `\`include\` items must each be one of details | source | history (got '${String(v)}').`,
+      );
+    }
+  }
+  return out;
+}
+
+/** Build the history attachment for a recall `include: ["history"]`. With a
+ * numeric `revision`, returns that one revision's full content; otherwise the
+ * byte-capped diff timeline. Read-only (getHistory / getHistoryRevision). */
+function historyPayload(
+  ctx: HandlerContext,
+  username: string,
+  id: string,
+  revisionArg: unknown,
+): Record<string, unknown> {
+  if (revisionArg !== undefined) {
+    const rev = asNumber(revisionArg);
+    if (rev === undefined) {
+      throw new ToolError("invalid_args", "`revision` must be a number.");
+    }
+    const res = getHistoryRevision(ctx.paths, username, id, rev);
+    if (!res) {
+      throw new ToolError("entry_not_found", `No memory entry '${id}' for '${username}'.`);
+    }
+    return { rev: res.rev, content: res.content };
+  }
+  const res = getHistory(ctx.paths, username, id);
+  if (!res) {
+    throw new ToolError("entry_not_found", `No memory entry '${id}' for '${username}'.`);
+  }
+  const { kept, elided } = capHistory(res.timeline, LIST_RESULT_CEILING_BYTES);
+  return {
+    tip: res.tip,
+    count: res.timeline.length,
+    revisions: kept,
+    ...(elided > 0
+      ? {
+          elided,
+          note:
+            `Elided ${elided} middle revision(s) to stay inline. ` +
+            `Fetch any by passing \`revision: <n>\` (0..${res.tip}).`,
+        }
+      : {}),
+  };
+}
+
+/** Project a recalled entry to the read shape: full body + `has_source` /
+ * `has_history` flags, then attach any opt-in heavy fields from `include`. */
+function recallProjection(
+  ctx: HandlerContext,
+  username: string,
+  id: string,
+  entry: MemoryEntry,
+  include: IncludeKind[],
+  revisionArg: unknown,
+): Record<string, unknown> {
+  const out = withSourceFlag(entry);
+  if (include.includes("details")) {
+    out.details = getDetails(ctx.paths, username, id);
+  }
+  if (include.includes("source")) {
+    out.sources = entry.sources ?? [];
+  }
+  if (include.includes("history")) {
+    out.history = historyPayload(ctx, username, id, revisionArg);
+  }
+  return out;
+}
+
+/** Retrieve one of YOUR OWN entries' full text by id (flips faded → active).
+ * `sources` / `history` / `details` are never auto-returned — `has_source` /
+ * `has_history` flag their presence; pass `include: ["source"|"history"|
+ * "details"]` to inline them (and `revision` to fetch one history revision's
+ * full content). */
 export const recall_memory: Handler = async (args, ctx) => {
   const username = selfUsername(ctx.session.claimedUsername);
   const id = asStringRequired(args.id, "id");
-  // `sources` is never auto-returned — surface `has_source` and let the
-  // agent fetch provenance via `get_memory_source(id)` when needed.
-  return withSourceFlag(recallEntry(ctx.paths, username, id));
+  const include = parseInclude(args);
+  const entry = recallEntry(ctx.paths, username, id);
+  return recallProjection(ctx, username, id, entry, include, args.revision);
 };
 
 /** Cross-persona full-text read (deniable by tool name). Unlike
  * self-`recall_memory`, this is strictly READ-ONLY: it must NOT flip a
  * peer's faded entry to active (recallEntry mutates — getEntry does
- * not). Returns the entry's full body as-stored, any tier/status. */
+ * not). Returns the entry's full body as-stored, any tier/status. Same
+ * `include` / `revision` opt-ins as `recall_memory`. */
 export const recall_memory_any: Handler = async (args, ctx) => {
   const username = asStringRequired(args.username, "username");
   const id = asStringRequired(args.id, "id");
+  const include = parseInclude(args);
   const entry = getEntry(ctx.paths, username, id);
   if (!entry) {
     throw new ToolError("entry_not_found", `No memory entry '${id}' for '${username}'.`);
   }
-  // Same projection as self-recall: provenance via `get_memory_source_any`.
-  return withSourceFlag(entry);
+  return recallProjection(ctx, username, id, entry, include, args.revision);
 };
 
 export const fade_memory: Handler = async (args, ctx) => {
@@ -699,54 +802,6 @@ function capHistory<T>(
   const kept = [first, ...tail];
   return { kept, elided: timeline.length - kept.length };
 }
-
-function historyFor(
-  ctx: HandlerContext,
-  username: string,
-  args: Record<string, unknown>,
-): Record<string, unknown> {
-  const id = asStringRequired(args.id, "id");
-  // A specific revision → full content of just that revision.
-  if (args.revision !== undefined) {
-    const rev = asNumber(args.revision);
-    if (rev === undefined) {
-      throw new ToolError("invalid_args", "`revision` must be a number.");
-    }
-    const res = getHistoryRevision(ctx.paths, username, id, rev);
-    if (!res) throw new ToolError("entry_not_found", `No memory entry '${id}' for '${username}'.`);
-    return { id, username, rev: res.rev, content: res.content };
-  }
-  const res = getHistory(ctx.paths, username, id);
-  if (!res) throw new ToolError("entry_not_found", `No memory entry '${id}' for '${username}'.`);
-  const { kept, elided } = capHistory(res.timeline, LIST_RESULT_CEILING_BYTES);
-  return {
-    id,
-    username,
-    tip: res.tip,
-    count: res.timeline.length,
-    revisions: kept,
-    ...(elided > 0
-      ? {
-          elided,
-          note:
-            `Elided ${elided} middle revision(s) to stay inline. ` +
-            `Fetch any by passing \`revision: <n>\` (0..${res.tip}).`,
-        }
-      : {}),
-  };
-}
-
-/** §history — the full diff timeline of one of YOUR OWN entries (first
- * revision full, each later one a diff), or one revision's full content.
- * Never auto-returned; this is the fetch path (recall flags `has_history`). */
-export const get_memory_history: Handler = async (args, ctx) => {
-  return historyFor(ctx, selfUsername(ctx.session.claimedUsername), args);
-};
-
-/** Cross-persona history read (deniable by tool name). */
-export const get_memory_history_any: Handler = async (args, ctx) => {
-  return historyFor(ctx, asStringRequired(args.username, "username"), args);
-};
 
 function listMemoryFor(
   ctx: HandlerContext,
@@ -841,63 +896,6 @@ export const find_memory_any: Handler = async (args, ctx) => {
   const usernames = listPersonas(ctx.paths).map((p) => p.username);
   const hits = findMemory(ctx.paths, usernames, filter);
   return findResult("all", filter.query, hits);
-};
-
-function detailsFor(
-  ctx: HandlerContext,
-  username: string,
-  id: string,
-): Record<string, unknown> {
-  // Verify the entry exists so we surface a friendlier error than "null".
-  const entry = getEntry(ctx.paths, username, id);
-  if (!entry) {
-    throw new ToolError("entry_not_found", `No memory entry '${id}' for '${username}'.`);
-  }
-  return { id, username, details: getDetails(ctx.paths, username, id) };
-}
-
-export const get_memory_details: Handler = async (args, ctx) => {
-  return detailsFor(ctx, selfUsername(ctx.session.claimedUsername), asStringRequired(args.id, "id"));
-};
-
-/** Cross-persona details read (deniable by tool name). */
-export const get_memory_details_any: Handler = async (args, ctx) => {
-  return detailsFor(
-    ctx,
-    asStringRequired(args.username, "username"),
-    asStringRequired(args.id, "id"),
-  );
-};
-
-/** Provenance read — returns the entry's stored `sources` snapshots (the
- * write-time text + the coordinates for re-verifying via `get_message` /
- * `get_history_message` / `validate_user_quote`). Mirrors
- * `get_memory_details`: the heavy/optional field has its own read path so
- * it's never bundled into the default render or `recall_memory`. */
-function sourcesFor(
-  ctx: HandlerContext,
-  username: string,
-  id: string,
-): Record<string, unknown> {
-  const entry = getEntry(ctx.paths, username, id);
-  if (!entry) {
-    throw new ToolError("entry_not_found", `No memory entry '${id}' for '${username}'.`);
-  }
-  return { id, username, sources: entry.sources ?? [] };
-}
-
-export const get_memory_source: Handler = async (args, ctx) => {
-  return sourcesFor(ctx, selfUsername(ctx.session.claimedUsername), asStringRequired(args.id, "id"));
-};
-
-/** Cross-persona provenance read (deniable by tool name) — the audit
- * path for verifying where a peer's memory came from. */
-export const get_memory_source_any: Handler = async (args, ctx) => {
-  return sourcesFor(
-    ctx,
-    asStringRequired(args.username, "username"),
-    asStringRequired(args.id, "id"),
-  );
 };
 
 // --- §6 LOW memory snapshots ---
