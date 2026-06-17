@@ -240,6 +240,23 @@ the DM still fails (no canonical session to deliver to) — but the
 one. Set a DISTINGUISHING `status` at login (role/lane) so peers can tell
 your sessions apart.
 
+**Self-truncation guard (`assertNotSelfTruncated`, `handlers/chat.ts`).**
+`send_message` / `send_structured` HARD-REJECT (`self_truncated_message`) a
+body carrying a hand-written continuation marker — first-person "message
+continues", "to be continued", "[truncated]", "[...]", "continues in a
+follow-up". A sender must never cut its own message and point the reader at
+`get_message` for the rest: pantheon stores every body in FULL and delivers
+it intact (short → inline; oversized → the watcher auto-relays a
+get_message stub while the complete text stays recoverable). A
+sender-authored "call get_message for the rest" is therefore always wrong
+and leaves a DEAD pointer — the promised continuation typically never gets
+sent (docwarden→alto-finch, seq 51137: stored text WAS the stub, no
+follow-up ever sent). Patterns are first-person-about-this-message so
+third-person tooling talk ("use get_message to fetch an oversized body")
+does NOT trip it. The `payload` of `send_structured` is exempt (data, not a
+relayed body). Distinct from the soft over-length relay-cap HINT — long
+messages are legitimate; a continuation marker never is.
+
 ### Single-agent projects
 
 A project can be locked to ONE persona (one persona, many concurrent

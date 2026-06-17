@@ -264,6 +264,64 @@ function assertTargetScopeConsistent(
   }
 }
 
+/** First-person self-truncation markers. A sender must NEVER hand-cut
+ * its own message and tell the reader to fetch the rest elsewhere:
+ * pantheon stores every message body in FULL and delivers it intact —
+ * short messages arrive inline, and an oversized one is relayed by the
+ * watcher as an AUTOMATIC get_message stub while the complete text stays
+ * recoverable via `get_message`. A sender-authored "(message continues —
+ * call get_message for full content)" is therefore always wrong, and the
+ * promised continuation routinely never arrives (docwarden→alto-finch,
+ * seq 51137: the stored text WAS the stub — no follow-up was ever sent,
+ * leaving a dead self-referential pointer at a row whose body is the
+ * truncated stub itself).
+ *
+ * The patterns are intentionally FIRST-PERSON-about-this-message
+ * ("message continues", "to be continued", "[truncated]", "[...]") so a
+ * third-person description of the tooling ("use get_message to fetch an
+ * oversized body") does NOT trip the guard. */
+const SELF_TRUNCATION_MARKERS: RegExp[] = [
+  /\b(?:message|msg|text|reply|response|note|audit)\s+continue[sd]?\b/i,
+  /\bto be continued\b/i,
+  /\bcontinue[sd]?\s+in (?:a |the |my )?(?:next|follow[- ]?up|separate)\b/i,
+  /\(\s*(?:message\s+)?continue[sd]?\b[^)]*\)/i,
+  /\[\s*(?:\.\.\.|…|truncated|truncation|continued|cont\.?|more)\s*\]/i,
+  /\.\.\.\s*\(\s*(?:cont(?:inued|\.)?|more)\b/i,
+];
+
+/** Returns the offending snippet when `text` carries a self-truncation
+ * marker (for the teaching error), or null when clean. */
+function detectSelfTruncation(text: string): string | null {
+  for (const re of SELF_TRUNCATION_MARKERS) {
+    const m = re.exec(text);
+    if (m) return m[0];
+  }
+  return null;
+}
+
+/** Reject a send whose body is a self-truncated stub + a "fetch the
+ * rest" pointer. Hard error (not a hint): unlike an over-length message,
+ * which is legitimate and merely relayed via stub, a hand-written
+ * continuation marker is never correct — so block it at the source and
+ * teach the sender to send the whole body or split into COMPLETE
+ * messages. */
+function assertNotSelfTruncated(text: string): void {
+  const marker = detectSelfTruncation(text);
+  if (!marker) return;
+  throw new ToolError(
+    "self_truncated_message",
+    `This message looks self-truncated: it contains "${marker.trim()}" — a hand-written ` +
+      `continuation marker. Don't do that. Pantheon stores every message body in FULL and ` +
+      `delivers it intact: short messages arrive inline, and an oversized one is relayed by ` +
+      `the watcher as an AUTOMATIC get_message stub while the complete text stays recoverable ` +
+      `via get_message. A sender-authored "call get_message for the rest" is never needed and ` +
+      `leaves a DEAD pointer — the promised continuation typically never gets sent. Send the ` +
+      `WHOLE message (peers always get the full body), or split it into multiple COMPLETE ` +
+      `messages — never one truncated stub plus a pointer.`,
+    { marker: marker.trim() },
+  );
+}
+
 /** Parse `@handle` mentions out of `text` and classify each one
  * against the live (cross-process) subscriber set. The sender's own
  * handle is dropped. Returns parallel buckets the warning helpers
@@ -908,6 +966,11 @@ export const send_message: Handler = async (args, ctx) => {
   const scope = (asString(args.scope) ?? "project") as "project" | "dm" | "global";
   const target = asString(args.target);
   const replyTo = asString(args.reply_to);
+  // Self-truncation guard: refuse a body that hand-cuts itself and
+  // points at get_message for the rest — pantheon delivers the full
+  // body either way, so the pointer is always wrong (and the promised
+  // continuation routinely never arrives). Checked before delivery.
+  assertNotSelfTruncated(text);
   if (scope === "dm" && !target) {
     throw new ChatError("missing_target", "scope='dm' requires a target username.");
   }
@@ -1057,6 +1120,10 @@ export const send_structured: Handler = async (args, ctx) => {
   }
 
   const text = asString(args.text) ?? `[${kind}]`;
+  // Same self-truncation guard as send_message — applies to the
+  // human-readable `text`; the structured `payload` is exempt (it's data,
+  // not a relayed body).
+  assertNotSelfTruncated(text);
   const scope = (asString(args.scope) ?? "project") as "project" | "dm" | "global";
   const target = asString(args.target);
   const replyTo = asString(args.reply_to);

@@ -920,6 +920,69 @@ test("send_message: a short message does NOT surface the relay-truncation hint",
   expect(hints.some((h) => h.includes("relay cap"))).toBe(false);
 });
 
+// --- self-truncation guard ---
+
+test("send_message: a self-truncated body (get_message continuation marker) is rejected + does NOT persist", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  ctx.chat!.add({ username: "beta", project: "X", transient: false });
+  const r = await call("send_message", {
+    text:
+      "1. first finding\n2. second finding\n\n(Message continues — call get_message for full content)",
+    scope: "dm",
+    target: "beta",
+  });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("self_truncated_message");
+  expect(typeof r.payload.message).toBe("string");
+  expect(r.payload.marker).toBeDefined();
+  // Nothing was persisted — no message_id/seq came back.
+  expect(r.payload.message_id).toBeUndefined();
+});
+
+test("send_message: assorted self-truncation markers are all rejected", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  ctx.chat!.add({ username: "beta", project: "X", transient: false });
+  const bad = [
+    "findings so far... to be continued",
+    "see the rest below [truncated]",
+    "audit continues in a follow-up message",
+    "part 1 of 2 [...]",
+  ];
+  for (const text of bad) {
+    const r = await call("send_message", { text, scope: "dm", target: "beta" });
+    expect(r.ok).toBe(false);
+    expect(r.payload.error).toBe("self_truncated_message");
+  }
+});
+
+test("send_message: third-person tooling talk mentioning get_message is NOT rejected (guard does not over-fire)", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  ctx.chat!.add({ username: "beta", project: "X", transient: false });
+  const r = await call("send_message", {
+    text:
+      "When a relay arrives oversized, call get_message with the seq to read the full body — " +
+      "the watcher only stubs the streamed line, the stored text is complete.",
+    scope: "dm",
+    target: "beta",
+  });
+  expect(r.ok).toBe(true);
+  expect(r.payload.message_id).toBeDefined();
+});
+
+test("send_structured: a self-truncated text body is rejected", async () => {
+  await call("login", { username: "alpha", project: "X", transient: false });
+  ctx.chat!.add({ username: "beta", project: "X", transient: false });
+  const r = await call("send_structured", {
+    kind: "audit",
+    text: "two of five findings here. (message continues — call get_message)",
+    payload: { found: 5 },
+    scope: "dm",
+    target: "beta",
+  });
+  expect(r.ok).toBe(false);
+  expect(r.payload.error).toBe("self_truncated_message");
+});
+
 test("send_message: project broadcast with two @mentions does NOT surface single-mention warning", async () => {
   await call("login", { username: "alpha", project: "X", transient: false });
   ctx.chat!.add({ username: "beta", project: "X", transient: false });
