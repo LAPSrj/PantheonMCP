@@ -199,7 +199,11 @@ export const search_history_any: Handler = async (args, ctx) => {
  * first — a recency index so the caller can pick which transcript to
  * read with `get_history_conversation` without first knowing a search
  * term. Each entry carries a `preview` (the conversation's first human
- * turn) plus turn counts and timestamps. */
+ * turn) plus turn counts and timestamps.
+ *
+ * Scoped to the CALLING persona: the CWD's CC dir can hold transcripts
+ * from many personas, so the listing is filtered to those attributed to
+ * this persona (plus the calling session). */
 export const list_conversations: Handler = async (args, ctx) => {
   const limit = asNumber(args.limit);
   const since = asString(args.since);
@@ -222,6 +226,7 @@ export const list_conversations: Handler = async (args, ctx) => {
 
   const result = listConversations({
     cwd: persona.cwd,
+    username: persona.username,
     currentSessionId: ctx.claude_session_id,
     ...(limit !== undefined ? { limit } : {}),
     ...(since !== undefined ? { since } : {}),

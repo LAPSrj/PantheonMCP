@@ -744,6 +744,12 @@ export function searchHistory(
 // transcript to read (with get_history_conversation) WITHOUT first having to
 // know a search term. Pairs the other way around from search_history: search
 // finds a conversation by content; this lists them by recency.
+//
+// PERSONA SCOPING. CC project dirs are keyed by CWD, not persona, so one
+// dir can mix transcripts from every persona (and every non-persona
+// session) ever run in that directory. When `username` is supplied the
+// listing is filtered to the transcripts ATTRIBUTED to that persona
+// (`attributeTranscriptPersona`) — the calling session is always kept.
 
 export interface ListConversationsOptions {
   cwd: string;
@@ -755,6 +761,87 @@ export interface ListConversationsOptions {
   /** CC session UUID for the calling pantheon session — marks the
    * `is_current_session` flag. Null when launched outside a CC session. */
   currentSessionId?: string | null;
+  /** Canonical persona handle to scope the listing to. When set, only
+   * transcripts attributed to this persona (plus the calling session)
+   * are returned — see `attributeTranscriptPersona`. When omitted, every
+   * transcript in the CWD dir is listed (legacy CWD-scoped behavior). */
+  username?: string;
+}
+
+/** Bootstrap header that opens every pantheon-summoned (or conjured /
+ * remanifested) session's transcript — always names the CANONICAL persona
+ * (the sibling-incarnation suffix lives on the chat handle, not here). */
+const BOOTSTRAP_PERSONA_RE =
+  /^You are \*\*([^*]+)\*\*, a (?:specialist agent summoned via pantheon|freshly-conjured agent)/m;
+
+/** Strip a sibling-incarnation suffix (trailing digits) from a chat
+ * handle to recover the canonical persona username. Canonical handles
+ * can't end in a digit (`digit_suffix_reserved`), so this is lossless. */
+function canonicalHandle(handle: string): string {
+  return handle.replace(/\d+$/, "");
+}
+
+/** Pull a pantheon `login` handle out of an assistant record's tool_use
+ * blocks (the session declaring its own chat identity). Returns the
+ * canonical handle, or null when no login call is present. */
+function loginHandleFromAssistant(
+  raw: Record<string, unknown>,
+): string | null {
+  const content = (raw.message as Record<string, unknown> | undefined)?.content;
+  if (!Array.isArray(content)) return null;
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const b = block as Record<string, unknown>;
+    if (b.type !== "tool_use") continue;
+    const name = typeof b.name === "string" ? b.name : "";
+    if (!/(?:^|_)login$/.test(name)) continue;
+    const input = b.input as Record<string, unknown> | undefined;
+    const username =
+      input && typeof input.username === "string" ? input.username : null;
+    if (username && username.trim()) return canonicalHandle(username.trim());
+  }
+  return null;
+}
+
+/** Attribute a CC transcript to the canonical persona that owns it.
+ *
+ * CC project dirs are keyed by CWD, not persona, so one dir can mix
+ * transcripts from every persona (and every non-persona session) ever
+ * run in that directory. Pantheon stores no session→persona mapping, so
+ * we attribute by reading the transcript itself:
+ *
+ *   1. pantheon-SUMMONED sessions open with the bootstrap header
+ *      ("You are **X**, a specialist agent summoned via pantheon" — or
+ *      the conjure variant). The header always names the CANONICAL handle.
+ *   2. MANIFESTED / hand-started sessions have no header but call
+ *      `login({ username })` during boot; that handle (minus any
+ *      sibling-incarnation digit suffix) is the persona.
+ *
+ * Scans in file order, first signal wins. Returns null when neither
+ * appears — a session that never identified to pantheon, which is
+ * correctly NOT attributed to any persona. */
+export function attributeTranscriptPersona(lines: unknown[]): string | null {
+  for (const raw of lines) {
+    if (!raw || typeof raw !== "object") continue;
+    const o = raw as Record<string, unknown>;
+    if (o.type === "user" && !o.isSidechain) {
+      const content = (o.message as Record<string, unknown> | undefined)
+        ?.content;
+      const text =
+        typeof content === "string"
+          ? content
+          : Array.isArray(content)
+            ? textBlocksFromArray(content)
+            : "";
+      const m = text.match(BOOTSTRAP_PERSONA_RE);
+      if (m) return m[1]!.trim();
+    }
+    if (o.type === "assistant") {
+      const handle = loginHandleFromAssistant(o);
+      if (handle) return handle;
+    }
+  }
+  return null;
 }
 
 /** One end-of-conversation message excerpt. `text` is whitespace-
@@ -795,7 +882,9 @@ export interface ConversationSummary {
 
 export interface ListConversationsResult {
   conversations: ConversationSummary[];
-  /** Total jsonl files in the persona's dir, before `limit`/`since`. */
+  /** Count of conversations OWNED by the persona (after the persona +
+   * `since` filters), before `limit`. With no `username` scope this is
+   * every jsonl in the CWD dir (after `since`). */
   total: number;
   /** True when conversations existed beyond those returned. */
   truncated: boolean;
@@ -862,7 +951,8 @@ export function listConversations(
     return { conversations: [], total: 0, truncated: false };
   }
 
-  const ordered = fs
+  const username = options.username ?? null;
+  const candidates = fs
     .readdirSync(dir)
     .filter((f) => f.endsWith(".jsonl"))
     .map((f) => ({
@@ -870,8 +960,21 @@ export function listConversations(
       filePath: path.join(dir, f),
       mtime: safeMtime(path.join(dir, f)),
     }))
-    .filter((e) => sinceMs === null || !Number.isFinite(sinceMs) || e.mtime >= sinceMs)
-    .sort((a, b) => b.mtime - a.mtime);
+    .filter((e) => sinceMs === null || !Number.isFinite(sinceMs) || e.mtime >= sinceMs);
+
+  // Persona scope: keep only transcripts attributed to this persona (the
+  // calling session is always kept — it definitionally belongs to the
+  // caller). Without a `username` scope, every transcript is listed.
+  const owned =
+    username === null
+      ? candidates
+      : candidates.filter(
+          (e) =>
+            e.session_id === currentId ||
+            attributeTranscriptPersona(readJsonlSafely(e.filePath)) === username,
+        );
+
+  const ordered = owned.sort((a, b) => b.mtime - a.mtime);
 
   const slice = ordered.slice(0, limit);
   const conversations = slice.map((e) =>
@@ -895,7 +998,12 @@ export function listConversationsMulti(
   let total = 0;
   const all: Array<ConversationSummary & { _sortKey: number }> = [];
   for (const persona of personas) {
-    const res = listConversations({ ...options, cwd: persona.cwd, limit });
+    const res = listConversations({
+      ...options,
+      cwd: persona.cwd,
+      username: persona.username,
+      limit,
+    });
     total += res.total;
     for (const c of res.conversations) {
       const t = c.last_active_at ? Date.parse(c.last_active_at) : 0;

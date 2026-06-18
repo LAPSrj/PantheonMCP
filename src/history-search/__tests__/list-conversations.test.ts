@@ -38,6 +38,24 @@ const asstMsg = (text: string, timestamp?: string) => ({
   message: { content: [{ type: "text", text }] },
   ...(timestamp ? { timestamp } : {}),
 });
+/** First user turn of a pantheon-summoned session — names the persona. */
+const bootstrapMsg = (username: string, timestamp?: string) => ({
+  type: "user",
+  message: {
+    content: `You are **${username}**, a specialist agent summoned via pantheon. You were summoned by **boss**.`,
+  },
+  ...(timestamp ? { timestamp } : {}),
+});
+/** A `login` tool call — how a manifested/hand-started session names itself. */
+const loginCall = (username: string, timestamp?: string) => ({
+  type: "assistant",
+  message: {
+    content: [
+      { type: "tool_use", name: "mcp__pantheon__login", input: { username } },
+    ],
+  },
+  ...(timestamp ? { timestamp } : {}),
+});
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pantheon-listconvo-"));
@@ -174,14 +192,23 @@ test("agent-only conversation has null last_user_message", () => {
 
 test("multi stamps persona_username and merges newest-first across personas", () => {
   // alpha persona (default sessionDir)
-  writeJsonl("alpha-1", [userMsg("alpha topic")], Date.parse("2026-01-01T00:00:00.000Z"));
+  writeJsonl(
+    "alpha-1",
+    [bootstrapMsg("alpha"), userMsg("alpha topic")],
+    Date.parse("2026-01-01T00:00:00.000Z"),
+  );
 
   // beta persona in a different cwd
   const betaCwd = "/work/beta";
   const betaDir = path.join(projectsRoot, encodeCwdForClaudeProject(betaCwd));
   fs.mkdirSync(betaDir, { recursive: true });
   const betaFile = path.join(betaDir, "beta-1.jsonl");
-  fs.writeFileSync(betaFile, JSON.stringify(userMsg("beta topic")) + "\n");
+  fs.writeFileSync(
+    betaFile,
+    [bootstrapMsg("beta"), userMsg("beta topic")]
+      .map((r) => JSON.stringify(r))
+      .join("\n") + "\n",
+  );
   fs.utimesSync(betaFile, Date.parse("2026-05-01T00:00:00.000Z") / 1000, Date.parse("2026-05-01T00:00:00.000Z") / 1000);
 
   const res = listConversationsMulti(
@@ -193,6 +220,59 @@ test("multi stamps persona_username and merges newest-first across personas", ()
   );
   expect(res.total).toBe(2);
   expect(res.conversations.map((c) => c.persona_username)).toEqual(["beta", "alpha"]);
+});
+
+test("username scope keeps only this persona's transcripts, excluding others", () => {
+  // Same CWD dir, three personas' transcripts mixed in.
+  writeJsonl("mine-summoned", [bootstrapMsg("alpha"), userMsg("mine A")], 3000);
+  writeJsonl("mine-manifested", [loginCall("alpha"), userMsg("mine B")], 2500);
+  writeJsonl("peer", [bootstrapMsg("bravo"), userMsg("peer topic")], 2000);
+  writeJsonl("stranger", [userMsg("never logged in")], 1000);
+
+  const res = listConversations({
+    cwd: personaCwd,
+    claudeProjectsRoot: projectsRoot,
+    username: "alpha",
+  });
+  expect(res.conversations.map((c) => c.session_id)).toEqual([
+    "mine-summoned",
+    "mine-manifested",
+  ]);
+  expect(res.total).toBe(2);
+  expect(res.truncated).toBe(false);
+});
+
+test("sibling-incarnation login suffix attributes to the canonical persona", () => {
+  writeJsonl("clone", [loginCall("alpha2"), userMsg("from a clone")], 1000);
+  const res = listConversations({
+    cwd: personaCwd,
+    claudeProjectsRoot: projectsRoot,
+    username: "alpha",
+  });
+  expect(res.conversations.map((c) => c.session_id)).toEqual(["clone"]);
+});
+
+test("current session is always included even when unattributable", () => {
+  writeJsonl("mine", [bootstrapMsg("alpha"), userMsg("hi")], 2000);
+  writeJsonl("current-bare", [userMsg("no identity markers")], 3000);
+  const res = listConversations({
+    cwd: personaCwd,
+    claudeProjectsRoot: projectsRoot,
+    username: "alpha",
+    currentSessionId: "current-bare",
+  });
+  expect(res.conversations.map((c) => c.session_id)).toEqual([
+    "current-bare",
+    "mine",
+  ]);
+});
+
+test("no username scope lists every transcript (legacy CWD behavior)", () => {
+  writeJsonl("a", [bootstrapMsg("alpha"), userMsg("x")], 2000);
+  writeJsonl("b", [bootstrapMsg("bravo"), userMsg("y")], 1000);
+  const res = listConversations({ cwd: personaCwd, claudeProjectsRoot: projectsRoot });
+  expect(res.conversations.map((c) => c.session_id)).toEqual(["a", "b"]);
+  expect(res.total).toBe(2);
 });
 
 test("default limit constant is exported and applied", () => {
